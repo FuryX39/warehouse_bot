@@ -24,6 +24,16 @@ _VENDOR_CHRT_CACHE_TTL_SEC = 600.0
 
 # Резерв только пока сборка ещё «на нас»: new / confirm. complete = передано в доставку (уже не наш склад).
 _RESERVE_SUPPLIER_STATUSES = frozenset({"new", "confirm"})
+# Статусы, после которых заказ уже считается готовым к фактической отгрузке со склада.
+_READY_TO_SHIP_SUPPLIER_STATUSES = frozenset({"complete"})
+_READY_TO_SHIP_WB_STATUSES = frozenset(
+    {
+        "sorted",
+        "ready_for_pickup",
+        "accepted_by_carrier",
+        "sent_to_carrier",
+    }
+)
 # Не резервируем: отмены, продажа, и этапы, где заказ уже у WB/логистики (не на нашем складе).
 _WB_NO_RESERVE_STATUSES = frozenset(
     {
@@ -306,12 +316,9 @@ class WildberriesAdapter(MarketplaceAdapter):
 
     def fetch_ready_to_ship_external_ids(self, active_external_ids: set[str]) -> set[str]:
         """
-        Wildberries FBS: считаем "готово к отгрузке" = заказ добавлен в поставку.
-
-        Алгоритм:
-        - берём список поставок (GET /api/v3/supplies),
-        - для каждой поставки берём orderIds (GET .../supplies/{supplyId}/order-ids),
-        - возвращаем subset активных external ids (формат "{orderId}:{sku}") по совпадению orderId.
+        Wildberries FBS: готово к отгрузке определяем по статусам заказа.
+        Не используем /api/v3/supplies (может отдавать 400 в некоторых кабинетах/правах).
+        Возвращаем subset активных external ids (формат "{orderId}:{sku}") по совпадению orderId.
         """
         if not self.is_configured() or not active_external_ids:
             return set()
@@ -329,37 +336,19 @@ class WildberriesAdapter(MarketplaceAdapter):
 
         headers = {"Authorization": self.api_token}
         ready: set[str] = set()
-
-        supplies_resp = _wb_request(
-            "GET", f"{self.base_url}/api/v3/supplies", headers=headers, timeout=60
-        )
-        supplies_resp.raise_for_status()
-        body = supplies_resp.json() or {}
-        supplies = body.get("supplies", body if isinstance(body, list) else []) or []
-
-        supplies = supplies[:50]
-        for s in supplies:
-            if not isinstance(s, dict):
+        status_by_id = self._fetch_statuses(headers, list(by_order_id.keys()))
+        for oid, ext_ids in by_order_id.items():
+            status_pair = status_by_id.get(oid)
+            if status_pair is None:
                 continue
-            supply_id = str(s.get("id") or s.get("supplyId") or "").strip()
-            if not supply_id:
-                continue
-            order_ids_resp = _wb_request(
-                "GET",
-                f"{self.base_url}/api/marketplace/v3/supplies/{supply_id}/order-ids",
-                headers=headers,
-                timeout=60,
-            )
-            order_ids_resp.raise_for_status()
-            order_ids_body = order_ids_resp.json() or {}
-            order_ids = order_ids_body.get("orders", order_ids_body.get("orderIds", order_ids_body)) or []
-            for oid in order_ids:
-                try:
-                    oid_int = int(oid)
-                except (TypeError, ValueError):
-                    continue
-                if oid_int in by_order_id:
-                    ready.update(by_order_id[oid_int])
+            supplier_s, wb_s = status_pair
+            supplier_norm = (supplier_s or "").strip().lower()
+            wb_norm = (wb_s or "").strip().lower()
+            if (
+                supplier_norm in _READY_TO_SHIP_SUPPLIER_STATUSES
+                or wb_norm in _READY_TO_SHIP_WB_STATUSES
+            ):
+                ready.update(ext_ids)
 
         return ready
 
