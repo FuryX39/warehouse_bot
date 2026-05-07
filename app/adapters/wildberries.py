@@ -24,16 +24,10 @@ _VENDOR_CHRT_CACHE_TTL_SEC = 600.0
 
 # Резерв только пока сборка ещё «на нас»: new / confirm. complete = передано в доставку (уже не наш склад).
 _RESERVE_SUPPLIER_STATUSES = frozenset({"new", "confirm"})
-# Статусы, после которых заказ уже считается готовым к фактической отгрузке со склада.
-_READY_TO_SHIP_SUPPLIER_STATUSES = frozenset({"complete"})
-_READY_TO_SHIP_WB_STATUSES = frozenset(
-    {
-        "sorted",
-        "ready_for_pickup",
-        "accepted_by_carrier",
-        "sent_to_carrier",
-    }
-)
+# Для команды ship считаем ready-to-ship только по supplierStatus:
+# - confirm: заказ добавлен в поставку FBS (на сборке);
+# - complete / wbgo: заказ уже передан/готов к отправке.
+_READY_TO_SHIP_SUPPLIER_STATUSES = frozenset({"confirm", "complete", "wbgo"})
 # Не резервируем: отмены, продажа, и этапы, где заказ уже у WB/логистики (не на нашем складе).
 _WB_NO_RESERVE_STATUSES = frozenset(
     {
@@ -341,13 +335,9 @@ class WildberriesAdapter(MarketplaceAdapter):
             status_pair = status_by_id.get(oid)
             if status_pair is None:
                 continue
-            supplier_s, wb_s = status_pair
+            supplier_s, _wb_s = status_pair
             supplier_norm = (supplier_s or "").strip().lower()
-            wb_norm = (wb_s or "").strip().lower()
-            if (
-                supplier_norm in _READY_TO_SHIP_SUPPLIER_STATUSES
-                or wb_norm in _READY_TO_SHIP_WB_STATUSES
-            ):
+            if supplier_norm in _READY_TO_SHIP_SUPPLIER_STATUSES:
                 ready.update(ext_ids)
 
         return ready

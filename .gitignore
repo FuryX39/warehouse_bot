@@ -43,3 +43,6 @@ Thumbs.db
 # Logs and local runtime files
 *.log
 *.pid
+
+# Local databases
+*.db
