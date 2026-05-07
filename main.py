@@ -129,6 +129,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/sync_delta - принудительно дельта (первый запуск без якоря даст полный)\n"
         "/sync_full - полный синк всех МП + сверка; при расхождении — отчёт\n"
         "/set_stock SKU COUNT - задать фактический остаток товара\n"
+        "/clear_stock - очистить только общие остатки (без резервов и sync state)\n"
         "/import_sheet URL - импорт остатков из Google Sheets\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
@@ -208,6 +209,18 @@ async def set_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     inventory_repo.upsert_stock(sku=sku, stock=stock)
     await update.message.reply_text(f"Сохранено: {sku} stock={max(stock, 0)}")
+
+
+async def clear_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
+    if update.message is None:
+        return
+    deleted = inventory_repo.clear_stocks_only()
+    await _reply_text_resilient(
+        update.message,
+        f"Очищены только общие остатки (product_stocks). Удалено строк: {deleted}. "
+        "Резервы и sync state не изменены.",
+    )
 
 
 async def import_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -575,6 +588,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("sync_delta", sync_delta))
     app.add_handler(CommandHandler("sync_full", sync_full))
     app.add_handler(CommandHandler("set_stock", set_stock))
+    app.add_handler(CommandHandler("clear_stock", clear_stock))
     app.add_handler(CommandHandler("import_sheet", import_sheet))
     app.add_handler(CommandHandler("export_sheet", export_sheet))
     app.add_handler(CommandHandler("ozon_analytics", ozon_analytics))

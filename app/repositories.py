@@ -233,6 +233,13 @@ class InventoryRepository:
             session.execute(delete(SyncState))
             session.commit()
 
+    def clear_stocks_only(self) -> int:
+        """Delete only product stocks, keep reserves and sync state."""
+        with Session(self.engine) as session:
+            deleted = session.execute(delete(ProductStock))
+            session.commit()
+            return int(deleted.rowcount or 0)
+
     def ship_active_reserves_by_external_ids(self, source: str, external_ids: set[str]) -> dict[str, int]:
         """
         Отгрузка выбранных резервов: списать их qty из `product_stocks.stock` и пометить резервы как `shipped`.
