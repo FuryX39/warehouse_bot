@@ -1,11 +1,12 @@
 import asyncio
 import contextlib
 import csv
+import html
 import io
 import logging
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from telegram import InputFile, Update
 from telegram.error import NetworkError, TimedOut
@@ -17,7 +18,11 @@ from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.config import load_settings
 from app.ozon_analytics import build_ozon_analytics_csv
-from app.repositories import InventoryRepository
+from app.repositories import (
+    AVAILABLE_STOCK_SYNC_KEY,
+    InventoryRepository,
+    available_stock_map_hash,
+)
 from app.sheet_import import import_stocks_from_google_sheet
 from app.services import StockCoordinator
 
@@ -130,13 +135,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/sync_full - полный синк всех МП + сверка; при расхождении — отчёт\n"
         "/set_stock SKU COUNT - задать фактический остаток товара\n"
         "/clear_stock - очистить только общие остатки (без резервов и sync state)\n"
+        "/push_stocks - принудительно отправить остатки на все настроенные МП (полный набор SKU из БД, без строки склада = 0)\n"
         "/import_sheet URL - импорт остатков из Google Sheets\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
-        "/ship_all - отгрузка по всем МП (ready-to-ship, с подтверждением)\n"
-        "/ship_ozon - отгрузка только Ozon (ready-to-ship, с подтверждением)\n"
-        "/ship_yandex - отгрузка только Yandex Market (ready-to-ship, с подтверждением)\n"
-        "/ship_wb - отгрузка только Wildberries (ready-to-ship, с подтверждением)\n"
+        "/ship_all - отгрузка по всем МП (отсечка по времени first_seen, с подтверждением)\n"
+        "/ship_ozon - отгрузка только Ozon (то же)\n"
+        "/ship_yandex - отгрузка только Yandex Market (то же)\n"
+        "/ship_wb - отгрузка только Wildberries (то же)\n"
+        "/orders [ОТ] [ДО] - таблица заказов из БД (даты ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, UTC, по first_seen)\n"
         "/clear_db - очистка БД (только с подтверждением по коду)"
     )
 
@@ -220,6 +227,161 @@ async def clear_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         update.message,
         f"Очищены только общие остатки (product_stocks). Удалено строк: {deleted}. "
         "Резервы и sync state не изменены.",
+    )
+
+
+async def push_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _ = context
+    if update.message is None:
+        return
+
+    def _run() -> tuple[dict[str, int], list[str]]:
+        merged = inventory_repo.build_force_push_available_map()
+        errs: list[str] = []
+        for adapter in coordinator.adapters:
+            if not adapter.is_configured():
+                continue
+            try:
+                adapter.sync_available_stock(merged)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("push_stocks: ошибка адаптера %s", adapter.name)
+                errs.append(f"{adapter.name}: {exc}")
+        inventory_repo.set_sync_int(AVAILABLE_STOCK_SYNC_KEY, available_stock_map_hash(merged))
+        return merged, errs
+
+    merged, errs = await asyncio.to_thread(_run)
+    lines = [
+        "Принудительный полный пуш остатков на все настроенные маркетплейсы.",
+        f"SKU в выгрузке: {len(merged)} (склад без строки = 0, минус активные резервы).",
+    ]
+    if not merged:
+        lines.append("В БД нет ни `product_stocks`, ни `order_items` — запросы к API не отправлялись.")
+    if errs:
+        lines.append("\nОшибки:")
+        lines.extend(f"- {e}" for e in errs)
+    await _reply_text_resilient(update.message, "\n".join(lines))
+
+
+def _parse_orders_date(s: str) -> date | None:
+    s = s.strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _utc_day_start_ts(d: date) -> int:
+    return int(datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc).timestamp())
+
+
+def _utc_day_end_ts(d: date) -> int:
+    next_day = d + timedelta(days=1)
+    return int(datetime.combine(next_day, datetime.min.time(), tzinfo=timezone.utc).timestamp()) - 1
+
+
+def _format_order_ts(ts: int) -> str:
+    if ts <= 0:
+        return "-"
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+async def orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    args = context.args or []
+    if len(args) > 2:
+        await _reply_text_resilient(
+            update.message,
+            "Использование: /orders\n"
+            "или /orders ОТ_ДАТЫ\n"
+            "или /orders ОТ_ДАТЫ ДО_ДАТЫ\n"
+            "Формат даты: ГГГГ-ММ-ДД или ДД.ММ.ГГГГ (календарный день в UTC, фильтр по first_seen).",
+        )
+        return
+
+    from_ts: int | None = None
+    to_ts: int | None = None
+    range_note = "все записи (без фильтра по дате)"
+    if len(args) == 1:
+        d_from = _parse_orders_date(args[0])
+        if d_from is None:
+            await _reply_text_resilient(
+                update.message,
+                f"Не удалось разобрать дату «{args[0]}». Используйте ГГГГ-ММ-ДД или ДД.ММ.ГГГГ.",
+            )
+            return
+        from_ts = _utc_day_start_ts(d_from)
+        today_utc = datetime.now(timezone.utc).date()
+        to_ts = _utc_day_end_ts(today_utc)
+        range_note = f"с {d_from.isoformat()} по {today_utc.isoformat()} (UTC, first_seen)"
+    elif len(args) == 2:
+        d_from = _parse_orders_date(args[0])
+        d_to = _parse_orders_date(args[1])
+        if d_from is None or d_to is None:
+            await _reply_text_resilient(
+                update.message,
+                "Не удалось разобрать даты. Используйте ГГГГ-ММ-ДД или ДД.ММ.ГГГГ.",
+            )
+            return
+        if d_from > d_to:
+            d_from, d_to = d_to, d_from
+        from_ts = _utc_day_start_ts(d_from)
+        to_ts = _utc_day_end_ts(d_to)
+        range_note = f"{d_from.isoformat()} — {d_to.isoformat()} (UTC, first_seen)"
+
+    rows = await asyncio.to_thread(inventory_repo.list_order_items, from_ts, to_ts)
+    if not rows:
+        await _reply_text_resilient(update.message, f"Заказов не найдено ({range_note}).")
+        return
+
+    header = (
+        f"{'source':<14} {'external_id':<24} {'sku':<16} {'qty':>4} {'state':<10} "
+        f"{'first_seen_utc':<16} {'last_seen_utc':<16}"
+    )
+    sep = "-" * min(len(header), 120)
+    table_lines = [header, sep]
+    max_rows_in_message = 80
+    for src, ext, sku, qty, state, fst, lst in rows[:max_rows_in_message]:
+        ext_short = ext if len(ext) <= 24 else ext[:21] + "..."
+        sku_short = sku if len(sku) <= 16 else sku[:13] + "..."
+        line = (
+            f"{src:<14} {ext_short:<24} {sku_short:<16} {qty:>4} {state:<10} "
+            f"{_format_order_ts(fst):<16} {_format_order_ts(lst):<16}"
+        )
+        table_lines.append(line)
+    if len(rows) > max_rows_in_message:
+        table_lines.append(f"... ещё {len(rows) - max_rows_in_message} строк (полный список в CSV)")
+    pre_body = html.escape("\n".join(table_lines))
+    caption = html.escape(f"Заказы ({range_note}). Строк: {len(rows)}")
+    text = f"{caption}\n\n<pre>{pre_body}</pre>"
+    if len(text) <= 3900:
+        await update.message.reply_text(text, parse_mode="HTML")
+        return
+
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(
+        ["source", "external_order_id", "sku", "quantity", "state", "first_seen_utc", "last_seen_utc"]
+    )
+    for src, ext, sku, qty, state, fst, lst in rows:
+        w.writerow(
+            [
+                src,
+                ext,
+                sku,
+                qty,
+                state,
+                _format_order_ts(fst),
+                _format_order_ts(lst),
+            ]
+        )
+    csv_bytes = buf.getvalue().encode("utf-8")
+    fname = f"orders_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(csv_bytes), filename=fname),
+        caption=f"Заказы ({range_note}). Строк: {len(rows)}",
     )
 
 
@@ -415,8 +577,11 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
         }
         await _reply_text_resilient(
             update.message,
-            "ВНИМАНИЕ: отгрузка спишет ready-to-ship резервы из остатков и пометит их как shipped.\n"
-            "Это необратимо и соответствует факту, что товар физически уехал.\n\n"
+            "ВНИМАНИЕ: отгрузка по отсечке времени — все заказы в резерве (added), "
+            "первое появление которых в боте не позже момента отгрузки, будут списаны со склада "
+            "и помечены как shipped.\n"
+            "Строки без даты первого появления (0) тоже отгружаются.\n"
+            "Это необратимо.\n\n"
             "Если вы уверены, в течение 5 минут отправьте:\n"
             f"/{cmd_name} {code}",
         )
@@ -451,41 +616,27 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
     await _reply_text_resilient(update.message, "Синхронизация перед отгрузкой...")
     sync_result = await asyncio.to_thread(coordinator.sync_cycle)
 
-    # 2) Списываем только "готово к отгрузке" по каждому маркетплейсу.
+    # 2) Отсечка по времени: все added с first_seen_ts <= момента отгрузки (по UTC unix).
+    cutoff_ts = int(time.time())
     ship_stats_by_source: list[str] = []
-    total_reserved_units = 0
-    total_reserves_shipped = 0
-    total_skus = 0
 
-    for adapter in coordinator.adapters:
-        if not adapter.is_configured():
-            continue
-        if not hasattr(adapter, "fetch_ready_to_ship_external_ids"):
-            continue
-        source = getattr(adapter, "name", "unknown")
-        if source not in sources:
-            continue
+    def _do_ship_cutoff() -> dict[str, object]:
+        src_filter: set[str] | None = sources if sources else None
+        return inventory_repo.ship_added_orders_before_cutoff(src_filter, cutoff_ts)
 
-        try:
-            active_ids = await asyncio.to_thread(inventory_repo.get_active_reserve_external_ids, source)
-            try:
-                ready_ids = await asyncio.to_thread(adapter.fetch_ready_to_ship_external_ids, active_ids)
-            except TypeError:
-                ready_ids = await asyncio.to_thread(adapter.fetch_ready_to_ship_external_ids)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Ready-to-ship fetch failed: %s", source)
-            ship_stats_by_source.append(f"- {source}: ошибка получения ready-to-ship ({exc})")
-            continue
+    ship_bundle = await asyncio.to_thread(_do_ship_cutoff)
+    by_source = ship_bundle.get("by_source") or {}
+    total_reserved_units = int(ship_bundle.get("reserved_units", 0))
+    total_reserves_shipped = int(ship_bundle.get("reserves_shipped", 0))
+    total_skus = int(ship_bundle.get("affected_skus", 0))
 
-        stats = await asyncio.to_thread(
-            inventory_repo.ship_active_reserves_by_external_ids, source, ready_ids
-        )
-        total_reserved_units += int(stats.get("reserved_units", 0))
-        total_reserves_shipped += int(stats.get("reserves_shipped", 0))
-        total_skus += int(stats.get("affected_skus", 0))
+    for src in sorted(by_source.keys()):
+        st = by_source[src]
         ship_stats_by_source.append(
-            f"- {source}: shipped reserves={stats['reserves_shipped']}, units={stats['reserved_units']}, skus={stats['affected_skus']}"
+            f"- {src}: shipped={st['reserves_shipped']}, units={st['reserved_units']}, skus={st['affected_skus']}"
         )
+    if not ship_stats_by_source:
+        ship_stats_by_source.append("- (нет строк для отгрузки по отсечке)")
 
     # После списания обновим остатки на маркетплейсах (без повторного fetch заказов).
     def _push_stocks_after_ship() -> None:
@@ -506,7 +657,7 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
 
     await _reply_text_resilient(
         update.message,
-        f"Отгрузка выполнена ({cmd_name}, только ready-to-ship).\n"
+        f"Отгрузка выполнена ({cmd_name}, отсечка по first_seen ≤ {datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()}).\n"
         f"- списано единиц: {total_reserved_units}\n"
         f"- SKU затронуто: {total_skus}\n"
         f"- резервов помечено shipped: {total_reserves_shipped}\n\n"
@@ -589,6 +740,8 @@ async def main() -> None:
     app.add_handler(CommandHandler("sync_full", sync_full))
     app.add_handler(CommandHandler("set_stock", set_stock))
     app.add_handler(CommandHandler("clear_stock", clear_stock))
+    app.add_handler(CommandHandler("push_stocks", push_stocks))
+    app.add_handler(CommandHandler("orders", orders))
     app.add_handler(CommandHandler("import_sheet", import_sheet))
     app.add_handler(CommandHandler("export_sheet", export_sheet))
     app.add_handler(CommandHandler("ozon_analytics", ozon_analytics))

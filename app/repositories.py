@@ -1,9 +1,21 @@
 from dataclasses import dataclass
+import zlib
 
-from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, select
+from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
+
+# Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
+AVAILABLE_STOCK_SYNC_KEY = "available_stock_push_hash"
+
+
+def available_stock_map_hash(available_stock: dict[str, int]) -> int:
+    """Тот же алгоритм, что в авто-синке: чтобы хэш после ручного пуша совпадал с ожиданиями цикла."""
+    payload = "|".join(
+        f"{sku}:{int(qty)}" for sku, qty in sorted(available_stock.items(), key=lambda x: x[0])
+    )
+    return int(zlib.crc32(payload.encode("utf-8")) & 0xFFFFFFFF)
 
 
 class Base(DeclarativeBase):
@@ -27,6 +39,20 @@ class Reserve(Base):
     sku: Mapped[str] = mapped_column(String(128), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+    __table_args__ = (UniqueConstraint("source", "external_order_id", name="uq_order_item"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_order_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    sku: Mapped[str] = mapped_column(String(128), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="added")
+    first_seen_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_seen_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class SyncState(Base):
@@ -68,12 +94,12 @@ class InventoryRepository:
             session.commit()
 
     def get_active_reserve_rows(self, source: str) -> list[tuple[str, str, int]]:
-        """Активные резервы: (external_order_id, sku, quantity)."""
+        """Активные резервы (из order_items.state='added'): (external_order_id, sku, quantity)."""
         with Session(self.engine) as session:
             rows = session.execute(
-                select(Reserve.external_order_id, Reserve.sku, Reserve.quantity).where(
-                    Reserve.source == source,
-                    Reserve.status == "active",
+                select(OrderItem.external_order_id, OrderItem.sku, OrderItem.quantity).where(
+                    OrderItem.source == source,
+                    OrderItem.state == "added",
                 )
             ).all()
             return [(str(a), str(b), int(c)) for a, b, c in rows]
@@ -103,29 +129,93 @@ class InventoryRepository:
         return len(stocks_by_sku)
 
     def apply_reservations(self, actions: list[ReservationAction]) -> int:
+        _ = actions
+        # Legacy compatibility: reservations are now managed via order_items.
+        return 0
+
+    def upsert_order_items_from_actions(self, actions: list[ReservationAction], sync_ts: int) -> dict[str, int]:
+        """
+        Step 1 migration: keep order history in a dedicated table, in parallel with reserves.
+        Does not change existing reserve behavior.
+        """
         inserted = 0
+        updated = 0
+        touched = 0
+        if not actions:
+            return {"inserted": 0, "updated": 0, "touched": 0}
         with Session(self.engine) as session:
             for action in actions:
-                exists = session.scalar(
-                    select(Reserve).where(
-                        Reserve.source == action.source,
-                        Reserve.external_order_id == action.external_order_id,
+                row = session.scalar(
+                    select(OrderItem).where(
+                        OrderItem.source == action.source,
+                        OrderItem.external_order_id == action.external_order_id,
                     )
                 )
-                if exists:
+                if row is None:
+                    session.add(
+                        OrderItem(
+                            source=action.source,
+                            external_order_id=action.external_order_id,
+                            sku=action.sku,
+                            quantity=action.quantity,
+                            state="added",
+                            first_seen_ts=sync_ts,
+                            last_seen_ts=sync_ts,
+                        )
+                    )
+                    inserted += 1
+                    touched += 1
                     continue
-                session.add(
-                    Reserve(
-                        source=action.source,
-                        external_order_id=action.external_order_id,
-                        sku=action.sku,
-                        quantity=action.quantity,
-                        status="active",
-                    )
-                )
-                inserted += 1
+                changed = False
+                if row.sku != action.sku:
+                    row.sku = action.sku
+                    changed = True
+                if int(row.quantity) != int(action.quantity):
+                    row.quantity = int(action.quantity)
+                    changed = True
+                if row.state not in ("added", "shipped"):
+                    row.state = "added"
+                    changed = True
+                if int(row.last_seen_ts) != int(sync_ts):
+                    row.last_seen_ts = int(sync_ts)
+                    changed = True
+                if changed:
+                    updated += 1
+                    touched += 1
             session.commit()
-        return inserted
+        return {"inserted": inserted, "updated": updated, "touched": touched}
+
+    def list_order_items(
+        self,
+        from_ts: int | None = None,
+        to_ts: int | None = None,
+        *,
+        limit: int = 5000,
+    ) -> list[tuple[str, str, str, int, str, int, int]]:
+        """
+        Все строки заказов из order_items. Фильтр по first_seen_ts (unix), границы включительно.
+        Кортеж: source, external_order_id, sku, quantity, state, first_seen_ts, last_seen_ts.
+        """
+        with Session(self.engine) as session:
+            stmt = select(
+                OrderItem.source,
+                OrderItem.external_order_id,
+                OrderItem.sku,
+                OrderItem.quantity,
+                OrderItem.state,
+                OrderItem.first_seen_ts,
+                OrderItem.last_seen_ts,
+            )
+            if from_ts is not None:
+                stmt = stmt.where(OrderItem.first_seen_ts >= int(from_ts))
+            if to_ts is not None:
+                stmt = stmt.where(OrderItem.first_seen_ts <= int(to_ts))
+            stmt = stmt.order_by(OrderItem.first_seen_ts.desc(), OrderItem.id.desc()).limit(max(1, min(limit, 20000)))
+            rows = session.execute(stmt).all()
+            return [
+                (str(a), str(b), str(c), int(d), str(e), int(f), int(g))
+                for a, b, c, d, e, f, g in rows
+            ]
 
     def reconcile_active_reserves(self, source: str, desired: list[ReservationAction]) -> tuple[int, int]:
         """
@@ -144,25 +234,46 @@ class InventoryRepository:
         updated = 0
         with Session(self.engine) as session:
             active = session.scalars(
-                select(Reserve).where(Reserve.source == source, Reserve.status == "active")
+                select(OrderItem).where(OrderItem.source == source, OrderItem.state == "added")
             ).all()
             for row in active:
                 key = (row.source, row.external_order_id)
                 if key not in desired_keys:
-                    session.delete(row)
+                    row.state = "cancelled"
                     removed += 1
 
             for action in by_key.values():
                 row = session.scalar(
-                    select(Reserve).where(
-                        Reserve.source == action.source,
-                        Reserve.external_order_id == action.external_order_id,
-                        Reserve.status == "active",
+                    select(OrderItem).where(
+                        OrderItem.source == action.source,
+                        OrderItem.external_order_id == action.external_order_id,
                     )
                 )
-                if row is not None and (row.sku != action.sku or row.quantity != action.quantity):
+                if row is None:
+                    session.add(
+                        OrderItem(
+                            source=action.source,
+                            external_order_id=action.external_order_id,
+                            sku=action.sku,
+                            quantity=action.quantity,
+                            state="added",
+                            first_seen_ts=0,
+                            last_seen_ts=0,
+                        )
+                    )
+                    updated += 1
+                    continue
+                changed = False
+                if row.state != "added":
+                    row.state = "added"
+                    changed = True
+                if row.sku != action.sku:
                     row.sku = action.sku
-                    row.quantity = action.quantity
+                    changed = True
+                if int(row.quantity) != int(action.quantity):
+                    row.quantity = int(action.quantity)
+                    changed = True
+                if changed:
                     updated += 1
 
             session.commit()
@@ -171,12 +282,29 @@ class InventoryRepository:
     def get_active_reserve_external_ids(self, source: str) -> set[str]:
         with Session(self.engine) as session:
             ids = session.scalars(
-                select(Reserve.external_order_id).where(
-                    Reserve.source == source,
-                    Reserve.status == "active",
+                select(OrderItem.external_order_id).where(
+                    OrderItem.source == source,
+                    OrderItem.state == "added",
                 )
             ).all()
             return set(ids)
+
+    def build_force_push_available_map(self) -> dict[str, int]:
+        """
+        Полная карта для принудительного пуша: все SKU из product_stocks и из order_items (любой статус).
+        Нет строки на складе → stock=0; резерв только по order_items в состоянии added.
+        """
+        with Session(self.engine) as session:
+            stocks = {row.sku: int(row.stock) for row in session.scalars(select(ProductStock)).all()}
+            reserve_by_sku: dict[str, int] = {}
+            for oi in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all():
+                reserve_by_sku[oi.sku] = reserve_by_sku.get(oi.sku, 0) + int(oi.quantity)
+            order_skus = {str(s) for s in session.scalars(select(OrderItem.sku).distinct()).all()}
+            all_skus = set(stocks.keys()) | set(reserve_by_sku.keys()) | order_skus
+            return {
+                sku: max(int(stocks.get(sku, 0)) - int(reserve_by_sku.get(sku, 0)), 0)
+                for sku in sorted(all_skus)
+            }
 
     def get_available_stock_map(self) -> dict[str, int]:
         with Session(self.engine) as session:
@@ -184,18 +312,18 @@ class InventoryRepository:
                 row.sku: row.stock for row in session.scalars(select(ProductStock)).all()
             }
             reserves_by_sku: dict[str, int] = {}
-            active_reserves = session.scalars(
-                select(Reserve).where(Reserve.status == "active")
+            active_order_items = session.scalars(
+                select(OrderItem).where(OrderItem.state == "added")
             ).all()
-            for reserve in active_reserves:
-                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + reserve.quantity
+            for reserve in active_order_items:
+                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + int(reserve.quantity)
 
             all_skus = set(stocks.keys()) | set(reserves_by_sku.keys())
             available: dict[str, int] = {}
             for sku in all_skus:
                 stock = stocks.get(sku, 0)
                 reserve = reserves_by_sku.get(sku, 0)
-                available[sku] = max(stock - reserve, 0)
+                available[sku] = stock - reserve
             return available
 
     def get_inventory_snapshot(self) -> list[InventorySnapshot]:
@@ -204,11 +332,11 @@ class InventoryRepository:
                 row.sku: row.stock for row in session.scalars(select(ProductStock)).all()
             }
             reserves_by_sku: dict[str, int] = {}
-            active_reserves = session.scalars(
-                select(Reserve).where(Reserve.status == "active")
+            active_order_items = session.scalars(
+                select(OrderItem).where(OrderItem.state == "added")
             ).all()
-            for reserve in active_reserves:
-                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + reserve.quantity
+            for reserve in active_order_items:
+                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + int(reserve.quantity)
 
             snapshots: list[InventorySnapshot] = []
             all_skus = sorted(set(stocks.keys()) | set(reserves_by_sku.keys()))
@@ -220,7 +348,7 @@ class InventoryRepository:
                         sku=sku,
                         stock=stock,
                         reserve=reserve,
-                        available=max(stock - reserve, 0),
+                        available=stock - reserve,
                     )
                 )
             return snapshots
@@ -229,16 +357,84 @@ class InventoryRepository:
         """Delete all stocks and reserves (irreversible)."""
         with Session(self.engine) as session:
             session.execute(delete(Reserve))
+            session.execute(delete(OrderItem))
             session.execute(delete(ProductStock))
             session.execute(delete(SyncState))
             session.commit()
 
     def clear_stocks_only(self) -> int:
-        """Delete only product stocks, keep reserves and sync state."""
+        """Delete only product stocks. Сбрасываем хэш последнего пуша остатков — иначе sync решит, что available не менялся."""
         with Session(self.engine) as session:
+            row = session.get(SyncState, AVAILABLE_STOCK_SYNC_KEY)
+            if row is not None:
+                session.delete(row)
             deleted = session.execute(delete(ProductStock))
             session.commit()
             return int(deleted.rowcount or 0)
+
+    def ship_added_orders_before_cutoff(
+        self, sources: set[str] | None, cutoff_ts: int
+    ) -> dict[str, object]:
+        """
+        Отсечка по времени: все позиции state=added с first_seen_ts <= cutoff_ts (и строки с first_seen_ts=0)
+        для выбранных источников — списать qty со склада и перевести в shipped.
+        sources=None — все маркетплейсы в БД.
+        """
+        with Session(self.engine) as session:
+            q = select(OrderItem).where(
+                OrderItem.state == "added",
+                or_(OrderItem.first_seen_ts <= int(cutoff_ts), OrderItem.first_seen_ts == 0),
+            )
+            if sources is not None and len(sources) > 0:
+                q = q.where(OrderItem.source.in_(list(sources)))
+            rows = session.scalars(q).all()
+            if not rows:
+                return {
+                    "by_source": {},
+                    "reserved_units": 0,
+                    "reserves_shipped": 0,
+                    "affected_skus": 0,
+                }
+
+            reserved_by_sku: dict[str, int] = {}
+            per_source: dict[str, list[OrderItem]] = {}
+            for r in rows:
+                reserved_by_sku[r.sku] = reserved_by_sku.get(r.sku, 0) + int(r.quantity)
+                per_source.setdefault(r.source, []).append(r)
+
+            reserved_units = 0
+            for sku, qty in reserved_by_sku.items():
+                if qty <= 0:
+                    continue
+                stock_row = session.get(ProductStock, sku)
+                if stock_row is None:
+                    continue
+                reserved_units += qty
+                stock_row.stock = max(int(stock_row.stock) - qty, 0)
+
+            for r in rows:
+                r.state = "shipped"
+
+            session.commit()
+
+            by_source_out: dict[str, dict[str, int]] = {}
+            total_skus_summed = 0
+            for src, rlist in sorted(per_source.items()):
+                skus = {r.sku for r in rlist}
+                units = sum(int(r.quantity) for r in rlist)
+                by_source_out[src] = {
+                    "reserves_shipped": len(rlist),
+                    "reserved_units": units,
+                    "affected_skus": len(skus),
+                }
+                total_skus_summed += len(skus)
+
+            return {
+                "by_source": by_source_out,
+                "reserved_units": reserved_units,
+                "reserves_shipped": len(rows),
+                "affected_skus": total_skus_summed,
+            }
 
     def ship_active_reserves_by_external_ids(self, source: str, external_ids: set[str]) -> dict[str, int]:
         """
@@ -250,10 +446,10 @@ class InventoryRepository:
 
         with Session(self.engine) as session:
             rows = session.scalars(
-                select(Reserve).where(
-                    Reserve.source == source,
-                    Reserve.status == "active",
-                    Reserve.external_order_id.in_(list(external_ids)),
+                select(OrderItem).where(
+                    OrderItem.source == source,
+                    OrderItem.state == "added",
+                    OrderItem.external_order_id.in_(list(external_ids)),
                 )
             ).all()
 
@@ -274,7 +470,7 @@ class InventoryRepository:
                 stocks_updated += 1
 
             for r in rows:
-                r.status = "shipped"
+                r.state = "shipped"
 
             session.commit()
 

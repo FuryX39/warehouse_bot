@@ -1,16 +1,14 @@
 from datetime import datetime, timezone
 import logging
 import time
-import zlib
 
 from app.adapters.base import MarketplaceAdapter, ReservationAction
-from app.repositories import InventoryRepository
+from app.repositories import AVAILABLE_STOCK_SYNC_KEY, InventoryRepository, available_stock_map_hash
 
 logger = logging.getLogger(__name__)
 
 _ADMIN_ALERT_MAX_LEN = 3800
 _PER_SOURCE_ALERT_MAX = 3200
-_AVAILABLE_STOCK_HASH_KEY = "available_stock_push_hash"
 
 
 def _anchor_key(source: str) -> str:
@@ -41,13 +39,6 @@ def _set_anchor(repo: InventoryRepository, source: str, ts: int) -> None:
 
 def _set_last_full(repo: InventoryRepository, source: str, ts: int) -> None:
     repo.set_sync_int(_last_full_key(source), ts)
-
-
-def _available_stock_hash(available_stock: dict[str, int]) -> int:
-    payload = "|".join(
-        f"{sku}:{int(qty)}" for sku, qty in sorted(available_stock.items(), key=lambda x: x[0])
-    )
-    return int(zlib.crc32(payload.encode("utf-8")) & 0xFFFFFFFF)
 
 
 def _reserve_mismatch_report(
@@ -188,7 +179,10 @@ class StockCoordinator:
                 reconcile_removed += removed
                 reconcile_updated += updated
 
-            inserted = self.inventory_repo.apply_reservations(all_actions)
+            order_items_stats = self.inventory_repo.upsert_order_items_from_actions(
+                all_actions, sync_start_ts
+            )
+            inserted = int(order_items_stats.get("inserted", 0))
 
             mismatch_parts: list[str] = []
             for adapter in self.adapters:
@@ -214,8 +208,8 @@ class StockCoordinator:
                     admin_alert = admin_alert[: _ADMIN_ALERT_MAX_LEN - 30] + "\n…(общий отчёт обрезан)"
 
             available_stock = self.inventory_repo.get_available_stock_map()
-            current_stock_hash = _available_stock_hash(available_stock)
-            last_stock_hash = self.inventory_repo.get_sync_int(_AVAILABLE_STOCK_HASH_KEY)
+            current_stock_hash = available_stock_map_hash(available_stock)
+            last_stock_hash = self.inventory_repo.get_sync_int(AVAILABLE_STOCK_SYNC_KEY)
             stock_changed = last_stock_hash is None or int(last_stock_hash) != int(current_stock_hash)
 
             if stock_changed:
@@ -227,7 +221,7 @@ class StockCoordinator:
                     except Exception as exc:  # noqa: BLE001
                         adapter_errors.append(f"{adapter.name}: stock sync failed ({exc})")
                         logger.exception("Adapter stock sync failed: %s", adapter.name)
-                self.inventory_repo.set_sync_int(_AVAILABLE_STOCK_HASH_KEY, current_stock_hash)
+                self.inventory_repo.set_sync_int(AVAILABLE_STOCK_SYNC_KEY, current_stock_hash)
             else:
                 logger.info("Skip stock push: available stock unchanged")
 
@@ -251,6 +245,7 @@ class StockCoordinator:
                 "ok": True,
                 "actions_count": len(all_actions),
                 "inserted_reservations": inserted,
+                "order_items_upserted": order_items_stats,
                 "reconcile_removed": reconcile_removed,
                 "reconcile_updated": reconcile_updated,
                 "last_run_at": self.last_run_at.isoformat(),
