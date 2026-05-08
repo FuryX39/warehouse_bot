@@ -138,9 +138,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/import_sheet URL - импорт остатков из Google Sheets\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
-        "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: STARTED; с подтверждением)\n"
+        "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
         "/ship_ozon - отгрузка только Ozon (не new)\n"
-        "/ship_yandex - отгрузка только Yandex Market (ожидают сборки / STARTED)\n"
+        "/ship_yandex - отгрузка только Yandex Market (все added, кроме STARTED)\n"
         "/ship_wb - отгрузка только Wildberries (не new)\n"
         "/orders [ОТ] [ДО] - выгрузка заказов из БД в CSV (даты ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, UTC, по first_seen)\n"
         "/clear_db - очистка БД (только с подтверждением по коду)"
@@ -623,8 +623,18 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
                 elif isinstance(adapter, OzonAdapter) or isinstance(adapter, YandexMarketAdapter):
                     ready_external_ids = adapter.fetch_ready_to_ship_external_ids()
                     if isinstance(adapter, YandexMarketAdapter):
-                        # Для Яндекса команда ship должна исключать STARTED (ожидают сборки).
-                        ids_to_ship = set(active_external_ids) - set(ready_external_ids)
+                        # Для Яндекса исключаем STARTED по orderId (без sku), чтобы
+                        # расхождения в SKU-идентификаторах не оставляли заказ в резерве.
+                        started_order_ids: set[str] = set()
+                        for ext in ready_external_ids:
+                            order_id = str(ext).split(":", 1)[0].strip()
+                            if order_id:
+                                started_order_ids.add(order_id)
+                        ids_to_ship = set()
+                        for ext in active_external_ids:
+                            order_id = str(ext).split(":", 1)[0].strip()
+                            if not order_id or order_id not in started_order_ids:
+                                ids_to_ship.add(ext)
                     else:
                         ids_to_ship = set(active_external_ids) & set(ready_external_ids)
                 else:
