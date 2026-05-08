@@ -310,7 +310,7 @@ class WildberriesAdapter(MarketplaceAdapter):
 
     def fetch_ready_to_ship_external_ids(self, active_external_ids: set[str]) -> set[str]:
         """
-        Wildberries FBS: готово к отгрузке определяем по статусам заказа.
+        Wildberries FBS: для ship отгружаем все активные позиции, которые уже не в статусе "new".
         Не используем /api/v3/supplies (может отдавать 400 в некоторых кабинетах/правах).
         Возвращаем subset активных external ids (формат "{orderId}:{sku}") по совпадению orderId.
         """
@@ -337,7 +337,7 @@ class WildberriesAdapter(MarketplaceAdapter):
                 continue
             supplier_s, _wb_s = status_pair
             supplier_norm = (supplier_s or "").strip().lower()
-            if supplier_norm in _READY_TO_SHIP_SUPPLIER_STATUSES:
+            if supplier_norm and supplier_norm != "new":
                 ready.update(ext_ids)
 
         return ready

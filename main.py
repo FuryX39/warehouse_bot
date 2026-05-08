@@ -139,10 +139,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/import_sheet URL - импорт остатков из Google Sheets\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
-        "/ship_all - отгрузка по всем МП (отсечка по времени first_seen, с подтверждением)\n"
-        "/ship_ozon - отгрузка только Ozon (то же)\n"
-        "/ship_yandex - отгрузка только Yandex Market (то же)\n"
-        "/ship_wb - отгрузка только Wildberries (то же)\n"
+        "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: STARTED; с подтверждением)\n"
+        "/ship_ozon - отгрузка только Ozon (не new)\n"
+        "/ship_yandex - отгрузка только Yandex Market (ожидают сборки / STARTED)\n"
+        "/ship_wb - отгрузка только Wildberries (не new)\n"
         "/orders [ОТ] [ДО] - таблица заказов из БД (даты ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, UTC, по first_seen)\n"
         "/clear_db - очистка БД (только с подтверждением по коду)"
     )
@@ -577,10 +577,10 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
         }
         await _reply_text_resilient(
             update.message,
-            "ВНИМАНИЕ: отгрузка по отсечке времени — все заказы в резерве (added), "
-            "первое появление которых в боте не позже момента отгрузки, будут списаны со склада "
-            "и помечены как shipped.\n"
-            "Строки без даты первого появления (0) тоже отгружаются.\n"
+            "ВНИМАНИЕ: отгрузка выполняется только для заказов в резерве (added), "
+            "которые подходят под статусную логику МП.\n"
+            "WB/Ozon: не new. Yandex: ожидают сборки (STARTED).\n"
+            "Остальные заказы останутся в added.\n"
             "Это необратимо.\n\n"
             "Если вы уверены, в течение 5 минут отправьте:\n"
             f"/{cmd_name} {code}",
@@ -616,27 +616,69 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
     await _reply_text_resilient(update.message, "Синхронизация перед отгрузкой...")
     sync_result = await asyncio.to_thread(coordinator.sync_cycle)
 
-    # 2) Отсечка по времени: все added с first_seen_ts <= момента отгрузки (по UTC unix).
-    cutoff_ts = int(time.time())
+    # 2) Отгружаем только заказы, подходящие под статусные правила по каждому МП:
+    # WB/Ozon: не new, Yandex: STARTED (ожидают сборки).
     ship_stats_by_source: list[str] = []
+    total_reserved_units = 0
+    total_reserves_shipped = 0
+    total_skus = 0
+    source_errors: list[str] = []
 
-    def _do_ship_cutoff() -> dict[str, object]:
-        src_filter: set[str] | None = sources if sources else None
-        return inventory_repo.ship_added_orders_before_cutoff(src_filter, cutoff_ts)
+    def _do_ship_ready() -> tuple[dict[str, dict[str, int]], list[str]]:
+        by_source_out: dict[str, dict[str, int]] = {}
+        errs: list[str] = []
+        adapters_by_name = {a.name: a for a in coordinator.adapters if a.is_configured()}
+        for src in sorted(sources):
+            adapter = adapters_by_name.get(src)
+            if adapter is None:
+                continue
+            try:
+                active_external_ids = inventory_repo.get_active_reserve_external_ids(src)
+                if not active_external_ids:
+                    by_source_out[src] = {
+                        "reserves_shipped": 0,
+                        "reserved_units": 0,
+                        "affected_skus": 0,
+                    }
+                    continue
 
-    ship_bundle = await asyncio.to_thread(_do_ship_cutoff)
-    by_source = ship_bundle.get("by_source") or {}
-    total_reserved_units = int(ship_bundle.get("reserved_units", 0))
-    total_reserves_shipped = int(ship_bundle.get("reserves_shipped", 0))
-    total_skus = int(ship_bundle.get("affected_skus", 0))
+                if isinstance(adapter, WildberriesAdapter):
+                    ready_external_ids = adapter.fetch_ready_to_ship_external_ids(active_external_ids)
+                elif isinstance(adapter, OzonAdapter) or isinstance(adapter, YandexMarketAdapter):
+                    ready_external_ids = adapter.fetch_ready_to_ship_external_ids()
+                else:
+                    ready_external_ids = set()
+
+                ids_to_ship = set(active_external_ids) & set(ready_external_ids)
+                stats = inventory_repo.ship_active_reserves_by_external_ids(src, ids_to_ship)
+                by_source_out[src] = {
+                    "reserves_shipped": int(stats.get("reserves_shipped", 0)),
+                    "reserved_units": int(stats.get("reserved_units", 0)),
+                    "affected_skus": int(stats.get("affected_skus", 0)),
+                }
+            except Exception as exc:  # noqa: BLE001
+                errs.append(f"{src}: ship failed ({exc})")
+                logger.exception("Ship-by-status failed for source=%s", src)
+                by_source_out[src] = {
+                    "reserves_shipped": 0,
+                    "reserved_units": 0,
+                    "affected_skus": 0,
+                }
+        return by_source_out, errs
+
+    by_source, source_errors = await asyncio.to_thread(_do_ship_ready)
 
     for src in sorted(by_source.keys()):
         st = by_source[src]
-        ship_stats_by_source.append(
-            f"- {src}: shipped={st['reserves_shipped']}, units={st['reserved_units']}, skus={st['affected_skus']}"
-        )
+        shipped = int(st.get("reserves_shipped", 0))
+        units = int(st.get("reserved_units", 0))
+        skus = int(st.get("affected_skus", 0))
+        total_reserves_shipped += shipped
+        total_reserved_units += units
+        total_skus += skus
+        ship_stats_by_source.append(f"- {src}: shipped={shipped}, units={units}, skus={skus}")
     if not ship_stats_by_source:
-        ship_stats_by_source.append("- (нет строк для отгрузки по отсечке)")
+        ship_stats_by_source.append("- (нет configured источников для отгрузки)")
 
     # После списания обновим остатки на маркетплейсах (без повторного fetch заказов).
     def _push_stocks_after_ship() -> None:
@@ -657,12 +699,17 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
 
     await _reply_text_resilient(
         update.message,
-        f"Отгрузка выполнена ({cmd_name}, отсечка по first_seen ≤ {datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()}).\n"
+        f"Отгрузка выполнена ({cmd_name}, по статусам МП).\n"
         f"- списано единиц: {total_reserved_units}\n"
         f"- SKU затронуто: {total_skus}\n"
         f"- резервов помечено shipped: {total_reserves_shipped}\n\n"
         "Детализация:\n"
         + "\n".join(ship_stats_by_source)
+        + (
+            ("\n\nПредупреждения отгрузки:\n- " + "\n- ".join(source_errors))
+            if source_errors
+            else ""
+        )
         + f"{warn_lines}",
     )
 

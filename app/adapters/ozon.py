@@ -133,8 +133,10 @@ class OzonAdapter(MarketplaceAdapter):
 
     def fetch_ready_to_ship_external_ids(self) -> set[str]:
         """
-        Возвращает набор external_order_id для позиций отправлений Ozon со статусом awaiting_deliver
-        (готово к отгрузке), в формате "{posting_number}:{sku}".
+        Возвращает набор external_order_id для позиций отправлений Ozon,
+        которые можно отгружать (не «новые»):
+        awaiting_approve / awaiting_packaging / awaiting_deliver.
+        Формат id: "{posting_number}:{sku}".
         """
         if not self.is_configured():
             return set()
@@ -144,32 +146,33 @@ class OzonAdapter(MarketplaceAdapter):
             "Content-Type": "application/json",
         }
         external_ids: set[str] = set()
-        offset = 0
-        status = "awaiting_deliver"
-        while True:
-            payload = self._unfulfilled_payload(status=status, offset=offset)
-            response = requests.post(
-                f"{self.base_url}/v3/posting/fbs/unfulfilled/list",
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
-            response.raise_for_status()
-            result = response.json().get("result", {}) or {}
-            postings = result.get("postings") or []
-            for posting in postings:
-                posting_number = str(posting.get("posting_number", "")).strip()
-                if not posting_number:
-                    continue
-                for product in posting.get("products", []) or []:
-                    sku = str(product.get("offer_id") or product.get("sku") or "").strip()
-                    quantity = int(product.get("quantity", 0))
-                    if not sku or quantity <= 0:
+        ship_statuses: tuple[str, ...] = ("awaiting_approve", "awaiting_packaging", "awaiting_deliver")
+        for status in ship_statuses:
+            offset = 0
+            while True:
+                payload = self._unfulfilled_payload(status=status, offset=offset)
+                response = requests.post(
+                    f"{self.base_url}/v3/posting/fbs/unfulfilled/list",
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+                response.raise_for_status()
+                result = response.json().get("result", {}) or {}
+                postings = result.get("postings") or []
+                for posting in postings:
+                    posting_number = str(posting.get("posting_number", "")).strip()
+                    if not posting_number:
                         continue
-                    external_ids.add(f"{posting_number}:{sku}")
-            if len(postings) < 1000:
-                break
-            offset += 1000
+                    for product in posting.get("products", []) or []:
+                        sku = str(product.get("offer_id") or product.get("sku") or "").strip()
+                        quantity = int(product.get("quantity", 0))
+                        if not sku or quantity <= 0:
+                            continue
+                        external_ids.add(f"{posting_number}:{sku}")
+                if len(postings) < 1000:
+                    break
+                offset += 1000
         return external_ids
 
     def sync_available_stock(self, available_stock_by_sku: dict[str, int]) -> None:

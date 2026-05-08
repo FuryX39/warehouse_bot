@@ -31,7 +31,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
     supports_reserve_reconciliation = True
     # У Яндекса дельта сейчас реализована тем же полным снимком, поэтому reconcile нужен в каждом цикле.
     reconcile_on_delta = True
-    ready_to_ship_substatus = "READY_TO_SHIP"
+    awaiting_assembly_substatus = "STARTED"
 
     def __init__(self, campaign_id: str, api_key: str) -> None:
         self.campaign_id = campaign_id
@@ -121,7 +121,8 @@ class YandexMarketAdapter(MarketplaceAdapter):
 
     def fetch_ready_to_ship_external_ids(self) -> set[str]:
         """
-        Yandex Market: status=PROCESSING + substatus=READY_TO_SHIP.
+        Yandex Market: для ship берём заказы в ожидании сборки:
+        status=PROCESSING + substatus=STARTED.
         Возвращает external ids в формате "{orderId}:{sku}".
         """
         if not self.is_configured():
@@ -136,7 +137,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
         while True:
             params: dict[str, str | int] = {
                 "status": "PROCESSING",
-                "substatus": self.ready_to_ship_substatus,
+                "substatus": self.awaiting_assembly_substatus,
                 "limit": limit,
                 **self._orders_date_range_query(),
             }

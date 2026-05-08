@@ -80,10 +80,10 @@ After each successful fetch, **Ozon** and **Yandex Market** reconcile DB reserve
 - `/import_sheet [URL]` - import stocks from Google Sheets (`URL` optional if default set in `.env`)
 - `/export_sheet` - export DB snapshot into CSV file sent by bot
 - `/ozon_analytics [days]` - Ozon `POST /v1/analytics/data` grouped by `sku`; CSV (`ordered_units`, `revenue`, etc.)
-- `/ship_all` - ship ready-to-ship reserves for all marketplaces (two-step confirmation)
-- `/ship_ozon` - ship ready-to-ship reserves for Ozon only (two-step confirmation)
-- `/ship_yandex` - ship ready-to-ship reserves for Yandex Market only (two-step confirmation)
-- `/ship_wb` - ship ready-to-ship reserves for Wildberries only (two-step confirmation)
+- `/ship_all` - ship reserves by marketplace statuses (two-step confirmation)
+- `/ship_ozon` - ship Ozon reserves where status is not "new" (two-step confirmation)
+- `/ship_yandex` - ship Yandex Market reserves in waiting-for-assembly (`PROCESSING` + `STARTED`) (two-step confirmation)
+- `/ship_wb` - ship Wildberries reserves where supplier status is not `new` (two-step confirmation)
 - `/clear_db` - wipe all stocks and reserves (two-step: request code, then confirm within 5 minutes)
 
 ## Ozon analytics CSV
@@ -130,10 +130,10 @@ Wrong code, timeout, or tapping `/clear_db` alone again issues a new code and do
 `/ship_all` (or `/ship_ozon`, `/ship_yandex`, `/ship_wb`) is for the moment when you physically ship reserved goods from your warehouse.
 Current implementation:
 - runs a forced sync cycle first (new orders/cancellations),
-- then ships only **ready-to-ship** reserves:
-  - Ozon: `awaiting_deliver`,
-  - Yandex Market: `PROCESSING` + `substatus=READY_TO_SHIP`,
-  - Wildberries (FBS): order is included in a supply (поставка).
+- then ships only reserves matching marketplace status rules:
+  - Ozon: any of `awaiting_approve`, `awaiting_packaging`, `awaiting_deliver` (i.e. not `awaiting_registration`),
+  - Yandex Market: `PROCESSING` + `substatus=STARTED` (waiting for assembly),
+  - Wildberries (FBS): any supplier status except `new`.
 
 1. Send `/ship_all` (or one of per-marketplace commands) — bot replies with a warning and a one-time confirmation code (valid 5 minutes).
 2. Send `/ship_all <CODE>` (or `/ship_ozon <CODE>`, etc.) to:
