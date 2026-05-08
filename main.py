@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import csv
-import html
 import io
 import logging
 import secrets
@@ -143,7 +142,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/ship_ozon - отгрузка только Ozon (не new)\n"
         "/ship_yandex - отгрузка только Yandex Market (ожидают сборки / STARTED)\n"
         "/ship_wb - отгрузка только Wildberries (не new)\n"
-        "/orders [ОТ] [ДО] - таблица заказов из БД (даты ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, UTC, по first_seen)\n"
+        "/orders [ОТ] [ДО] - выгрузка заказов из БД в CSV (даты ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, UTC, по first_seen)\n"
         "/clear_db - очистка БД (только с подтверждением по коду)"
     )
 
@@ -334,30 +333,6 @@ async def orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     rows = await asyncio.to_thread(inventory_repo.list_order_items, from_ts, to_ts)
     if not rows:
         await _reply_text_resilient(update.message, f"Заказов не найдено ({range_note}).")
-        return
-
-    header = (
-        f"{'source':<14} {'external_id':<24} {'sku':<16} {'qty':>4} {'state':<10} "
-        f"{'first_seen_utc':<16} {'last_seen_utc':<16}"
-    )
-    sep = "-" * min(len(header), 120)
-    table_lines = [header, sep]
-    max_rows_in_message = 80
-    for src, ext, sku, qty, state, fst, lst in rows[:max_rows_in_message]:
-        ext_short = ext if len(ext) <= 24 else ext[:21] + "..."
-        sku_short = sku if len(sku) <= 16 else sku[:13] + "..."
-        line = (
-            f"{src:<14} {ext_short:<24} {sku_short:<16} {qty:>4} {state:<10} "
-            f"{_format_order_ts(fst):<16} {_format_order_ts(lst):<16}"
-        )
-        table_lines.append(line)
-    if len(rows) > max_rows_in_message:
-        table_lines.append(f"... ещё {len(rows) - max_rows_in_message} строк (полный список в CSV)")
-    pre_body = html.escape("\n".join(table_lines))
-    caption = html.escape(f"Заказы ({range_note}). Строк: {len(rows)}")
-    text = f"{caption}\n\n<pre>{pre_body}</pre>"
-    if len(text) <= 3900:
-        await update.message.reply_text(text, parse_mode="HTML")
         return
 
     buf = io.StringIO()
