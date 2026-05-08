@@ -264,7 +264,9 @@ class InventoryRepository:
                     updated += 1
                     continue
                 changed = False
-                if row.state != "added":
+                # Не реанимируем уже отгруженные строки при reconcile.
+                # shipped должен оставаться shipped, даже если заказ снова виден в API-снимке.
+                if row.state not in ("added", "shipped"):
                     row.state = "added"
                     changed = True
                 if row.sku != action.sku:
