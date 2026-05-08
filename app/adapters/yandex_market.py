@@ -121,9 +121,10 @@ class YandexMarketAdapter(MarketplaceAdapter):
 
     def fetch_ready_to_ship_external_ids(self) -> set[str]:
         """
-        Yandex Market: для ship берём заказы в ожидании сборки:
-        status=PROCESSING + substatus=STARTED.
-        Возвращает external ids в формате "{orderId}:{sku}".
+        Yandex Market: вернуть external ids заказов в ожидании сборки (substatus=STARTED).
+        Берём все PROCESSING и фильтруем STARTED локально, чтобы не зависеть от
+        серверной интерпретации query-параметра substatus.
+        Формат id: "{orderId}:{sku}".
         """
         if not self.is_configured():
             return set()
@@ -137,7 +138,6 @@ class YandexMarketAdapter(MarketplaceAdapter):
         while True:
             params: dict[str, str | int] = {
                 "status": "PROCESSING",
-                "substatus": self.awaiting_assembly_substatus,
                 "limit": limit,
                 **self._orders_date_range_query(),
             }
@@ -153,6 +153,9 @@ class YandexMarketAdapter(MarketplaceAdapter):
             body = response.json() or {}
             orders = body.get("orders", []) or []
             for order in orders:
+                substatus = str(order.get("substatus") or "").strip().upper()
+                if substatus != self.awaiting_assembly_substatus:
+                    continue
                 order_id = str(order.get("id", "")).strip()
                 if not order_id:
                     continue
