@@ -579,7 +579,7 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
             update.message,
             "ВНИМАНИЕ: отгрузка выполняется только для заказов в резерве (added), "
             "которые подходят под статусную логику МП.\n"
-            "WB/Ozon: не new. Yandex: ожидают сборки (STARTED).\n"
+            "WB/Ozon: не new. Yandex: все, кроме STARTED.\n"
             "Остальные заказы останутся в added.\n"
             "Это необратимо.\n\n"
             "Если вы уверены, в течение 5 минут отправьте:\n"
@@ -617,7 +617,7 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
     sync_result = await asyncio.to_thread(coordinator.sync_cycle)
 
     # 2) Отгружаем только заказы, подходящие под статусные правила по каждому МП:
-    # WB/Ozon: не new, Yandex: STARTED (ожидают сборки).
+    # WB/Ozon: не new, Yandex: все added, кроме STARTED.
     ship_stats_by_source: list[str] = []
     total_reserved_units = 0
     total_reserves_shipped = 0
@@ -644,12 +644,16 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
 
                 if isinstance(adapter, WildberriesAdapter):
                     ready_external_ids = adapter.fetch_ready_to_ship_external_ids(active_external_ids)
+                    ids_to_ship = set(active_external_ids) & set(ready_external_ids)
                 elif isinstance(adapter, OzonAdapter) or isinstance(adapter, YandexMarketAdapter):
                     ready_external_ids = adapter.fetch_ready_to_ship_external_ids()
+                    if isinstance(adapter, YandexMarketAdapter):
+                        # Для Яндекса команда ship должна исключать STARTED (ожидают сборки).
+                        ids_to_ship = set(active_external_ids) - set(ready_external_ids)
+                    else:
+                        ids_to_ship = set(active_external_ids) & set(ready_external_ids)
                 else:
-                    ready_external_ids = set()
-
-                ids_to_ship = set(active_external_ids) & set(ready_external_ids)
+                    ids_to_ship = set()
                 stats = inventory_repo.ship_active_reserves_by_external_ids(src, ids_to_ship)
                 by_source_out[src] = {
                     "reserves_shipped": int(stats.get("reserves_shipped", 0)),
