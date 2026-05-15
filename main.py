@@ -12,6 +12,9 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.adapters.base import is_value_configured
+from app.adapters.ozon import OzonAdapter
+from app.adapters.wildberries import WildberriesAdapter
+from app.adapters.yandex_market import YandexMarketAdapter
 from app.bootstrap import create_inventory_stack
 from app.ozon_analytics import build_ozon_analytics_csv
 from app.repositories import (
