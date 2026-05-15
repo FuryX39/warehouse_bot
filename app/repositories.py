@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import zlib
 
-from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, or_, select
+from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, inspect, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
@@ -16,6 +16,15 @@ def available_stock_map_hash(available_stock: dict[str, int]) -> int:
         f"{sku}:{int(qty)}" for sku, qty in sorted(available_stock.items(), key=lambda x: x[0])
     )
     return int(zlib.crc32(payload.encode("utf-8")) & 0xFFFFFFFF)
+
+
+def _escape_sql_like(pattern: str) -> str:
+    """Экранирование % и _ для LIKE/ILIKE с ESCAPE '\\'."""
+    return pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# Текст, если для SKU нет строки в таблице nomenclature (или пустое имя).
+MISSING_NOMENCLATURE_LABEL = "Товар отсутствует в номенклатуре"
 
 
 class Base(DeclarativeBase):
@@ -64,12 +73,24 @@ class SyncState(Base):
     value_int: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class NomenclatureItem(Base):
+    """Справочник номенклатуры: артикул → название и ссылка на изображение (та же БД, таблица nomenclature)."""
+
+    __tablename__ = "nomenclature"
+
+    sku: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    image_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+
+
 @dataclass
 class InventorySnapshot:
     sku: str
     stock: int
     reserve: int
     available: int
+    name: str
+    image_url: str
 
 
 class InventoryRepository:
@@ -78,6 +99,70 @@ class InventoryRepository:
 
     def init_schema(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._ensure_nomenclature_image_url_column()
+
+    def _ensure_nomenclature_image_url_column(self) -> None:
+        """SQLite: create_all не добавляет новые колонки к существующей таблице."""
+        insp = inspect(self.engine)
+        if "nomenclature" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("nomenclature")}
+        if "image_url" in cols:
+            return
+        dialect = self.engine.dialect.name
+        if dialect == "sqlite":
+            stmt = text("ALTER TABLE nomenclature ADD COLUMN image_url VARCHAR(2048) NOT NULL DEFAULT ''")
+        elif dialect == "postgresql":
+            stmt = text("ALTER TABLE nomenclature ADD COLUMN IF NOT EXISTS image_url VARCHAR(2048) NOT NULL DEFAULT ''")
+        else:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
+
+    def upsert_nomenclature_items(self, items: dict[str, tuple[str, str]]) -> int:
+        """Массовая запись номенклатуры: sku -> (name, image_url). Пустые SKU пропускаются."""
+        if not items:
+            return 0
+        n = 0
+        with Session(self.engine) as session:
+            for sku_raw, pair in items.items():
+                sku = str(sku_raw).strip()
+                if not sku or len(sku) > 128:
+                    continue
+                title = str(pair[0] or "").strip()
+                if len(title) > 512:
+                    title = title[:512]
+                img = str(pair[1] or "").strip()
+                if len(img) > 2048:
+                    img = img[:2048]
+                row = session.get(NomenclatureItem, sku)
+                if row is None:
+                    session.add(NomenclatureItem(sku=sku, name=title, image_url=img))
+                else:
+                    row.name = title
+                    row.image_url = img
+                n += 1
+            session.commit()
+        return n
+
+    def list_nomenclature_all(self) -> list[tuple[str, str, str]]:
+        """Все строки номенклатуры: (sku, name, image_url), по sku."""
+        with Session(self.engine) as session:
+            rows = session.scalars(select(NomenclatureItem).order_by(NomenclatureItem.sku)).all()
+            return [(r.sku, (r.name or "").strip(), (r.image_url or "").strip()) for r in rows]
+
+    def _load_nomenclature_rows(self, session: Session, skus: list[str]) -> dict[str, tuple[str, str]]:
+        """Только существующие в БД строки: sku -> (name, image_url), уже strip()."""
+        if not skus:
+            return {}
+        out: dict[str, tuple[str, str]] = {}
+        step = 800
+        for i in range(0, len(skus), step):
+            chunk = list(skus[i : i + step])
+            rows = session.scalars(select(NomenclatureItem).where(NomenclatureItem.sku.in_(chunk))).all()
+            for row in rows:
+                out[row.sku] = ((row.name or "").strip(), (row.image_url or "").strip())
+        return out
 
     def get_sync_int(self, key: str) -> int | None:
         with Session(self.engine) as session:
@@ -190,10 +275,14 @@ class InventoryRepository:
         from_ts: int | None = None,
         to_ts: int | None = None,
         *,
+        source: str | None = None,
+        sku_contains: str | None = None,
+        order_contains: str | None = None,
         limit: int = 5000,
     ) -> list[tuple[str, str, str, int, str, int, int]]:
         """
-        Все строки заказов из order_items. Фильтр по first_seen_ts (unix), границы включительно.
+        Строки заказов из order_items. Фильтр по first_seen_ts (unix), границы включительно.
+        Дополнительно: source (точное имя МП), sku_contains и order_contains — подстроки (ILIKE).
         Кортеж: source, external_order_id, sku, quantity, state, first_seen_ts, last_seen_ts.
         """
         with Session(self.engine) as session:
@@ -210,6 +299,14 @@ class InventoryRepository:
                 stmt = stmt.where(OrderItem.first_seen_ts >= int(from_ts))
             if to_ts is not None:
                 stmt = stmt.where(OrderItem.first_seen_ts <= int(to_ts))
+            if source is not None and str(source).strip():
+                stmt = stmt.where(OrderItem.source == str(source).strip())
+            if sku_contains is not None and str(sku_contains).strip():
+                pat = f"%{_escape_sql_like(str(sku_contains).strip())}%"
+                stmt = stmt.where(OrderItem.sku.ilike(pat, escape="\\"))
+            if order_contains is not None and str(order_contains).strip():
+                pat = f"%{_escape_sql_like(str(order_contains).strip())}%"
+                stmt = stmt.where(OrderItem.external_order_id.ilike(pat, escape="\\"))
             stmt = stmt.order_by(OrderItem.first_seen_ts.desc(), OrderItem.id.desc()).limit(max(1, min(limit, 20000)))
             rows = session.execute(stmt).all()
             return [
@@ -340,23 +437,34 @@ class InventoryRepository:
             for reserve in active_order_items:
                 reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + int(reserve.quantity)
 
-            snapshots: list[InventorySnapshot] = []
             all_skus = sorted(set(stocks.keys()) | set(reserves_by_sku.keys()))
+            nom = self._load_nomenclature_rows(session, all_skus)
+            snapshots: list[InventorySnapshot] = []
             for sku in all_skus:
                 stock = stocks.get(sku, 0)
                 reserve = reserves_by_sku.get(sku, 0)
+                meta = nom.get(sku)
+                if meta is None:
+                    disp_name = MISSING_NOMENCLATURE_LABEL
+                    img = ""
+                else:
+                    raw_n, raw_i = meta
+                    disp_name = MISSING_NOMENCLATURE_LABEL if raw_n == "" else raw_n
+                    img = raw_i
                 snapshots.append(
                     InventorySnapshot(
                         sku=sku,
                         stock=stock,
                         reserve=reserve,
                         available=stock - reserve,
+                        name=disp_name,
+                        image_url=img,
                     )
                 )
             return snapshots
 
     def clear_all_data(self) -> None:
-        """Delete all stocks and reserves (irreversible)."""
+        """Удаляет остатки, резервы и sync state. Таблица nomenclature не трогается."""
         with Session(self.engine) as session:
             session.execute(delete(Reserve))
             session.execute(delete(OrderItem))

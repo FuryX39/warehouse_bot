@@ -1,0 +1,398 @@
+"""
+HTTP API и раздача веб-страницы панели.
+
+Авторизация:
+  - В .env обязателен WEB_DASHBOARD_SECRET (пароль для входа).
+  - После POST /api/login в cookie-сессии ставится флаг; все страницы и API
+    (кроме /login, POST /api/login и статики) требуют эту сессию.
+
+Маршруты:
+  GET  /login         — форма входа
+  POST /api/login     — проверка пароля, создание сессии
+  POST /api/import_sheet — импорт остатков из Google Sheets (как /import_sheet)
+  POST /api/logout    — выход
+  GET  /              — панель (редирект на /login без сессии)
+  GET  /static/*      — CSS/JS (без данных; основная защита — API и /)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import secrets
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
+
+from app.adapters.base import is_value_configured
+from app.config import Settings
+from app.repositories import InventoryRepository
+from app.services import StockCoordinator
+from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
+
+_WEB_ROOT = Path(__file__).resolve().parent
+_SESSION_COOKIE = "warehouse_session"
+_SESSION_KEY_PREFIX = "warehouse_web_session_signing_v1:"
+
+
+def _session_signing_key(dashboard_secret: str) -> str:
+    """Отдельный ключ подписи cookie, чтобы не класть сырой пароль в middleware."""
+    return hashlib.sha256((_SESSION_KEY_PREFIX + dashboard_secret).encode("utf-8")).hexdigest()
+
+
+def _parse_day(s: str | None) -> date | None:
+    if not s or not str(s).strip():
+        return None
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _utc_day_start_ts(d: date) -> int:
+    return int(datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc).timestamp())
+
+
+def _utc_day_end_ts(d: date) -> int:
+    n = d + timedelta(days=1)
+    return int(datetime.combine(n, datetime.min.time(), tzinfo=timezone.utc).timestamp()) - 1
+
+
+def _password_ok(attempt: str, secret: str) -> bool:
+    a = attempt.encode("utf-8")
+    b = secret.encode("utf-8")
+    if len(a) != len(b):
+        return False
+    return secrets.compare_digest(a, b)
+
+
+_ORDER_ITEM_SOURCES = frozenset({"ozon", "yandex_market", "wildberries"})
+
+
+def create_dashboard_app(
+    settings: Settings,
+    inventory_repo: InventoryRepository,
+    coordinator: StockCoordinator,
+) -> FastAPI:
+    dashboard_secret = (settings.web_dashboard_secret or "").strip()
+    if not dashboard_secret:
+        raise RuntimeError(
+            "WEB_DASHBOARD_SECRET пуст: веб-панель не запускается без пароля. "
+            "Задайте длинную строку в .env и перезапустите run_web.py"
+        )
+
+    app = FastAPI(title="Warehouse dashboard", version="1.0")
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_session_signing_key(dashboard_secret),
+        session_cookie=_SESSION_COOKIE,
+        max_age=86400 * 14,
+        same_site="lax",
+        https_only=False,
+    )
+
+    async def require_login(request: Request) -> None:
+        if not request.session.get("authenticated"):
+            raise HTTPException(status_code=401, detail="Требуется вход")
+
+    @app.get("/login")
+    async def login_page(request: Request):
+        if request.session.get("authenticated"):
+            return RedirectResponse(url="/", status_code=302)
+        path = _WEB_ROOT / "templates" / "login.html"
+        if not path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон входа не найден")
+        return FileResponse(
+            path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.post("/api/login")
+    async def api_login(
+        password: Annotated[str, Form()],
+        request: Request,
+    ) -> dict[str, bool]:
+        """Пароль через form field (не JSON): так надёжнее с Request/сессией и прокси."""
+        attempt = password.strip().lstrip("\ufeff")
+        if not attempt:
+            raise HTTPException(status_code=400, detail="Введите пароль")
+        if not _password_ok(attempt, dashboard_secret):
+            raise HTTPException(status_code=401, detail="Неверный пароль")
+        request.session["authenticated"] = True
+        return {"ok": True}
+
+    @app.post("/api/logout", dependencies=[Depends(require_login)])
+    async def api_logout(request: Request) -> dict[str, bool]:
+        request.session.clear()
+        return {"ok": True}
+
+    @app.get("/api/health", dependencies=[Depends(require_login)])
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/api/status", dependencies=[Depends(require_login)])
+    async def api_status() -> dict:
+        adapters = [{"name": a.name, "configured": bool(a.is_configured())} for a in coordinator.adapters]
+        last_run = coordinator.last_run_at.isoformat() if coordinator.last_run_at else None
+        return {
+            "last_run_at": last_run,
+            "last_error": coordinator.last_error,
+            "last_warnings": list(coordinator.last_warnings or []),
+            "adapters": adapters,
+            "telegram_configured": bool(settings.telegram_bot_token),
+        }
+
+    @app.get("/api/inventory", dependencies=[Depends(require_login)])
+    async def api_inventory() -> dict:
+        rows = inventory_repo.get_inventory_snapshot()
+        return {
+            "items": [
+                {
+                    "sku": r.sku,
+                    "name": r.name,
+                    "image_url": r.image_url,
+                    "stock": int(r.stock),
+                    "reserve": int(r.reserve),
+                    "available": int(r.available),
+                }
+                for r in rows
+            ],
+        }
+
+    class NomenclatureRowIn(BaseModel):
+        name: str = ""
+        image_url: str = ""
+
+    class NomenclatureUpsertBody(BaseModel):
+        items: dict[str, NomenclatureRowIn] = Field(default_factory=dict)
+
+    @app.get("/api/nomenclature", dependencies=[Depends(require_login)])
+    async def api_nomenclature_list() -> dict:
+        rows = inventory_repo.list_nomenclature_all()
+        return {
+            "rows": [
+                {
+                    "sku": sku,
+                    "name": name if name else "",
+                    "image_url": img,
+                }
+                for sku, name, img in rows
+            ],
+        }
+
+    @app.post("/api/nomenclature", dependencies=[Depends(require_login)])
+    async def api_nomenclature_upsert(body: NomenclatureUpsertBody) -> dict:
+        """Массовая запись номенклатуры (артикул → название и ссылка на картинку)."""
+        if len(body.items) > 20000:
+            raise HTTPException(status_code=400, detail="Не более 20000 позиций за один запрос")
+        payload: dict[str, tuple[str, str]] = {}
+        for sku_raw, row in body.items.items():
+            sku = str(sku_raw).strip()
+            if not sku:
+                continue
+            payload[sku] = ((row.name or "").strip(), (row.image_url or "").strip())
+        n = inventory_repo.upsert_nomenclature_items(payload)
+        return {"upserted": n}
+
+    @app.get("/api/orders", dependencies=[Depends(require_login)])
+    async def api_orders(
+        from_date: Annotated[str | None, Query(alias="from")] = None,
+        to_date: Annotated[str | None, Query(alias="to")] = None,
+        source: Annotated[str | None, Query(description="ozon | yandex_market | wildberries")] = None,
+        sku: Annotated[str | None, Query(description="Подстрока артикула")] = None,
+        order: Annotated[str | None, Query(description="Подстрока номера заказа (external_order_id)")] = None,
+        limit: int = 5000,
+    ) -> dict:
+        from_ts: int | None = None
+        to_ts: int | None = None
+        d_from = _parse_day(from_date)
+        d_to = _parse_day(to_date)
+        if d_from is not None and d_to is not None:
+            if d_from > d_to:
+                d_from, d_to = d_to, d_from
+            from_ts = _utc_day_start_ts(d_from)
+            to_ts = _utc_day_end_ts(d_to)
+        elif d_from is not None:
+            from_ts = _utc_day_start_ts(d_from)
+            to_ts = _utc_day_end_ts(datetime.now(timezone.utc).date())
+        elif d_to is not None:
+            to_ts = _utc_day_end_ts(d_to)
+
+        source_f: str | None = None
+        if source and str(source).strip():
+            s = str(source).strip().lower()
+            if s not in _ORDER_ITEM_SOURCES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"source должен быть одним из: {', '.join(sorted(_ORDER_ITEM_SOURCES))}",
+                )
+            source_f = s
+
+        rows = inventory_repo.list_order_items(
+            from_ts,
+            to_ts,
+            source=source_f,
+            sku_contains=sku,
+            order_contains=order,
+            limit=min(max(1, limit), 20000),
+        )
+        return {
+            "rows": [
+                {
+                    "source": a,
+                    "external_order_id": b,
+                    "sku": c,
+                    "quantity": int(d),
+                    "state": e,
+                    "first_seen_ts": int(f),
+                    "last_seen_ts": int(g),
+                }
+                for a, b, c, d, e, f, g in rows
+            ],
+        }
+
+    @app.post("/api/import_sheet", dependencies=[Depends(require_login)])
+    async def api_import_sheet(
+        url: str | None = Form(default=None),
+    ) -> dict:
+        """
+        Импорт остатков из Google Sheets (лист `stocks`), как команда бота /import_sheet [URL].
+        Поле формы `url` (пусто = DEFAULT_STOCKS_SHEET_URL из .env).
+        """
+        raw = (url or "").strip()
+        sheet_url = raw or (settings.default_stocks_sheet_url or "").strip()
+        if not sheet_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите URL таблицы в форме или задайте DEFAULT_STOCKS_SHEET_URL в .env",
+            )
+
+        def _run() -> dict:
+            stocks_by_sku, warnings = import_stocks_from_google_sheet(sheet_url)
+            if not stocks_by_sku:
+                return {
+                    "updated": 0,
+                    "sku_in_sheet": 0,
+                    "warnings": warnings,
+                    "message": "Импорт завершён: валидных строк с остатками не найдено.",
+                }
+            updated = inventory_repo.upsert_stocks(stocks_by_sku)
+            return {
+                "updated": updated,
+                "sku_in_sheet": len(stocks_by_sku),
+                "warnings": warnings[:40],
+                "warnings_more": max(0, len(warnings) - 40),
+            }
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _run)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ошибка импорта: {exc}") from exc
+
+    @app.post("/api/import_nomenclature_sheet", dependencies=[Depends(require_login)])
+    async def api_import_nomenclature_sheet(
+        url: str | None = Form(default=None),
+    ) -> dict:
+        """
+        Импорт номенклатуры из Google Sheets: тот же spreadsheet, что в .env (или url в форме),
+        лист с именем «nomenclature» (колонки: sku, name, опционально image_url / фото и т.п.).
+        """
+        raw = (url or "").strip()
+        sheet_url = raw or (settings.default_stocks_sheet_url or "").strip()
+        if not sheet_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите URL таблицы в форме или задайте DEFAULT_STOCKS_SHEET_URL в .env",
+            )
+
+        def _run_nom() -> dict:
+            items, warnings = import_nomenclature_from_google_sheet(sheet_url)
+            if not items:
+                return {
+                    "updated": 0,
+                    "sku_in_sheet": 0,
+                    "warnings": warnings,
+                    "message": "Импорт завершён: в таблице не найдено валидных строк.",
+                }
+            updated = inventory_repo.upsert_nomenclature_items(items)
+            return {
+                "updated": updated,
+                "sku_in_sheet": len(items),
+                "warnings": warnings[:40],
+                "warnings_more": max(0, len(warnings) - 40),
+            }
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _run_nom)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ошибка импорта номенклатуры: {exc}") from exc
+
+    @app.post("/api/sync", dependencies=[Depends(require_login)])
+    async def api_sync(mode: str = Form(default="auto")) -> dict:
+        mode_l = (mode or "auto").strip().lower()
+        if mode_l not in ("auto", "delta", "full"):
+            raise HTTPException(status_code=400, detail="mode: auto, delta или full")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: coordinator.sync_cycle(mode_l))
+
+    @app.put("/api/stock/{sku}", dependencies=[Depends(require_login)])
+    async def api_put_stock(sku: str, stock: int = Form()) -> dict:
+        sku_n = sku.strip()
+        if not sku_n:
+            raise HTTPException(status_code=400, detail="Пустой SKU")
+        if stock < 0:
+            raise HTTPException(status_code=400, detail="Остаток не может быть отрицательным")
+        inventory_repo.upsert_stock(sku_n, int(stock))
+        return {"sku": sku_n, "stock": int(stock)}
+
+    @app.get("/api/config/marketplaces", dependencies=[Depends(require_login)])
+    async def api_mp_config() -> dict:
+        return {
+            "ozon": {
+                "configured": is_value_configured(settings.ozon_client_id)
+                and is_value_configured(settings.ozon_api_key),
+                "warehouse_configured": is_value_configured(settings.ozon_warehouse_id),
+            },
+            "wildberries": {"configured": is_value_configured(settings.wb_api_token)},
+            "yandex_market": {
+                "configured": is_value_configured(settings.yandex_campaign_id)
+                and is_value_configured(settings.yandex_api_key),
+            },
+        }
+
+    static_dir = _WEB_ROOT / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/")
+    async def index_page(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url="/login", status_code=302)
+        html_path = _WEB_ROOT / "templates" / "index.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон панели не найден")
+        return FileResponse(
+            html_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
+    return app

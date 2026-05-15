@@ -1,6 +1,10 @@
 @echo off
 setlocal
 
+REM Запуск только бота:   start_bot.bat
+REM Бот + веб в отдельном окне: start_bot.bat with-web
+REM (два процесса — нормально; один .bat просто стартует их по очереди.)
+
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
@@ -30,6 +34,10 @@ if errorlevel 1 (
 )
 
 echo [4/4] Starting bot...
+if /i "%~1"=="with-web" (
+  echo       ^(also starting web panel in a separate window — close it separately^)
+  start "warehouse_web" /D "%~dp0" "%~dp0.venv\Scripts\python.exe" "%~dp0run_web.py"
+)
 ".venv\Scripts\python.exe" main.py
 
 echo Bot stopped.

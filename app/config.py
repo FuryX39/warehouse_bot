@@ -1,7 +1,11 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
+
+# Корень репозитория (рядом с run_web.py / main.py), чтобы .env подхватывался независимо от cwd.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _full_sync_interval_seconds() -> int:
@@ -26,6 +30,24 @@ def _ozon_analytics_days() -> int:
     return max(1, min(365, n))
 
 
+def _web_port() -> int:
+    raw = os.getenv("WEB_PORT", "8765").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 8765
+    return max(1, min(65535, n))
+
+
+def _web_dashboard_secret_from_env() -> str:
+    """Пароль панели из .env: убираем пробелы и невидимый BOM (частая причина «верный» пароль не подходит)."""
+    raw = os.getenv("WEB_DASHBOARD_SECRET", "") or ""
+    s = raw.strip()
+    if s.startswith("\ufeff"):
+        s = s.lstrip("\ufeff").strip()
+    return s
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -46,10 +68,14 @@ class Settings:
     full_sync_interval_seconds: int = 3600
     # Опционально: chat_id для алертов о расхождении WB после полного синка (из /start или getUpdates).
     telegram_admin_chat_id: str = ""
+    # Веб-панель (run_web.py): пароль для входа в браузер; пустой = веб не запустится.
+    web_dashboard_secret: str = ""
+    web_host: str = "127.0.0.1"
+    web_port: int = 8765
 
 
 def load_settings() -> Settings:
-    load_dotenv()
+    load_dotenv(_PROJECT_ROOT / ".env", override=False)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     interval = int(os.getenv("RESERVE_INTERVAL_SECONDS", "120"))
     db_url = os.getenv("DB_URL", "sqlite:///crm_bot.db").strip()
@@ -69,4 +95,7 @@ def load_settings() -> Settings:
         yandex_api_key=os.getenv("YANDEX_API_KEY", "").strip(),
         full_sync_interval_seconds=_full_sync_interval_seconds(),
         telegram_admin_chat_id=os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip(),
+        web_dashboard_secret=_web_dashboard_secret_from_env(),
+        web_host=(os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"),
+        web_port=_web_port(),
     )

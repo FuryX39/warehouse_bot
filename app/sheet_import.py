@@ -1,5 +1,6 @@
 import csv
 import io
+from urllib.parse import quote
 
 import requests
 
@@ -15,10 +16,10 @@ def _extract_sheet_id(url: str) -> str:
     return sheet_id
 
 
-def build_google_sheet_csv_url(url: str) -> str:
+def build_google_sheet_csv_url(url: str, *, sheet_name: str = "stocks") -> str:
     sheet_id = _extract_sheet_id(url)
-    # Import always reads the sheet named "stocks".
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=stocks"
+    enc = quote(sheet_name, safe="")
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={enc}"
 
 
 def parse_sheet_stocks_csv(csv_text: str) -> tuple[dict[str, int], list[str]]:
@@ -63,7 +64,74 @@ def parse_sheet_stocks_csv(csv_text: str) -> tuple[dict[str, int], list[str]]:
 
 
 def import_stocks_from_google_sheet(sheet_url: str) -> tuple[dict[str, int], list[str]]:
-    csv_url = build_google_sheet_csv_url(sheet_url.strip())
+    csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="stocks")
     response = requests.get(csv_url, timeout=30)
     response.raise_for_status()
     return parse_sheet_stocks_csv(response.text)
+
+
+def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, str]], list[str]]:
+    """Парсинг листа номенклатуры: sku, name, image_url (гибкие заголовки)."""
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = [row for row in reader if any(cell.strip() for cell in row)]
+    if not rows:
+        raise ValueError("Таблица пустая.")
+
+    header = [cell.strip().lower() for cell in rows[0]]
+    sku_idx = None
+    name_idx = None
+    img_idx = None
+    for idx, name in enumerate(header):
+        if name in {"sku", "артикул", "offer_id", "offersku"}:
+            sku_idx = idx
+        if name in {"name", "title", "название", "наименование", "товар"}:
+            name_idx = idx
+        if name in {
+            "image_url",
+            "image",
+            "url",
+            "photo",
+            "picture",
+            "img",
+            "фото",
+            "картинка",
+            "изображение",
+            "ссылка_на_картинку",
+            "ссылка на картинку",
+            "picture_url",
+        }:
+            img_idx = idx
+
+    data_rows = rows[1:]
+    if sku_idx is None or name_idx is None:
+        raise ValueError(
+            "В шапке листа «nomenclature» не найдены колонки артикула и названия "
+            "(например: sku и name / артикул и название). Колонка картинки опциональна."
+        )
+
+    items: dict[str, tuple[str, str]] = {}
+    warnings: list[str] = []
+    min_len = max(sku_idx, name_idx) + 1
+
+    for i, row in enumerate(data_rows, start=1):
+        if len(row) < min_len:
+            warnings.append(f"Строка {i}: недостаточно колонок, пропущено.")
+            continue
+        sku = row[sku_idx].strip()
+        if not sku:
+            warnings.append(f"Строка {i}: пустой SKU, пропущено.")
+            continue
+        title = row[name_idx].strip() if name_idx < len(row) else ""
+        img = ""
+        if img_idx is not None and img_idx < len(row):
+            img = row[img_idx].strip()
+        items[sku] = (title, img)
+    return items, warnings
+
+
+def import_nomenclature_from_google_sheet(sheet_url: str) -> tuple[dict[str, tuple[str, str]], list[str]]:
+    """Тот же spreadsheet URL, лист Google с именем «nomenclature»."""
+    csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="nomenclature")
+    response = requests.get(csv_url, timeout=30)
+    response.raise_for_status()
+    return parse_sheet_nomenclature_csv(response.text)

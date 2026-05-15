@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход — склад</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <style>
+    .login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+    .login-card { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.75rem; box-shadow: var(--shadow); }
+    .login-card h1 { margin: 0 0 0.5rem; font-size: 1.25rem; }
+    .login-card p { margin: 0 0 1.25rem; color: var(--muted); font-size: 0.9rem; }
+    .login-card label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
+    .login-card input[type="password"] { width: 100%; padding: 0.55rem 0.75rem; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 1rem; }
+    .login-card .err { color: var(--danger); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+    .login-card button { width: 100%; padding: 0.6rem; font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-card">
+      <h1>Вход в панель</h1>
+      <p>Пароль совпадает с <code>WEB_DASHBOARD_SECRET</code> в файле <code>.env</code> на сервере.</p>
+      <form id="loginForm">
+        <label for="pw">Пароль</label>
+        <input id="pw" name="password" type="password" autocomplete="current-password" required />
+        <button type="submit" class="btn primary">Войти</button>
+        <p id="err" class="err"></p>
+      </form>
+    </div>
+  </div>
+  <script>
+    function detailToText(detail) {
+      if (detail == null || detail === "") return "";
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) {
+        var out = [];
+        for (var i = 0; i < detail.length; i++) {
+          var item = detail[i];
+          if (typeof item === "string") {
+            out.push(item);
+            continue;
+          }
+          if (item && typeof item === "object") {
+            if (typeof item.msg === "string") {
+              out.push(item.msg);
+              continue;
+            }
+            if (typeof item.message === "string") {
+              out.push(item.message);
+              continue;
+            }
+            if (Array.isArray(item.loc) && item.type) {
+              out.push(String(item.type) + " @ " + item.loc.join("."));
+              continue;
+            }
+          }
+          try {
+            out.push(JSON.stringify(item));
+          } catch (ser) {
+            out.push("(элемент ответа не сериализуется)");
+          }
+        }
+        return out.filter(Boolean).join("; ");
+      }
+      if (typeof detail === "object") {
+        if (typeof detail.msg === "string") return detail.msg;
+        if (typeof detail.message === "string") return detail.message;
+        try {
+          return JSON.stringify(detail);
+        } catch (e2) {
+          return "Ответ сервера с ошибкой (объект без текстового описания)";
+        }
+      }
+      return String(detail);
+    }
+
+    function describeHttpError(r, text, json) {
+      if (json && json.detail != null) {
+        var d = detailToText(json.detail);
+        if (d) return d;
+      }
+      var t = (text || "").trim();
+      if (t) return t.length > 500 ? t.slice(0, 500) + "…" : t;
+      return "HTTP " + r.status + (r.statusText ? " " + r.statusText : "");
+    }
+
+    document.getElementById("loginForm").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var err = document.getElementById("err");
+      err.textContent = "";
+      var password = document.getElementById("pw").value;
+      fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        credentials: "include",
+        body: new URLSearchParams({ password: password }).toString(),
+      })
+        .then(function (r) {
+          return r.text().then(function (text) {
+            var json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (parseErr) {
+              json = null;
+            }
+            if (!r.ok) {
+              err.textContent = describeHttpError(r, text, json);
+              return false;
+            }
+            if (!json || json.ok !== true) {
+              err.textContent =
+                "Неожиданный ответ при входе. " + describeHttpError(r, text, json);
+              return false;
+            }
+            return true;
+          });
+        })
+        .then(function (ok) {
+          if (ok) window.location.href = "/";
+        })
+        .catch(function (x) {
+          var m = "";
+          if (x != null && typeof x.message === "string" && x.message) m = x.message;
+          else if (typeof x === "string") m = x;
+          err.textContent = m || "Сеть недоступна или запрос прерван. Откройте консоль (F12) → вкладка «Сеть».";
+        });
+    });
+  </script>
+</body>
+</html>

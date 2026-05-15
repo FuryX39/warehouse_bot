@@ -12,18 +12,13 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.adapters.base import is_value_configured
-from app.adapters.ozon import OzonAdapter
-from app.adapters.wildberries import WildberriesAdapter
-from app.adapters.yandex_market import YandexMarketAdapter
-from app.config import load_settings
+from app.bootstrap import create_inventory_stack
 from app.ozon_analytics import build_ozon_analytics_csv
 from app.repositories import (
     AVAILABLE_STOCK_SYNC_KEY,
-    InventoryRepository,
     available_stock_map_hash,
 )
 from app.sheet_import import import_stocks_from_google_sheet
-from app.services import StockCoordinator
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -59,30 +54,9 @@ SHIP_PENDING_KEY = "ship_pending"
 SHIP_CODE_TTL_SECONDS = 300
 SHIP_ACTION_TTL_SECONDS = 300
 
-settings = load_settings()
-inventory_repo = InventoryRepository(settings.db_url)
-inventory_repo.init_schema()
-
-coordinator = StockCoordinator(
-    inventory_repo=inventory_repo,
-    adapters=[
-        OzonAdapter(
-            client_id=settings.ozon_client_id,
-            api_key=settings.ozon_api_key,
-            warehouse_id=settings.ozon_warehouse_id,
-        ),
-        WildberriesAdapter(
-            api_token=settings.wb_api_token,
-            warehouse_id=settings.wb_warehouse_id,
-            content_token=settings.wb_content_token,
-        ),
-        YandexMarketAdapter(
-            campaign_id=settings.yandex_campaign_id,
-            api_key=settings.yandex_api_key,
-        ),
-    ],
-    full_sync_interval_seconds=settings.full_sync_interval_seconds,
-)
+# Инициализация БД и координатора вынесена в app/bootstrap.py — см. docstring там.
+# Здесь остаётся только вызов: поведение бота то же, что при «ручной» сборке в этом файле.
+settings, inventory_repo, coordinator = create_inventory_stack()
 
 
 def _format_sync_result_message(result: dict) -> str:
@@ -151,7 +125,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
     snapshots = inventory_repo.get_inventory_snapshot()
     stock_lines = [
-        f"{item.sku}: stock={item.stock}, reserve={item.reserve}, available={item.available}"
+        f"{item.sku} ({item.name}): stock={item.stock}, reserve={item.reserve}, available={item.available}"
         for item in snapshots[:10]
     ]
 
@@ -446,9 +420,11 @@ async def export_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
     exported_at = datetime.now(timezone.utc).isoformat()
-    writer.writerow(["sku", "stock", "reserve", "available", "exported_at_utc"])
+    writer.writerow(["sku", "name", "image_url", "stock", "reserve", "available", "exported_at_utc"])
     for item in snapshots:
-        writer.writerow([item.sku, item.stock, item.reserve, item.available, exported_at])
+        writer.writerow(
+            [item.sku, item.name, item.image_url, item.stock, item.reserve, item.available, exported_at]
+        )
 
     filename = f"stocks_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     csv_bytes = output.getvalue().encode("utf-8")

@@ -2,32 +2,46 @@
 .env
 .env.*
 !.env.example
+.env.local
+.env.*.local
 
 # Python cache and bytecode
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
+*.so
 
 # Virtual environments
 .venv/
 venv/
 env/
 ENV/
+.virtualenv/
 
 # Build / packaging artifacts
 build/
 dist/
+*.egg
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
+wheels/
 
 # Test / tooling caches
 .pytest_cache/
 .mypy_cache/
+.pytype/
 .ruff_cache/
+.tox/
+.nox/
 .coverage
 .coverage.*
 htmlcov/
+coverage.xml
+junit*.xml
+.dmypy.json
 
 # IDE/editor files
 .idea/
@@ -35,14 +49,38 @@ htmlcov/
 *.swp
 *.swo
 *~
+.project
+.pydevproject
+.spyderproject
+.ropeproject
 
 # OS generated files
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Logs and local runtime files
 *.log
 *.pid
+*.tmp
+*.temp
+*.bak
+*.orig
 
-# Local databases
+# Local databases (SQLite and aux files)
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Secrets / keys (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Jupyter
+.ipynb_checkpoints/

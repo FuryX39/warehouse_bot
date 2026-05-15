@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Склад — панель</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Склад</div>
+      <nav class="nav">
+        <button type="button" class="nav-item active" data-view="inventory">Остатки</button>
+        <button type="button" class="nav-item" data-view="nomenclature">Номенклатура</button>
+        <button type="button" class="nav-item" data-view="orders">Заказы</button>
+        <button type="button" class="nav-item" data-view="sync">Синхронизация</button>
+      </nav>
+      <div class="sidebar-footer">
+        <button type="button" class="btn" id="btnLogout" style="width:100%;margin-bottom:0.5rem;">Выйти</button>
+        <span class="muted">warehouse_bot</span>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <h1 id="pageTitle">Остатки</h1>
+        <input type="search" id="globalSearch" class="search" placeholder="Поиск по таблице…" autocomplete="off" />
+      </header>
+
+      <section id="view-inventory" class="view active">
+        <div class="toolbar">
+          <button type="button" class="btn primary" id="btnReloadInventory">Обновить</button>
+          <label class="field-inline"
+            >Таблица
+            <input
+              type="text"
+              id="importSheetUrl"
+              class="input wide"
+              placeholder="URL Google Sheets (пусто = DEFAULT_STOCKS_SHEET_URL)"
+              autocomplete="off"
+            />
+          </label>
+          <button type="button" class="btn" id="btnImportSheet">Импорт из таблицы</button>
+          <span class="muted" id="inventoryMeta"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="inventoryTable">
+            <thead>
+              <tr id="inventoryHeadRow">
+                <th class="th-sortable" data-inv-col="sku" scope="col">Артикул</th>
+                <th class="th-sortable" data-inv-col="name" scope="col">Название</th>
+                <th class="th-sortable num" data-inv-col="image_url" scope="col">Фото</th>
+                <th class="th-sortable num" data-inv-col="stock" scope="col">На складе</th>
+                <th class="th-sortable num" data-inv-col="reserve" scope="col">Резерв</th>
+                <th class="th-sortable num" data-inv-col="available" scope="col">Доступно</th>
+                <th scope="col"></th>
+              </tr>
+            </thead>
+            <tbody id="inventoryBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-nomenclature" class="view">
+        <div class="toolbar">
+          <button type="button" class="btn primary" id="btnReloadNomenclature">Обновить</button>
+          <label class="field-inline"
+            >Таблица
+            <input
+              type="text"
+              id="importNomSheetUrl"
+              class="input wide"
+              placeholder="URL Google Sheets (пусто = DEFAULT_STOCKS_SHEET_URL, лист «nomenclature»)"
+              autocomplete="off"
+            />
+          </label>
+          <button type="button" class="btn" id="btnImportNomSheet">Импорт из Google</button>
+          <span class="muted" id="nomenclatureMeta"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="nomenclatureTable">
+            <thead>
+              <tr>
+                <th class="num" scope="col">Фото</th>
+                <th scope="col">Артикул</th>
+                <th scope="col">Название</th>
+                <th scope="col">Ссылка на картинку</th>
+              </tr>
+            </thead>
+            <tbody id="nomenclatureBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-orders" class="view">
+        <div class="toolbar orders-toolbar">
+          <label class="field-inline">С <input type="date" id="ordersFrom" /></label>
+          <label class="field-inline">По <input type="date" id="ordersTo" /></label>
+          <label class="field-inline"
+            >МП
+            <select id="ordersSource">
+              <option value="">Все</option>
+              <option value="ozon">Ozon</option>
+              <option value="wildberries">Wildberries</option>
+              <option value="yandex_market">Яндекс Маркет</option>
+            </select>
+          </label>
+          <label class="field-inline"
+            >Артикул
+            <input type="text" id="ordersSku" placeholder="подстрока SKU" autocomplete="off" />
+          </label>
+          <label class="field-inline"
+            >Заказ
+            <input type="text" id="ordersOrder" placeholder="номер / часть external id" autocomplete="off" />
+          </label>
+          <button type="button" class="btn primary" id="btnLoadOrders">Применить фильтры</button>
+          <button type="button" class="btn" id="btnOrdersAll">Без дат (лимит)</button>
+          <span class="muted" id="ordersMeta"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Источник</th>
+                <th>Заказ</th>
+                <th>SKU</th>
+                <th class="num">Кол-во</th>
+                <th>Статус</th>
+                <th>Первый раз</th>
+                <th>Последний раз</th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-sync" class="view">
+        <div class="cards">
+          <div class="card">
+            <h3>Статус</h3>
+            <pre id="syncStatus" class="mono-block"></pre>
+            <button type="button" class="btn" id="btnRefreshStatus">Обновить статус</button>
+          </div>
+          <div class="card">
+            <h3>Синк</h3>
+            <p class="muted">Режимы как у бота: auto / delta / full.</p>
+            <div class="btn-row">
+              <button type="button" class="btn primary" data-sync="auto">auto</button>
+              <button type="button" class="btn" data-sync="delta">delta</button>
+              <button type="button" class="btn warn" data-sync="full">full</button>
+            </div>
+            <pre id="syncResult" class="mono-block"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="dlgStock" class="modal">
+    <form id="formStock">
+      <h3>Остаток</h3>
+      <p><strong id="dlgSku"></strong></p>
+      <label>Количество <input type="number" id="dlgStockQty" min="0" step="1" required /></label>
+      <div class="modal-actions">
+        <button type="submit" class="btn primary">Сохранить</button>
+        <button type="button" class="btn" id="dlgCancel">Отмена</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
