@@ -17,6 +17,8 @@ def execute_movement_from_sheet(
     sign: int,
     sheet_url: str,
     source: str,
+    title: str | None = None,
+    comment: str | None = None,
 ) -> dict[str, Any]:
     """
     sign: +1 приход, -1 расход.
@@ -48,10 +50,14 @@ def execute_movement_from_sheet(
         sheet_url=sheet_url,
         lines=lines,
         warnings=warnings,
+        title=title,
+        comment=comment if comment is not None else "",
     )
+    detail = movement_repo.get_movement(movement_id)
     return {
         "ok": True,
         "movement_id": movement_id,
+        "title": detail.title if detail else "",
         "updated": updated,
         "sku_count": len(qty_by_sku),
         "total_quantity": sum(qty_by_sku.values()),

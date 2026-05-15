@@ -127,3 +127,11 @@ code { background: #eef1f6; padding: 0.1rem 0.35rem; border-radius: 4px; font-si
 .badge-out { background: #fdecea; color: #a12828; }
 .data-table tbody tr.row-clickable { cursor: pointer; }
 .movements-toolbar { align-items: flex-end; }
+.field-block {
+  display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.85rem; font-size: 0.9rem;
+}
+.field-block .input.wide { width: 100%; min-width: 0; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 6px; }
+.field-block textarea.input.wide { resize: vertical; font-family: inherit; }
+.movement-edit-block {
+  margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+}

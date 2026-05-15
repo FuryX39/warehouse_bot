@@ -442,6 +442,8 @@
   });
 
   var dlgMovement = document.getElementById("dlgMovement");
+  var dlgMovementCreate = document.getElementById("dlgMovementCreate");
+  var currentMovementId = null;
 
   function sourceLabel(src) {
     if (src === "telegram") return "Telegram";
@@ -463,8 +465,10 @@
 
   async function openMovementDetail(id) {
     var data = await api("/api/movements/" + encodeURIComponent(String(id)));
-    document.getElementById("dlgMovementTitle").textContent =
-      "Перемещение #" + data.id + " · " + (data.direction_label || data.direction);
+    currentMovementId = data.id;
+    document.getElementById("dlgMovementTitle").textContent = data.title || "Перемещение #" + data.id;
+    document.getElementById("dlgMovementEditTitle").value = data.title || "";
+    document.getElementById("dlgMovementEditComment").value = data.comment || "";
     var meta = document.getElementById("dlgMovementMeta");
     meta.innerHTML = "";
     function addMeta(label, value) {
@@ -541,6 +545,8 @@
       tr.innerHTML =
         '<td class="num">' +
         r.id +
+        '</td><td class="name-col">' +
+        escapeHtml(r.title || "") +
         "</td><td>" +
         tsToLocal(r.created_at_ts) +
         "</td><td>" +
@@ -578,25 +584,54 @@
   document.getElementById("dlgMovementClose").addEventListener("click", function () {
     dlgMovement.close();
   });
-  document.getElementById("btnApplyMovement").addEventListener("click", function () {
+  document.getElementById("btnSaveMovementMeta").addEventListener("click", function () {
+    if (!currentMovementId) return;
+    var params = new URLSearchParams();
+    params.set("update_title", "true");
+    params.set("update_comment", "true");
+    params.set("title", document.getElementById("dlgMovementEditTitle").value);
+    params.set("comment", document.getElementById("dlgMovementEditComment").value);
+    api("/api/movements/" + encodeURIComponent(String(currentMovementId)), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: params.toString(),
+    })
+      .then(function () {
+        return openMovementDetail(currentMovementId);
+      })
+      .then(function () {
+        return loadMovements(false);
+      })
+      .catch(showErr);
+  });
+  document.getElementById("btnOpenMovementCreate").addEventListener("click", function () {
+    document.getElementById("createMovementDirection").value = "in";
+    document.getElementById("createMovementSheetUrl").value = "";
+    document.getElementById("createMovementTitle").value = "";
+    document.getElementById("createMovementComment").value = "";
+    dlgMovementCreate.showModal();
+  });
+  document.getElementById("dlgMovementCreateCancel").addEventListener("click", function () {
+    dlgMovementCreate.close();
+  });
+  document.getElementById("formMovementCreate").addEventListener("submit", function (e) {
+    e.preventDefault();
     var meta = document.getElementById("movementsMeta");
-    var dir = document.getElementById("movementDirection").value;
-    var urlEl = document.getElementById("movementSheetUrl");
-    var url = urlEl ? String(urlEl.value || "").trim() : "";
     meta.textContent = "Выполняется перемещение…";
+    var params = new URLSearchParams();
+    params.set("direction", document.getElementById("createMovementDirection").value);
+    params.set("url", document.getElementById("createMovementSheetUrl").value);
+    params.set("title", document.getElementById("createMovementTitle").value);
+    params.set("comment", document.getElementById("createMovementComment").value);
     api("/api/movement", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-      body: new URLSearchParams({ direction: dir, url: url }).toString(),
+      body: params.toString(),
     })
       .then(function (r) {
+        dlgMovementCreate.close();
         meta.textContent =
-          "Готово: #" +
-          r.movement_id +
-          ", SKU: " +
-          r.sku_count +
-          ", единиц: " +
-          r.total_quantity;
+          "Готово: " + (r.title || "#" + r.movement_id) + ", SKU: " + r.sku_count;
         return loadMovements(false);
       })
       .catch(showErr);

@@ -142,33 +142,15 @@
           <label class="field-inline">По <input type="date" id="movementsTo" /></label>
           <button type="button" class="btn primary" id="btnLoadMovements">Применить фильтры</button>
           <button type="button" class="btn" id="btnMovementsAll">Все (лимит 100)</button>
+          <button type="button" class="btn warn" id="btnOpenMovementCreate">Создать перемещение</button>
           <span class="muted" id="movementsMeta"></span>
-        </div>
-        <div class="toolbar movements-toolbar">
-          <label class="field-inline"
-            >Направление
-            <select id="movementDirection">
-              <option value="in">Приход (+)</option>
-              <option value="out">Расход (−)</option>
-            </select>
-          </label>
-          <label class="field-inline"
-            >Таблица
-            <input
-              type="text"
-              id="movementSheetUrl"
-              class="input wide"
-              placeholder="URL Google Sheets (пусто = DEFAULT_STOCKS_SHEET_URL, лист «movement»)"
-              autocomplete="off"
-            />
-          </label>
-          <button type="button" class="btn warn" id="btnApplyMovement">Выполнить из таблицы</button>
         </div>
         <div class="table-wrap">
           <table class="data-table" id="movementsTable">
             <thead>
               <tr>
                 <th class="num">№</th>
+                <th>Название</th>
                 <th>Дата</th>
                 <th>Тип</th>
                 <th>Источник</th>
@@ -210,6 +192,13 @@
         <h3 id="dlgMovementTitle">Перемещение</h3>
         <button type="button" class="btn" id="dlgMovementClose">Закрыть</button>
       </div>
+      <div class="movement-edit-block">
+        <label class="field-block">Название <input type="text" id="dlgMovementEditTitle" class="input wide" autocomplete="off" /></label>
+        <label class="field-block">Комментарий
+          <textarea id="dlgMovementEditComment" class="input wide" rows="3"></textarea>
+        </label>
+        <button type="button" class="btn primary" id="btnSaveMovementMeta">Сохранить название и комментарий</button>
+      </div>
       <dl class="movement-meta" id="dlgMovementMeta"></dl>
       <div id="dlgMovementWarnings" class="movement-warnings hidden"></div>
       <div class="table-wrap">
@@ -225,6 +214,44 @@
         </table>
       </div>
     </div>
+  </dialog>
+
+  <dialog id="dlgMovementCreate" class="modal modal-wide">
+    <form id="formMovementCreate" class="movement-detail">
+      <div class="movement-detail-head">
+        <h3>Новое перемещение</h3>
+        <button type="button" class="btn" id="dlgMovementCreateCancel">Отмена</button>
+      </div>
+      <p class="muted">Лист Google Sheets: «movement». Без названия будет «Перемещение №N ДД.ММ.ГГГГ».</p>
+      <label class="field-block"
+        >Направление
+        <select id="createMovementDirection" required>
+          <option value="in">Приход (+)</option>
+          <option value="out">Расход (−)</option>
+        </select>
+      </label>
+      <label class="field-block"
+        >URL таблицы
+        <input
+          type="text"
+          id="createMovementSheetUrl"
+          class="input wide"
+          placeholder="Пусто = DEFAULT_STOCKS_SHEET_URL"
+          autocomplete="off"
+        />
+      </label>
+      <label class="field-block"
+        >Название (необязательно)
+        <input type="text" id="createMovementTitle" class="input wide" autocomplete="off" />
+      </label>
+      <label class="field-block"
+        >Комментарий (необязательно)
+        <textarea id="createMovementComment" class="input wide" rows="3"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button type="submit" class="btn primary">Выполнить</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="dlgStock" class="modal">

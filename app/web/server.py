@@ -390,6 +390,8 @@ def create_dashboard_app(
                     "direction_label": r.direction_label,
                     "source": r.source,
                     "sheet_url": r.sheet_url,
+                    "title": r.title,
+                    "comment": r.comment,
                     "sku_count": r.sku_count,
                     "total_quantity": r.total_quantity,
                 }
@@ -409,6 +411,9 @@ def create_dashboard_app(
             "direction_label": detail.direction_label,
             "source": detail.source,
             "sheet_url": detail.sheet_url,
+            "title": detail.title,
+            "title_is_default": detail.title_is_default,
+            "comment": detail.comment,
             "sku_count": detail.sku_count,
             "total_quantity": detail.total_quantity,
             "warnings": detail.warnings,
@@ -418,10 +423,40 @@ def create_dashboard_app(
             ],
         }
 
+    @app.patch("/api/movements/{movement_id}", dependencies=[Depends(require_login)])
+    async def api_movement_patch(
+        movement_id: int,
+        title: str | None = Form(default=None),
+        comment: str | None = Form(default=None),
+        update_title: bool = Form(default=False),
+        update_comment: bool = Form(default=False),
+    ) -> dict:
+        if not update_title and not update_comment:
+            raise HTTPException(status_code=400, detail="Укажите title и/или comment для изменения")
+        ok = movement_repo.update_movement_meta(
+            movement_id,
+            title=title,
+            comment=comment,
+            update_title=update_title,
+            update_comment=update_comment,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Перемещение не найдено")
+        detail = movement_repo.get_movement(movement_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Перемещение не найдено")
+        return {
+            "id": detail.id,
+            "title": detail.title,
+            "comment": detail.comment,
+        }
+
     @app.post("/api/movement", dependencies=[Depends(require_login)])
     async def api_movement_apply(
         direction: Annotated[str, Form()],
         url: str | None = Form(default=None),
+        title: str | None = Form(default=None),
+        comment: str | None = Form(default=None),
     ) -> dict:
         """Перемещение из Google Sheets (лист movement), как /movement в боте."""
         raw_dir = (direction or "").strip().lower()
@@ -452,6 +487,9 @@ def create_dashboard_app(
 
         loop = asyncio.get_running_loop()
 
+        title_val = (title or "").strip() or None
+        comment_val = (comment or "").strip() if comment is not None else ""
+
         def _run() -> dict:
             return execute_movement_from_sheet(
                 inventory_repo,
@@ -459,6 +497,8 @@ def create_dashboard_app(
                 sign=sign,
                 sheet_url=sheet_url,
                 source="web",
+                title=title_val,
+                comment=comment_val,
             )
 
         try:

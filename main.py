@@ -21,6 +21,7 @@ from app.repositories import (
     AVAILABLE_STOCK_SYNC_KEY,
     available_stock_map_hash,
 )
+from app.movement_args import parse_movement_edit_args, parse_movement_flags
 from app.movement_ops import execute_movement_from_sheet
 from app.sheet_import import import_stocks_from_google_sheet
 
@@ -118,7 +119,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/clear_stock - очистить только общие остатки (без резервов и sync state)\n"
         "/push_stocks - принудительно отправить остатки на все настроенные МП (полный набор SKU из БД, без строки склада = 0)\n"
         "/import_sheet URL - импорт остатков из Google Sheets\n"
-        "/movement НАПРАВЛЕНИЕ [URL] - приход/расход по листу «movement» (+/−, add/sub, приход/расход)\n"
+        "/movement НАПРАВЛЕНИЕ [URL] [--name ...] [--comment ...] - приход/расход по листу «movement»\n"
+        "/movement_edit ID [--name ...] [--comment ...] - изменить название и/или комментарий\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
         "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
@@ -412,14 +414,11 @@ async def movement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not context.args:
         await update.message.reply_text(
-            "Использование: /movement НАПРАВЛЕНИЕ [GOOGLE_SHEETS_URL]\n\n"
-            "НАПРАВЛЕНИЕ: + или −, add/sub, приход/расход — прибавить или отнять количество из таблицы.\n"
-            "Лист таблицы: «movement» (колонки артикул и количество).\n"
-            "URL необязателен, если задан DEFAULT_STOCKS_SHEET_URL в .env."
+            "Использование: /movement НАПРАВЛЕНИЕ [URL] [--name НАЗВАНИЕ] [--comment ТЕКСТ]\n\n"
+            "НАПРАВЛЕНИЕ: + или −, add/sub, приход/расход.\n"
+            "Лист: «movement». URL необязателен (DEFAULT_STOCKS_SHEET_URL).\n"
+            "Без --comment комментарий пустой; без --name — «Перемещение №N ДД.ММ.ГГГГ»."
         )
-        return
-    if len(context.args) > 2:
-        await update.message.reply_text("Использование: /movement НАПРАВЛЕНИЕ [GOOGLE_SHEETS_URL]")
         return
 
     sign = _parse_movement_direction(context.args[0])
@@ -429,7 +428,15 @@ async def movement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    sheet_url = context.args[1].strip() if len(context.args) > 1 else settings.default_stocks_sheet_url
+    name, comment, rest = parse_movement_flags(context.args[1:])
+    sheet_url: str | None = None
+    for tok in rest:
+        t = tok.strip()
+        if t.startswith("http://") or t.startswith("https://") or "docs.google.com" in t.lower():
+            sheet_url = t
+            break
+    if sheet_url is None:
+        sheet_url = settings.default_stocks_sheet_url
     if not sheet_url:
         await update.message.reply_text(
             "Ссылка не указана. Передайте URL в команде или задайте DEFAULT_STOCKS_SHEET_URL в .env"
@@ -442,6 +449,8 @@ async def movement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         sign=sign,
         sheet_url=sheet_url,
         source="telegram",
+        title=name,
+        comment=comment if comment is not None else "",
     )
     if not result.get("ok"):
         err = result.get("error", "")
@@ -456,15 +465,62 @@ async def movement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     verb = "приход" if sign > 0 else "расход"
     warnings = result.get("warnings") or []
     text = (
+        f"{result.get('title', '')}\n"
         f"Перемещение ({verb}): обработано SKU: {result['updated']}, "
-        f"единиц по таблице: {result['total_quantity']}.\n"
+        f"единиц: {result['total_quantity']}.\n"
         f"Запись в журнале: #{result['movement_id']}"
     )
+    if comment is not None and comment.strip():
+        text += f"\nКомментарий: {comment.strip()}"
     if warnings:
         text += "\n\nПредупреждения:\n- " + "\n- ".join(warnings[:10])
         if len(warnings) > 10:
             text += f"\n... и еще {len(warnings) - 10}"
     await update.message.reply_text(text)
+
+
+async def movement_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: /movement_edit ID [--name НАЗВАНИЕ] [--comment ТЕКСТ]\n"
+            "Укажите хотя бы --name или --comment."
+        )
+        return
+
+    movement_id, name, comment, comment_given, err = parse_movement_edit_args(list(context.args))
+    if err == "no_args":
+        await update.message.reply_text(
+            "Использование: /movement_edit ID [--name НАЗВАНИЕ] [--comment ТЕКСТ]"
+        )
+        return
+    if err == "bad_id":
+        await update.message.reply_text("ID должен быть положительным числом.")
+        return
+    if err == "nothing_to_update":
+        await update.message.reply_text("Укажите --name и/или --comment для изменения.")
+        return
+
+    ok = movement_repo.update_movement_meta(
+        movement_id,
+        title=name,
+        comment=comment,
+        update_title=name is not None,
+        update_comment=comment_given,
+    )
+    if not ok:
+        await update.message.reply_text(f"Перемещение #{movement_id} не найдено.")
+        return
+    detail = movement_repo.get_movement(movement_id)
+    if detail is None:
+        await update.message.reply_text("Обновлено, но не удалось прочитать запись.")
+        return
+    await update.message.reply_text(
+        f"Обновлено перемещение #{movement_id}.\n"
+        f"Название: {detail.title}\n"
+        f"Комментарий: {detail.comment or '(пусто)'}"
+    )
 
 
 async def ozon_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -922,6 +978,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("orders", orders))
     app.add_handler(CommandHandler("import_sheet", import_sheet))
     app.add_handler(CommandHandler("movement", movement))
+    app.add_handler(CommandHandler("movement_edit", movement_edit))
     app.add_handler(CommandHandler("export_sheet", export_sheet))
     app.add_handler(CommandHandler("ozon_analytics", ozon_analytics))
     app.add_handler(CommandHandler("ship_all", ship_all))
