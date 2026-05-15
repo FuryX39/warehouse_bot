@@ -164,7 +164,13 @@
     applySearch("inventoryBody", document.getElementById("globalSearch").value);
   }
 
-  var titles = { inventory: "Остатки", nomenclature: "Номенклатура", orders: "Заказы", sync: "Синхронизация" };
+  var titles = {
+    inventory: "Остатки",
+    nomenclature: "Номенклатура",
+    orders: "Заказы",
+    movements: "Перемещения",
+    sync: "Синхронизация",
+  };
   document.querySelectorAll(".nav-item").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var view = btn.getAttribute("data-view");
@@ -179,6 +185,7 @@
       document.getElementById("pageTitle").textContent = titles[view] || view;
       if (view === "sync") refreshStatus();
       if (view === "nomenclature") loadNomenclature().catch(showErr);
+      if (view === "movements") loadMovements(false).catch(showErr);
     });
   });
 
@@ -188,6 +195,7 @@
     if (active.id === "view-inventory") applySearch("inventoryBody", e.target.value);
     if (active.id === "view-nomenclature") applySearch("nomenclatureBody", e.target.value);
     if (active.id === "view-orders") applySearch("ordersBody", e.target.value);
+    if (active.id === "view-movements") applySearch("movementsBody", e.target.value);
   });
 
   document.getElementById("btnLogout").addEventListener("click", function () {
@@ -431,6 +439,167 @@
   });
   document.getElementById("btnOrdersAll").addEventListener("click", function () {
     loadOrders(true).catch(showErr);
+  });
+
+  var dlgMovement = document.getElementById("dlgMovement");
+
+  function sourceLabel(src) {
+    if (src === "telegram") return "Telegram";
+    if (src === "web") return "Веб";
+    return src || "—";
+  }
+
+  function buildMovementsUrl(skipDates) {
+    var params = new URLSearchParams();
+    params.set("limit", "100");
+    if (!skipDates) {
+      var f = document.getElementById("movementsFrom").value;
+      var t = document.getElementById("movementsTo").value;
+      if (f) params.set("from", f);
+      if (t) params.set("to", t);
+    }
+    return "/api/movements?" + params.toString();
+  }
+
+  async function openMovementDetail(id) {
+    var data = await api("/api/movements/" + encodeURIComponent(String(id)));
+    document.getElementById("dlgMovementTitle").textContent =
+      "Перемещение #" + data.id + " · " + (data.direction_label || data.direction);
+    var meta = document.getElementById("dlgMovementMeta");
+    meta.innerHTML = "";
+    function addMeta(label, value) {
+      var dt = document.createElement("dt");
+      dt.textContent = label;
+      var dd = document.createElement("dd");
+      dd.textContent = value;
+      meta.appendChild(dt);
+      meta.appendChild(dd);
+    }
+    addMeta("Дата", tsToLocal(data.created_at_ts));
+    addMeta("Тип", data.direction_label || data.direction);
+    addMeta("Источник", sourceLabel(data.source));
+    addMeta("SKU в документе", String(data.sku_count));
+    addMeta("Единиц", String(data.total_quantity));
+    if (data.sheet_url) {
+      var dt = document.createElement("dt");
+      dt.textContent = "Таблица";
+      var dd = document.createElement("dd");
+      var a = document.createElement("a");
+      a.href = data.sheet_url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = "Открыть Google Sheets";
+      dd.appendChild(a);
+      meta.appendChild(dt);
+      meta.appendChild(dd);
+    }
+    var warnEl = document.getElementById("dlgMovementWarnings");
+    if (data.warnings && data.warnings.length) {
+      warnEl.classList.remove("hidden");
+      warnEl.textContent = "Предупреждения:\n- " + data.warnings.join("\n- ");
+    } else {
+      warnEl.classList.add("hidden");
+      warnEl.textContent = "";
+    }
+    var linesBody = document.getElementById("dlgMovementLines");
+    linesBody.innerHTML = "";
+    (data.lines || []).forEach(function (ln) {
+      var tr = document.createElement("tr");
+      var delta = Number(ln.delta);
+      tr.innerHTML =
+        "<td>" +
+        escapeHtml(ln.sku) +
+        "</td><td class=\"num\">" +
+        ln.quantity +
+        "</td><td class=\"num" +
+        (delta < 0 ? " neg" : "") +
+        "\">" +
+        (delta > 0 ? "+" : "") +
+        delta +
+        "</td>";
+      linesBody.appendChild(tr);
+    });
+    applySearch("dlgMovementLines", document.getElementById("globalSearch").value);
+    dlgMovement.showModal();
+  }
+
+  async function loadMovements(skipDates) {
+    var meta = document.getElementById("movementsMeta");
+    var body = document.getElementById("movementsBody");
+    meta.textContent = "Загрузка…";
+    body.innerHTML = "";
+    var data = await api(buildMovementsUrl(!!skipDates));
+    var rows = data.rows || [];
+    meta.textContent = "Документов: " + rows.length;
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      tr.className = "row-clickable";
+      var badge =
+        r.direction === "in"
+          ? '<span class="badge badge-in">' + escapeHtml(r.direction_label) + "</span>"
+          : '<span class="badge badge-out">' + escapeHtml(r.direction_label) + "</span>";
+      tr.innerHTML =
+        '<td class="num">' +
+        r.id +
+        "</td><td>" +
+        tsToLocal(r.created_at_ts) +
+        "</td><td>" +
+        badge +
+        "</td><td>" +
+        escapeHtml(sourceLabel(r.source)) +
+        '</td><td class="num">' +
+        r.sku_count +
+        '</td><td class="num">' +
+        r.total_quantity +
+        '</td><td><button type="button" class="btn btn-open-movement" data-id="' +
+        r.id +
+        '">Открыть</button></td>';
+      tr.addEventListener("click", function (e) {
+        if (e.target.closest("button")) return;
+        openMovementDetail(r.id).catch(showErr);
+      });
+      body.appendChild(tr);
+    });
+    body.querySelectorAll(".btn-open-movement").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openMovementDetail(btn.getAttribute("data-id")).catch(showErr);
+      });
+    });
+    applySearch("movementsBody", document.getElementById("globalSearch").value);
+  }
+
+  document.getElementById("btnLoadMovements").addEventListener("click", function () {
+    loadMovements(false).catch(showErr);
+  });
+  document.getElementById("btnMovementsAll").addEventListener("click", function () {
+    loadMovements(true).catch(showErr);
+  });
+  document.getElementById("dlgMovementClose").addEventListener("click", function () {
+    dlgMovement.close();
+  });
+  document.getElementById("btnApplyMovement").addEventListener("click", function () {
+    var meta = document.getElementById("movementsMeta");
+    var dir = document.getElementById("movementDirection").value;
+    var urlEl = document.getElementById("movementSheetUrl");
+    var url = urlEl ? String(urlEl.value || "").trim() : "";
+    meta.textContent = "Выполняется перемещение…";
+    api("/api/movement", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({ direction: dir, url: url }).toString(),
+    })
+      .then(function (r) {
+        meta.textContent =
+          "Готово: #" +
+          r.movement_id +
+          ", SKU: " +
+          r.sku_count +
+          ", единиц: " +
+          r.total_quantity;
+        return loadMovements(false);
+      })
+      .catch(showErr);
   });
 
   async function refreshStatus() {

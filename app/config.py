@@ -52,6 +52,7 @@ def _web_dashboard_secret_from_env() -> str:
 class Settings:
     telegram_bot_token: str
     db_url: str
+    movement_db_url: str
     reserve_interval_seconds: int = 120
     default_stocks_sheet_url: str = ""
     ozon_client_id: str = ""
@@ -79,9 +80,11 @@ def load_settings() -> Settings:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     interval = int(os.getenv("RESERVE_INTERVAL_SECONDS", "120"))
     db_url = os.getenv("DB_URL", "sqlite:///crm_bot.db").strip()
+    movement_db_url = os.getenv("MOVEMENT_DB_URL", "sqlite:///movements.db").strip()
     return Settings(
         telegram_bot_token=token,
         db_url=db_url,
+        movement_db_url=movement_db_url,
         reserve_interval_seconds=interval,
         default_stocks_sheet_url=os.getenv("DEFAULT_STOCKS_SHEET_URL", "").strip(),
         ozon_client_id=os.getenv("OZON_CLIENT_ID", "").strip(),

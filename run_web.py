@@ -51,14 +51,14 @@ def _exit_if_port_busy(host: str, port: int) -> None:
 
 
 def main() -> None:
-    settings, inventory_repo, coordinator = create_inventory_stack()
+    settings, inventory_repo, coordinator, movement_repo = create_inventory_stack()
     if not (settings.web_dashboard_secret or "").strip():
         logger.error(
             "Веб-панель не запущена: в .env нужен непустой WEB_DASHBOARD_SECRET (пароль для входа в браузере)."
         )
         sys.exit(1)
     try:
-        app = create_dashboard_app(settings, inventory_repo, coordinator)
+        app = create_dashboard_app(settings, inventory_repo, coordinator, movement_repo)
     except RuntimeError as exc:
         logger.error("%s", exc)
         sys.exit(1)

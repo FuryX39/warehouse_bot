@@ -32,6 +32,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.adapters.base import is_value_configured
 from app.config import Settings
+from app.movement_ops import execute_movement_from_sheet
+from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
@@ -82,6 +84,7 @@ def create_dashboard_app(
     settings: Settings,
     inventory_repo: InventoryRepository,
     coordinator: StockCoordinator,
+    movement_repo: MovementRepository,
 ) -> FastAPI:
     dashboard_secret = (settings.web_dashboard_secret or "").strip()
     if not dashboard_secret:
@@ -349,6 +352,128 @@ def create_dashboard_app(
             raise HTTPException(status_code=400, detail="mode: auto, delta или full")
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: coordinator.sync_cycle(mode_l))
+
+    @app.get("/api/movements", dependencies=[Depends(require_login)])
+    async def api_movements_list(
+        from_date: Annotated[str | None, Query(alias="from")] = None,
+        to_date: Annotated[str | None, Query(alias="to")] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        from_ts: int | None = None
+        to_ts: int | None = None
+        d_from = _parse_day(from_date)
+        d_to = _parse_day(to_date)
+        if d_from is not None and d_to is not None:
+            if d_from > d_to:
+                d_from, d_to = d_to, d_from
+            from_ts = _utc_day_start_ts(d_from)
+            to_ts = _utc_day_end_ts(d_to)
+        elif d_from is not None:
+            from_ts = _utc_day_start_ts(d_from)
+            to_ts = _utc_day_end_ts(datetime.now(timezone.utc).date())
+        elif d_to is not None:
+            to_ts = _utc_day_end_ts(d_to)
+
+        rows = movement_repo.list_movements(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            limit=min(max(1, limit), 500),
+            offset=max(0, offset),
+        )
+        return {
+            "rows": [
+                {
+                    "id": r.id,
+                    "created_at_ts": r.created_at_ts,
+                    "direction": r.direction,
+                    "direction_label": r.direction_label,
+                    "source": r.source,
+                    "sheet_url": r.sheet_url,
+                    "sku_count": r.sku_count,
+                    "total_quantity": r.total_quantity,
+                }
+                for r in rows
+            ],
+        }
+
+    @app.get("/api/movements/{movement_id}", dependencies=[Depends(require_login)])
+    async def api_movement_detail(movement_id: int) -> dict:
+        detail = movement_repo.get_movement(movement_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Перемещение не найдено")
+        return {
+            "id": detail.id,
+            "created_at_ts": detail.created_at_ts,
+            "direction": detail.direction,
+            "direction_label": detail.direction_label,
+            "source": detail.source,
+            "sheet_url": detail.sheet_url,
+            "sku_count": detail.sku_count,
+            "total_quantity": detail.total_quantity,
+            "warnings": detail.warnings,
+            "lines": [
+                {"sku": ln.sku, "quantity": ln.quantity, "delta": ln.delta}
+                for ln in detail.lines
+            ],
+        }
+
+    @app.post("/api/movement", dependencies=[Depends(require_login)])
+    async def api_movement_apply(
+        direction: Annotated[str, Form()],
+        url: str | None = Form(default=None),
+    ) -> dict:
+        """Перемещение из Google Sheets (лист movement), как /movement в боте."""
+        raw_dir = (direction or "").strip().lower()
+        sign = 1 if raw_dir in {"+", "add", "plus", "in", "приход", "прибавить", "плюс"} else None
+        if sign is None:
+            sign = -1 if raw_dir in {
+                "-",
+                "sub",
+                "subtract",
+                "minus",
+                "out",
+                "расход",
+                "отнять",
+                "минус",
+                "списание",
+            } else None
+        if sign is None:
+            raise HTTPException(
+                status_code=400,
+                detail="direction: +/−, add/sub, приход/расход",
+            )
+        sheet_url = (url or "").strip() or (settings.default_stocks_sheet_url or "").strip()
+        if not sheet_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите URL таблицы в форме или задайте DEFAULT_STOCKS_SHEET_URL в .env",
+            )
+
+        loop = asyncio.get_running_loop()
+
+        def _run() -> dict:
+            return execute_movement_from_sheet(
+                inventory_repo,
+                movement_repo,
+                sign=sign,
+                sheet_url=sheet_url,
+                source="web",
+            )
+
+        try:
+            result = await loop.run_in_executor(None, _run)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ошибка перемещения: {exc}") from exc
+        if not result.get("ok"):
+            err = str(result.get("error", "unknown"))
+            if err == "no_rows":
+                raise HTTPException(
+                    status_code=400,
+                    detail="На листе «movement» нет валидных строк",
+                )
+            raise HTTPException(status_code=502, detail=f"Ошибка перемещения: {err}")
+        return result
 
     @app.put("/api/stock/{sku}", dependencies=[Depends(require_login)])
     async def api_put_stock(sku: str, stock: int = Form()) -> dict:

@@ -18,14 +18,17 @@ from app.adapters.ozon import OzonAdapter
 from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.config import Settings, load_settings
+from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 
 
-def create_inventory_stack() -> tuple[Settings, InventoryRepository, StockCoordinator]:
+def create_inventory_stack() -> tuple[Settings, InventoryRepository, StockCoordinator, MovementRepository]:
     settings = load_settings()
     inventory_repo = InventoryRepository(settings.db_url)
     inventory_repo.init_schema()
+    movement_repo = MovementRepository(settings.movement_db_url)
+    movement_repo.init_schema()
     coordinator = StockCoordinator(
         inventory_repo=inventory_repo,
         adapters=[
@@ -46,4 +49,4 @@ def create_inventory_stack() -> tuple[Settings, InventoryRepository, StockCoordi
         ],
         full_sync_interval_seconds=settings.full_sync_interval_seconds,
     )
-    return settings, inventory_repo, coordinator
+    return settings, inventory_repo, coordinator, movement_repo

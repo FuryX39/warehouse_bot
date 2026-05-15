@@ -235,6 +235,28 @@ class InventoryRepository:
             session.commit()
         return len(stocks_by_sku)
 
+    def apply_stock_movements(self, deltas_by_sku: dict[str, int]) -> int:
+        """Прибавляет дельты к остаткам (отрицательные — списание). Остаток может уйти в минус."""
+        if not deltas_by_sku:
+            return 0
+        n = 0
+        with Session(self.engine) as session:
+            for sku_raw, delta in deltas_by_sku.items():
+                sku = str(sku_raw).strip()
+                if not sku or len(sku) > 128:
+                    continue
+                delta_i = int(delta)
+                if delta_i == 0:
+                    continue
+                row = session.get(ProductStock, sku)
+                if row is None:
+                    session.add(ProductStock(sku=sku, stock=delta_i))
+                else:
+                    row.stock = int(row.stock) + delta_i
+                n += 1
+            session.commit()
+        return n
+
     def apply_reservations(self, actions: list[ReservationAction]) -> int:
         _ = actions
         # Legacy compatibility: reservations are now managed via order_items.

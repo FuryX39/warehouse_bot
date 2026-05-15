@@ -21,6 +21,7 @@ from app.repositories import (
     AVAILABLE_STOCK_SYNC_KEY,
     available_stock_map_hash,
 )
+from app.movement_ops import execute_movement_from_sheet
 from app.sheet_import import import_stocks_from_google_sheet
 
 logging.basicConfig(
@@ -61,7 +62,7 @@ SHIP_ACTION_TTL_SECONDS = 300
 
 # Инициализация БД и координатора вынесена в app/bootstrap.py — см. docstring там.
 # Здесь остаётся только вызов: поведение бота то же, что при «ручной» сборке в этом файле.
-settings, inventory_repo, coordinator = create_inventory_stack()
+settings, inventory_repo, coordinator, movement_repo = create_inventory_stack()
 
 
 def _format_sync_result_message(result: dict) -> str:
@@ -117,6 +118,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/clear_stock - очистить только общие остатки (без резервов и sync state)\n"
         "/push_stocks - принудительно отправить остатки на все настроенные МП (полный набор SKU из БД, без строки склада = 0)\n"
         "/import_sheet URL - импорт остатков из Google Sheets\n"
+        "/movement НАПРАВЛЕНИЕ [URL] - приход/расход по листу «movement» (+/−, add/sub, приход/расход)\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
         "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
@@ -381,6 +383,83 @@ async def import_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     updated = inventory_repo.upsert_stocks(stocks_by_sku)
     text = f"Импорт завершен. Обновлено SKU: {updated}"
+    if warnings:
+        text += "\n\nПредупреждения:\n- " + "\n- ".join(warnings[:10])
+        if len(warnings) > 10:
+            text += f"\n... и еще {len(warnings) - 10}"
+    await update.message.reply_text(text)
+
+
+_MOVEMENT_ADD = frozenset(
+    {"+", "add", "plus", "in", "приход", "прибавить", "плюс", "прибавление", "приходование"}
+)
+_MOVEMENT_SUB = frozenset(
+    {"-", "sub", "subtract", "minus", "out", "расход", "отнять", "минус", "списание", "уменьшить"}
+)
+
+
+def _parse_movement_direction(raw: str) -> int | None:
+    key = raw.strip().lower()
+    if key in _MOVEMENT_ADD:
+        return 1
+    if key in _MOVEMENT_SUB:
+        return -1
+    return None
+
+
+async def movement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: /movement НАПРАВЛЕНИЕ [GOOGLE_SHEETS_URL]\n\n"
+            "НАПРАВЛЕНИЕ: + или −, add/sub, приход/расход — прибавить или отнять количество из таблицы.\n"
+            "Лист таблицы: «movement» (колонки артикул и количество).\n"
+            "URL необязателен, если задан DEFAULT_STOCKS_SHEET_URL в .env."
+        )
+        return
+    if len(context.args) > 2:
+        await update.message.reply_text("Использование: /movement НАПРАВЛЕНИЕ [GOOGLE_SHEETS_URL]")
+        return
+
+    sign = _parse_movement_direction(context.args[0])
+    if sign is None:
+        await update.message.reply_text(
+            "Неизвестное направление. Примеры: +, −, add, sub, приход, расход."
+        )
+        return
+
+    sheet_url = context.args[1].strip() if len(context.args) > 1 else settings.default_stocks_sheet_url
+    if not sheet_url:
+        await update.message.reply_text(
+            "Ссылка не указана. Передайте URL в команде или задайте DEFAULT_STOCKS_SHEET_URL в .env"
+        )
+        return
+
+    result = execute_movement_from_sheet(
+        inventory_repo,
+        movement_repo,
+        sign=sign,
+        sheet_url=sheet_url,
+        source="telegram",
+    )
+    if not result.get("ok"):
+        err = result.get("error", "")
+        if err == "no_rows":
+            await update.message.reply_text(
+                "Перемещение не выполнено: на листе «movement» нет валидных строк."
+            )
+            return
+        await update.message.reply_text(f"Ошибка перемещения: {err}")
+        return
+
+    verb = "приход" if sign > 0 else "расход"
+    warnings = result.get("warnings") or []
+    text = (
+        f"Перемещение ({verb}): обработано SKU: {result['updated']}, "
+        f"единиц по таблице: {result['total_quantity']}.\n"
+        f"Запись в журнале: #{result['movement_id']}"
+    )
     if warnings:
         text += "\n\nПредупреждения:\n- " + "\n- ".join(warnings[:10])
         if len(warnings) > 10:
@@ -842,6 +921,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("push_stocks", push_stocks))
     app.add_handler(CommandHandler("orders", orders))
     app.add_handler(CommandHandler("import_sheet", import_sheet))
+    app.add_handler(CommandHandler("movement", movement))
     app.add_handler(CommandHandler("export_sheet", export_sheet))
     app.add_handler(CommandHandler("ozon_analytics", ozon_analytics))
     app.add_handler(CommandHandler("ship_all", ship_all))

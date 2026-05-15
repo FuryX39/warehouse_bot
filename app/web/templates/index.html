@@ -14,6 +14,7 @@
         <button type="button" class="nav-item active" data-view="inventory">Остатки</button>
         <button type="button" class="nav-item" data-view="nomenclature">Номенклатура</button>
         <button type="button" class="nav-item" data-view="orders">Заказы</button>
+        <button type="button" class="nav-item" data-view="movements">Перемещения</button>
         <button type="button" class="nav-item" data-view="sync">Синхронизация</button>
       </nav>
       <div class="sidebar-footer">
@@ -135,6 +136,52 @@
         </div>
       </section>
 
+      <section id="view-movements" class="view">
+        <div class="toolbar movements-toolbar">
+          <label class="field-inline">С <input type="date" id="movementsFrom" /></label>
+          <label class="field-inline">По <input type="date" id="movementsTo" /></label>
+          <button type="button" class="btn primary" id="btnLoadMovements">Применить фильтры</button>
+          <button type="button" class="btn" id="btnMovementsAll">Все (лимит 100)</button>
+          <span class="muted" id="movementsMeta"></span>
+        </div>
+        <div class="toolbar movements-toolbar">
+          <label class="field-inline"
+            >Направление
+            <select id="movementDirection">
+              <option value="in">Приход (+)</option>
+              <option value="out">Расход (−)</option>
+            </select>
+          </label>
+          <label class="field-inline"
+            >Таблица
+            <input
+              type="text"
+              id="movementSheetUrl"
+              class="input wide"
+              placeholder="URL Google Sheets (пусто = DEFAULT_STOCKS_SHEET_URL, лист «movement»)"
+              autocomplete="off"
+            />
+          </label>
+          <button type="button" class="btn warn" id="btnApplyMovement">Выполнить из таблицы</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="movementsTable">
+            <thead>
+              <tr>
+                <th class="num">№</th>
+                <th>Дата</th>
+                <th>Тип</th>
+                <th>Источник</th>
+                <th class="num">SKU</th>
+                <th class="num">Единиц</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="movementsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section id="view-sync" class="view">
         <div class="cards">
           <div class="card">
@@ -156,6 +203,29 @@
       </section>
     </main>
   </div>
+
+  <dialog id="dlgMovement" class="modal modal-wide">
+    <div class="movement-detail">
+      <div class="movement-detail-head">
+        <h3 id="dlgMovementTitle">Перемещение</h3>
+        <button type="button" class="btn" id="dlgMovementClose">Закрыть</button>
+      </div>
+      <dl class="movement-meta" id="dlgMovementMeta"></dl>
+      <div id="dlgMovementWarnings" class="movement-warnings hidden"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Артикул</th>
+              <th class="num">Кол-во</th>
+              <th class="num">Изменение</th>
+            </tr>
+          </thead>
+          <tbody id="dlgMovementLines"></tbody>
+        </table>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="dlgStock" class="modal">
     <form id="formStock">

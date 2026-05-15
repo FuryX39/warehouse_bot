@@ -103,3 +103,27 @@ code { background: #eef1f6; padding: 0.1rem 0.35rem; border-radius: 4px; font-si
 .modal input[type="number"] { padding: 0.45rem; border: 1px solid var(--border); border-radius: 6px; }
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; }
 .hidden-row { display: none; }
+.hidden { display: none !important; }
+.modal-wide { max-width: min(920px, 96vw); width: 96vw; }
+.movement-detail { padding: 1.25rem; }
+.movement-detail-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem;
+}
+.movement-detail-head h3 { margin: 0; }
+.movement-meta {
+  display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 1rem; margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+.movement-meta dt { color: var(--muted); margin: 0; }
+.movement-meta dd { margin: 0; word-break: break-word; }
+.movement-warnings {
+  background: var(--warn-bg); border: 1px solid #f0d9b8; border-radius: 6px;
+  padding: 0.65rem 0.85rem; margin-bottom: 1rem; font-size: 0.85rem; white-space: pre-wrap;
+}
+.badge {
+  display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600;
+}
+.badge-in { background: #e6f4ea; color: #1e6b3a; }
+.badge-out { background: #fdecea; color: #a12828; }
+.data-table tbody tr.row-clickable { cursor: pointer; }
+.movements-toolbar { align-items: flex-end; }
