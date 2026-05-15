@@ -50,6 +50,8 @@ async def _reply_text_resilient(message, text: str, *, max_attempts: int = 4) ->
 
 CLEAR_DB_PENDING_KEY = "clear_db_pending"
 CLEAR_DB_CODE_TTL_SECONDS = 300
+CLEAR_NOMEN_PENDING_KEY = "clear_nomen_pending"
+CLEAR_NOMEN_CODE_TTL_SECONDS = 300
 SHIP_PENDING_KEY = "ship_pending"
 SHIP_CODE_TTL_SECONDS = 300
 SHIP_ACTION_TTL_SECONDS = 300
@@ -107,6 +109,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/sync_delta - принудительно дельта (первый запуск без якоря даст полный)\n"
         "/sync_full - полный синк всех МП + сверка; при расхождении — отчёт\n"
         "/set_stock SKU COUNT - задать фактический остаток товара\n"
+        "/del_nomen SKU - удалить строку номенклатуры по артикулу (остатки и резервы не меняются)\n"
+        "/clear_nomen - полностью очистить справочник номенклатуры (только с подтверждением по коду)\n"
         "/clear_stock - очистить только общие остатки (без резервов и sync state)\n"
         "/push_stocks - принудительно отправить остатки на все настроенные МП (полный набор SKU из БД, без строки склада = 0)\n"
         "/import_sheet URL - импорт остатков из Google Sheets\n"
@@ -189,6 +193,25 @@ async def set_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     inventory_repo.upsert_stock(sku=sku, stock=stock)
     await update.message.reply_text(f"Сохранено: {sku} stock={max(stock, 0)}")
+
+
+async def del_nomen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /del_nomen SKU")
+        return
+    sku = " ".join(context.args).strip()
+    if not sku:
+        await update.message.reply_text("SKU не может быть пустым.")
+        return
+    if len(sku) > 128:
+        await update.message.reply_text("SKU длиннее 128 символов.")
+        return
+    if inventory_repo.delete_nomenclature_by_sku(sku):
+        await update.message.reply_text(f"Номенклатура удалена: {sku}")
+    else:
+        await update.message.reply_text(f"В справочнике нет артикула «{sku}».")
 
 
 async def clear_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -444,6 +467,16 @@ def _purge_expired_clear_db_pending(bot_data: dict) -> None:
             del pending[chat_id]
 
 
+def _purge_expired_clear_nomen_pending(bot_data: dict) -> None:
+    pending = bot_data.get(CLEAR_NOMEN_PENDING_KEY)
+    if not pending:
+        return
+    now = time.monotonic()
+    for chat_id in list(pending.keys()):
+        if pending[chat_id]["expires_at"] < now:
+            del pending[chat_id]
+
+
 def _purge_expired_ship_pending(bot_data: dict) -> None:
     pending = bot_data.get(SHIP_PENDING_KEY)
     if not pending:
@@ -507,6 +540,55 @@ async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     coordinator.last_error = None
     coordinator.last_warnings = []
     await update.message.reply_text("База очищена: остатки и резервы удалены.")
+
+
+async def clear_nomen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat is None or update.message is None:
+        return
+    chat_id = chat.id
+    bot_data = context.application.bot_data
+    _purge_expired_clear_nomen_pending(bot_data)
+    pending_map: dict = bot_data.setdefault(CLEAR_NOMEN_PENDING_KEY, {})
+
+    if not context.args:
+        code = secrets.token_hex(3).upper()
+        pending_map[chat_id] = {
+            "code": code,
+            "expires_at": time.monotonic() + CLEAR_NOMEN_CODE_TTL_SECONDS,
+        }
+        await update.message.reply_text(
+            "ВНИМАНИЕ: будут удалены все строки справочника номенклатуры (артикул, название, ссылки на фото). "
+            "Остатки, резервы и заказы в базе не изменятся; для SKU без записи в справочнике снова будет "
+            "подпись «Товар отсутствует в номенклатуре».\n\n"
+            "Если вы уверены, в течение 5 минут отправьте команду:\n"
+            f"/clear_nomen {code}\n\n"
+            "Любой другой ввод или ожидание — данные не тронут."
+        )
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("Использование: /clear_nomen  или  /clear_nomen КОД")
+        return
+
+    user_code = context.args[0].strip().upper()
+    entry = pending_map.get(chat_id)
+    if not entry:
+        await update.message.reply_text(
+            "Код подтверждения не запрошен. Сначала отправьте /clear_nomen без параметров."
+        )
+        return
+    if time.monotonic() > entry["expires_at"]:
+        del pending_map[chat_id]
+        await update.message.reply_text("Код истёк. Отправьте /clear_nomen снова, чтобы получить новый код.")
+        return
+    if user_code != entry["code"]:
+        await update.message.reply_text("Неверный код. Номенклатура не изменена.")
+        return
+
+    del pending_map[chat_id]
+    deleted = inventory_repo.clear_nomenclature_all()
+    await update.message.reply_text(f"Номенклатура очищена. Удалено строк: {deleted}.")
 
 
 async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sources: set[str], cmd_name: str) -> None:
@@ -751,6 +833,8 @@ async def main() -> None:
     app.add_handler(CommandHandler("sync_delta", sync_delta))
     app.add_handler(CommandHandler("sync_full", sync_full))
     app.add_handler(CommandHandler("set_stock", set_stock))
+    app.add_handler(CommandHandler("del_nomen", del_nomen))
+    app.add_handler(CommandHandler("clear_nomen", clear_nomen))
     app.add_handler(CommandHandler("clear_stock", clear_stock))
     app.add_handler(CommandHandler("push_stocks", push_stocks))
     app.add_handler(CommandHandler("orders", orders))

@@ -1,0 +1,29 @@
+# Пример unit для веб-панели (run_web.py).
+# Скопируйте на сервер, поправьте пути и пользователя, затем:
+#   sudo cp warehouse-web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now warehouse-web.service
+#
+# Рядом с ботом держите тот же каталог проекта и тот же .env (общий DB_URL).
+
+[Unit]
+Description=Warehouse web dashboard (uvicorn / run_web.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Пользователь без root; каталог проекта должен быть ему доступен на чтение/запись (БД SQLite и т.д.).
+User=REPLACE_ME
+Group=REPLACE_ME
+WorkingDirectory=/path/to/sector_warehouse_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/path/to/sector_warehouse_bot/.venv/bin/python run_web.py
+Restart=always
+RestartSec=5
+
+# Опционально: лимиты (раскомментируйте при необходимости)
+# MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

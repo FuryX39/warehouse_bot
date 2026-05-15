@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import zlib
 
-from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, inspect, or_, select, text
+from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
@@ -150,6 +150,28 @@ class InventoryRepository:
         with Session(self.engine) as session:
             rows = session.scalars(select(NomenclatureItem).order_by(NomenclatureItem.sku)).all()
             return [(r.sku, (r.name or "").strip(), (r.image_url or "").strip()) for r in rows]
+
+    def delete_nomenclature_by_sku(self, sku: str) -> bool:
+        """Удаляет строку справочника nomenclature по артикулу. Остатки и резервы не трогает."""
+        sku = str(sku or "").strip()
+        if not sku or len(sku) > 128:
+            return False
+        with Session(self.engine) as session:
+            row = session.get(NomenclatureItem, sku)
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
+    def clear_nomenclature_all(self) -> int:
+        """Удаляет все строки таблицы nomenclature. Остатки, резервы и заказы не трогает."""
+        with Session(self.engine) as session:
+            n = int(session.scalar(select(func.count()).select_from(NomenclatureItem)) or 0)
+            if n:
+                session.execute(delete(NomenclatureItem))
+            session.commit()
+            return n
 
     def _load_nomenclature_rows(self, session: Session, skus: list[str]) -> dict[str, tuple[str, str]]:
         """Только существующие в БД строки: sku -> (name, image_url), уже strip()."""
