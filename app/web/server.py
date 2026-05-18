@@ -525,6 +525,24 @@ def create_dashboard_app(
         inventory_repo.upsert_stock(sku_n, int(stock))
         return {"sku": sku_n, "stock": int(stock)}
 
+    @app.delete("/api/stock/{sku}", dependencies=[Depends(require_login)])
+    async def api_delete_stock(sku: str) -> dict:
+        sku_n = sku.strip()
+        if not sku_n:
+            raise HTTPException(status_code=400, detail="Пустой SKU")
+        if not inventory_repo.delete_stock_by_sku(sku_n):
+            raise HTTPException(status_code=404, detail="Остаток для этого артикула не найден")
+        return {"sku": sku_n, "deleted": True}
+
+    @app.delete("/api/nomenclature/{sku}", dependencies=[Depends(require_login)])
+    async def api_delete_nomenclature(sku: str) -> dict:
+        sku_n = sku.strip()
+        if not sku_n:
+            raise HTTPException(status_code=400, detail="Пустой SKU")
+        if not inventory_repo.delete_nomenclature_by_sku(sku_n):
+            raise HTTPException(status_code=404, detail="Артикул не найден в номенклатуре")
+        return {"sku": sku_n, "deleted": True}
+
     @app.get("/api/config/marketplaces", dependencies=[Depends(require_login)])
     async def api_mp_config() -> dict:
         return {

@@ -221,6 +221,19 @@ class InventoryRepository:
                 row.stock = max(stock, 0)
             session.commit()
 
+    def delete_stock_by_sku(self, sku: str) -> bool:
+        """Удаляет строку остатка (product_stocks). Резервы и заказы не трогает."""
+        sku = str(sku or "").strip()
+        if not sku or len(sku) > 128:
+            return False
+        with Session(self.engine) as session:
+            row = session.get(ProductStock, sku)
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
     def upsert_stocks(self, stocks_by_sku: dict[str, int]) -> int:
         if not stocks_by_sku:
             return 0

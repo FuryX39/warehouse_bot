@@ -42,6 +42,7 @@
             />
           </label>
           <button type="button" class="btn" id="btnImportSheet">Импорт из таблицы</button>
+          <button type="button" class="btn primary" id="btnOpenSetStock">Задать остаток</button>
           <span class="muted" id="inventoryMeta"></span>
         </div>
         <div class="table-wrap">
@@ -86,6 +87,7 @@
                 <th scope="col">Артикул</th>
                 <th scope="col">Название</th>
                 <th scope="col">Ссылка на картинку</th>
+                <th scope="col"></th>
               </tr>
             </thead>
             <tbody id="nomenclatureBody"></tbody>
@@ -256,12 +258,25 @@
 
   <dialog id="dlgStock" class="modal">
     <form id="formStock">
-      <h3>Остаток</h3>
+      <h3>Изменить остаток</h3>
       <p><strong id="dlgSku"></strong></p>
       <label>Количество <input type="number" id="dlgStockQty" min="0" step="1" required /></label>
       <div class="modal-actions">
         <button type="submit" class="btn primary">Сохранить</button>
         <button type="button" class="btn" id="dlgCancel">Отмена</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgSetStock" class="modal">
+    <form id="formSetStock">
+      <h3>Задать остаток</h3>
+      <p class="muted">Как /set_stock: создаёт или обновляет остаток по артикулу.</p>
+      <label>Артикул <input type="text" id="setStockSku" required autocomplete="off" /></label>
+      <label>Количество <input type="number" id="setStockQty" min="0" step="1" required /></label>
+      <div class="modal-actions">
+        <button type="submit" class="btn primary">Сохранить</button>
+        <button type="button" class="btn" id="dlgSetStockCancel">Отмена</button>
       </div>
     </form>
   </dialog>

@@ -148,16 +148,30 @@
         '">' +
         av +
         "</td>" +
-        '<td><button type="button" class="btn btn-edit" data-sku="' +
+        '<td class="actions-col"><button type="button" class="btn btn-edit" data-sku="' +
         encodeAttr(it.sku) +
         '" data-stock="' +
         it.stock +
-        '">Изменить</button></td>';
+        '">Изменить</button> ' +
+        '<button type="button" class="btn btn-danger btn-del-stock" data-sku="' +
+        encodeAttr(it.sku) +
+        '">Удалить</button></td>';
       body.appendChild(tr);
     });
     body.querySelectorAll(".btn-edit").forEach(function (b) {
       b.addEventListener("click", function () {
         openStockDialog(b.getAttribute("data-sku"), b.getAttribute("data-stock"));
+      });
+    });
+    body.querySelectorAll(".btn-del-stock").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var sku = b.getAttribute("data-sku");
+        if (!confirm("Удалить остаток для артикула «" + sku + "»? Резервы не изменятся.")) return;
+        api("/api/stock/" + encodeURIComponent(sku), { method: "DELETE" })
+          .then(function () {
+            return loadInventory();
+          })
+          .catch(showErr);
       });
     });
     updateInventorySortThClasses();
@@ -317,8 +331,22 @@
         '<td class="name-col">' +
         escapeHtml(r.name || "") +
         "</td>" +
-        linkCell;
+        linkCell +
+        '<td class="actions-col"><button type="button" class="btn btn-danger btn-del-nom" data-sku="' +
+        encodeAttr(r.sku) +
+        '">Удалить</button></td>';
       body.appendChild(tr);
+    });
+    body.querySelectorAll(".btn-del-nom").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var sku = b.getAttribute("data-sku");
+        if (!confirm("Удалить «" + sku + "» из номенклатуры? Остатки не изменятся.")) return;
+        api("/api/nomenclature/" + encodeURIComponent(sku), { method: "DELETE" })
+          .then(function () {
+            return loadNomenclature();
+          })
+          .catch(showErr);
+      });
     });
     applySearch("nomenclatureBody", document.getElementById("globalSearch").value);
   }
@@ -373,6 +401,10 @@
     e.preventDefault();
     var sku = dlgSku.textContent;
     var stock = parseInt(dlgQty.value, 10);
+    if (isNaN(stock) || stock < 0) {
+      alert("Остаток должен быть целым числом ≥ 0");
+      return;
+    }
     api("/api/stock/" + encodeURIComponent(sku), {
       method: "PUT",
       headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
@@ -380,6 +412,39 @@
     })
       .then(function () {
         dlg.close();
+        return loadInventory();
+      })
+      .catch(showErr);
+  });
+
+  var dlgSetStock = document.getElementById("dlgSetStock");
+  document.getElementById("btnOpenSetStock").addEventListener("click", function () {
+    document.getElementById("setStockSku").value = "";
+    document.getElementById("setStockQty").value = "0";
+    dlgSetStock.showModal();
+  });
+  document.getElementById("dlgSetStockCancel").addEventListener("click", function () {
+    dlgSetStock.close();
+  });
+  document.getElementById("formSetStock").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var sku = document.getElementById("setStockSku").value.trim();
+    var stock = parseInt(document.getElementById("setStockQty").value, 10);
+    if (!sku) {
+      alert("Укажите артикул");
+      return;
+    }
+    if (isNaN(stock) || stock < 0) {
+      alert("Остаток должен быть целым числом ≥ 0");
+      return;
+    }
+    api("/api/stock/" + encodeURIComponent(sku), {
+      method: "PUT",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({ stock: String(stock) }).toString(),
+    })
+      .then(function () {
+        dlgSetStock.close();
         return loadInventory();
       })
       .catch(showErr);
