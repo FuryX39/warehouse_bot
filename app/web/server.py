@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
@@ -39,6 +40,13 @@ from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.barcode_label_pdf import generate_barcode_label_pdf
 from app.fbs_labels_cache import pop_label_files, store_label_files
+from app.fbs_ship import (
+    execute_fbs_ship,
+    normalize_ship_scope,
+    preview_fbs_ship,
+    scope_label,
+    sources_for_scope,
+)
 from app.ozon_fbs_labels import (
     build_labels_zip,
     build_sorted_list_rows,
@@ -52,6 +60,8 @@ from app.sheet_import import import_nomenclature_from_google_sheet, import_stock
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
 _SESSION_KEY_PREFIX = "warehouse_web_session_signing_v1:"
+_FBS_SHIP_SESSION_KEY = "fbs_ship_pending"
+_FBS_SHIP_CODE_TTL_SECONDS = 300
 
 
 class Utf8JSONResponse(JSONResponse):
@@ -394,6 +404,126 @@ def create_dashboard_app(
         if not label_files:
             raise HTTPException(status_code=404, detail="Ссылка на этикетки устарела или уже использована")
         return _fbs_label_files_response(label_files)
+
+    def _purge_fbs_ship_pending(session: dict) -> None:
+        entry = session.get(_FBS_SHIP_SESSION_KEY)
+        if not entry:
+            return
+        if float(entry.get("expires_at") or 0) < time.time():
+            session.pop(_FBS_SHIP_SESSION_KEY, None)
+
+    def _ship_result_payload(scope: str, result: dict) -> dict:
+        by_source = result.get("by_source") or {}
+        lines = []
+        for src in sorted(by_source.keys()):
+            st = by_source[src]
+            lines.append(
+                {
+                    "source": src,
+                    "reserves_shipped": int(st.get("reserves_shipped", 0)),
+                    "reserved_units": int(st.get("reserved_units", 0)),
+                    "affected_skus": int(st.get("affected_skus", 0)),
+                }
+            )
+        sync_result = result.get("sync_result") or {}
+        return {
+            "scope": scope,
+            "scope_label": scope_label(scope),
+            "total_reserves_shipped": int(result.get("total_reserves_shipped", 0)),
+            "total_reserved_units": int(result.get("total_reserved_units", 0)),
+            "total_skus": int(result.get("total_skus", 0)),
+            "by_source": lines,
+            "source_errors": list(result.get("source_errors") or []),
+            "movement_ids": dict(result.get("movement_ids") or {}),
+            "sync_warnings": list(sync_result.get("adapter_errors") or []),
+        }
+
+    @app.get("/api/fbs/ship/preview", dependencies=[Depends(require_login)])
+    async def api_fbs_ship_preview(
+        scope: Annotated[str, Query(description="all | ozon | wildberries | yandex_market")] = "all",
+    ) -> dict:
+        try:
+            scope_n = normalize_ship_scope(scope)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        sources = sources_for_scope(scope_n)
+        loop = asyncio.get_running_loop()
+        preview = await loop.run_in_executor(
+            None,
+            lambda: preview_fbs_ship(inventory_repo, coordinator, sources),
+        )
+        return {
+            "scope": scope_n,
+            "scope_label": scope_label(scope_n),
+            **preview,
+        }
+
+    @app.post("/api/fbs/ship/request", dependencies=[Depends(require_login)])
+    async def api_fbs_ship_request(
+        request: Request,
+        scope: Annotated[str, Form()],
+    ) -> dict:
+        """Запрос кода подтверждения (form, без JSON-тела)."""
+        try:
+            scope_n = normalize_ship_scope(scope)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        code = secrets.token_hex(3).upper()
+        request.session[_FBS_SHIP_SESSION_KEY] = {
+            "scope": scope_n,
+            "code": code,
+            "expires_at": time.time() + _FBS_SHIP_CODE_TTL_SECONDS,
+        }
+        return {
+            "scope": scope_n,
+            "scope_label": scope_label(scope_n),
+            "code": code,
+            "expires_in": _FBS_SHIP_CODE_TTL_SECONDS,
+        }
+
+    @app.post("/api/fbs/ship/confirm", dependencies=[Depends(require_login)])
+    async def api_fbs_ship_confirm(
+        request: Request,
+        scope: Annotated[str, Form()],
+        code: Annotated[str, Form()],
+    ) -> dict:
+        """Отгрузка после подтверждения кодом (как /ship_* в боте)."""
+        try:
+            scope_n = normalize_ship_scope(scope)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _purge_fbs_ship_pending(request.session)
+        entry = request.session.get(_FBS_SHIP_SESSION_KEY)
+        if not entry or entry.get("scope") != scope_n:
+            raise HTTPException(
+                status_code=400,
+                detail="Сначала запросите код: нажмите кнопку отгрузки без ввода кода",
+            )
+        if float(entry.get("expires_at") or 0) < time.time():
+            request.session.pop(_FBS_SHIP_SESSION_KEY, None)
+            raise HTTPException(status_code=400, detail="Код истёк. Запросите новый код.")
+        user_code = str(code or "").strip().upper()
+        if user_code != str(entry.get("code") or "").upper():
+            raise HTTPException(status_code=400, detail="Неверный код. Отгрузка не выполнена.")
+        request.session.pop(_FBS_SHIP_SESSION_KEY, None)
+
+        sources = sources_for_scope(scope_n)
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: execute_fbs_ship(
+                    inventory_repo,
+                    coordinator,
+                    movement_repo,
+                    sources,
+                    sync_before=True,
+                    journal_source="web",
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Отгрузка: {exc}") from exc
+        return _ship_result_payload(scope_n, result)
 
     @app.get("/api/ozon/awaiting-shipment-labels", dependencies=[Depends(require_login)])
     async def api_ozon_awaiting_shipment_labels() -> Response:

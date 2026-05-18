@@ -238,6 +238,256 @@
     }
   }
 
+  var shipScope = "all";
+  var shipCodeRequested = false;
+
+  async function apiForm(path, fields) {
+    var body = new URLSearchParams();
+    Object.keys(fields || {}).forEach(function (k) {
+      body.set(k, String(fields[k]));
+    });
+    return api(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+  }
+
+  var _SOURCE_NAMES = {
+    ozon: "Ozon",
+    wildberries: "Wildberries",
+    yandex_market: "Яндекс Маркет",
+  };
+
+  function renderShipPreview(data) {
+    var tbody = document.getElementById("shipPreviewBody");
+    var summary = document.getElementById("shipPreviewSummary");
+    if (!tbody) return;
+    var by = (data && data.by_source) || {};
+    var rows = Object.keys(by).sort();
+    if (!rows.length) {
+      tbody.innerHTML = "";
+      if (summary) summary.textContent = "Нет данных по выбранному scope.";
+      return;
+    }
+    var totalActive = 0;
+    var totalReady = 0;
+    tbody.innerHTML = rows
+      .map(function (src) {
+        var st = by[src] || {};
+        if (st.error) {
+          return (
+            "<tr><td>" +
+            escapeHtml(_SOURCE_NAMES[src] || src) +
+            '</td><td colspan="2" class="muted">' +
+            escapeHtml(st.error) +
+            "</td></tr>"
+          );
+        }
+        if (!st.configured) {
+          return (
+            "<tr><td>" +
+            escapeHtml(_SOURCE_NAMES[src] || src) +
+            '</td><td colspan="2" class="muted">API не настроен</td></tr>'
+          );
+        }
+        totalActive += st.active_reserves || 0;
+        totalReady += st.ready_to_ship || 0;
+        return (
+          "<tr><td>" +
+          escapeHtml(_SOURCE_NAMES[src] || src) +
+          '</td><td class="num">' +
+          (st.active_reserves != null ? st.active_reserves : "—") +
+          '</td><td class="num">' +
+          (st.ready_to_ship != null ? st.ready_to_ship : "—") +
+          "</td></tr>"
+        );
+      })
+      .join("");
+    if (summary) {
+      summary.textContent =
+        (data.scope_label || data.scope || "") +
+        ": резервов added — " +
+        totalActive +
+        ", к отгрузке — " +
+        totalReady;
+    }
+  }
+
+  async function loadShipPreview() {
+    try {
+      var data = await api(
+        "/api/fbs/ship/preview?scope=" + encodeURIComponent(shipScope)
+      );
+      renderShipPreview(data);
+    } catch (e) {
+      var summary = document.getElementById("shipPreviewSummary");
+      if (summary) summary.textContent = e.message || String(e);
+    }
+  }
+
+  function renderShipResult(data) {
+    var box = document.getElementById("shipResult");
+    var summary = document.getElementById("shipResultSummary");
+    var tbody = document.getElementById("shipResultBody");
+    var warn = document.getElementById("shipResultWarnings");
+    if (!box || !tbody) return;
+    box.classList.remove("hidden");
+    if (summary) {
+      summary.textContent =
+        (data.scope_label || "") +
+        ": отгружено резервов " +
+        (data.total_reserves_shipped || 0) +
+        ", единиц " +
+        (data.total_reserved_units || 0) +
+        ", SKU " +
+        (data.total_skus || 0);
+    }
+    var lines = data.by_source || [];
+    tbody.innerHTML = lines
+      .map(function (row) {
+        return (
+          "<tr><td>" +
+          escapeHtml(_SOURCE_NAMES[row.source] || row.source) +
+          '</td><td class="num">' +
+          row.reserves_shipped +
+          '</td><td class="num">' +
+          row.reserved_units +
+          '</td><td class="num">' +
+          row.affected_skus +
+          "</td></tr>"
+        );
+      })
+      .join("");
+    var notes = []
+      .concat(data.source_errors || [])
+      .concat(data.sync_warnings || []);
+    var mids = data.movement_ids || {};
+    Object.keys(mids).forEach(function (src) {
+      notes.push("Журнал " + (_SOURCE_NAMES[src] || src) + ": #" + mids[src]);
+    });
+    if (warn) {
+      if (notes.length) {
+        warn.classList.remove("hidden");
+        warn.textContent = notes.join("\n");
+      } else {
+        warn.classList.add("hidden");
+        warn.textContent = "";
+      }
+    }
+  }
+
+  async function shipRequestCode() {
+    if (busy) return;
+    busy = true;
+    try {
+      var data = await apiForm("/api/fbs/ship/request", { scope: shipScope });
+      shipCodeRequested = true;
+      var hint = document.getElementById("shipCodeHint");
+      var confirmBtn = document.getElementById("btnShipConfirm");
+      if (hint) {
+        hint.classList.remove("hidden");
+        hint.textContent =
+          "Код для «" +
+          (data.scope_label || shipScope) +
+          "»: " +
+          data.code +
+          " (действует " +
+          Math.round((data.expires_in || 300) / 60) +
+          " мин). Введите его и нажмите «Выполнить отгрузку».";
+      }
+      if (confirmBtn) confirmBtn.disabled = false;
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function shipConfirm() {
+    if (busy) return;
+    var codeEl = document.getElementById("shipConfirmCode");
+    var code = codeEl ? String(codeEl.value || "").trim() : "";
+    if (!code) {
+      alert("Введите код подтверждения.");
+      return;
+    }
+    if (!shipCodeRequested) {
+      alert("Сначала запросите код.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Выполнить отгрузку для «" +
+          shipScope +
+          "»? Списание остатков необратимо."
+      )
+    ) {
+      return;
+    }
+    busy = true;
+    var confirmBtn = document.getElementById("btnShipConfirm");
+    if (confirmBtn) confirmBtn.disabled = true;
+    try {
+      var data = await apiForm("/api/fbs/ship/confirm", {
+        scope: shipScope,
+        code: code,
+      });
+      renderShipResult(data);
+      shipCodeRequested = false;
+      if (codeEl) codeEl.value = "";
+      var hint = document.getElementById("shipCodeHint");
+      if (hint) hint.classList.add("hidden");
+      await loadShipPreview();
+    } catch (e) {
+      alert(e.message || String(e));
+      if (confirmBtn) confirmBtn.disabled = false;
+    } finally {
+      busy = false;
+    }
+  }
+
+  function initSectionTabs() {
+    var tabs = document.querySelectorAll(".fbs-section-tab");
+    var title = document.getElementById("fbsPageTitle");
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        var section = tab.getAttribute("data-section");
+        if (!section) return;
+        tabs.forEach(function (t) {
+          t.classList.toggle("active", t === tab);
+        });
+        document.querySelectorAll(".fbs-section-panel").forEach(function (panel) {
+          panel.classList.toggle("active", panel.id === "section-" + section);
+        });
+        if (title) {
+          title.textContent =
+            section === "ship" ? "FBS — отгрузка" : "FBS — список и этикетки";
+        }
+        if (section === "ship") loadShipPreview();
+      });
+    });
+  }
+
+  function initShipScopes() {
+    document.querySelectorAll(".fbs-ship-scope").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var scope = btn.getAttribute("data-ship-scope");
+        if (!scope) return;
+        shipScope = scope;
+        shipCodeRequested = false;
+        document.querySelectorAll(".fbs-ship-scope").forEach(function (b) {
+          b.classList.toggle("active", b === btn);
+        });
+        var hint = document.getElementById("shipCodeHint");
+        if (hint) hint.classList.add("hidden");
+        var confirmBtn = document.getElementById("btnShipConfirm");
+        if (confirmBtn) confirmBtn.disabled = true;
+        loadShipPreview();
+      });
+    });
+  }
+
   function initTabs() {
     var tabs = document.querySelectorAll(".fbs-mp-tab");
     tabs.forEach(function (tab) {
@@ -271,6 +521,13 @@
         });
     });
 
+  document.getElementById("btnShipRequestCode") &&
+    document.getElementById("btnShipRequestCode").addEventListener("click", shipRequestCode);
+  document.getElementById("btnShipConfirm") &&
+    document.getElementById("btnShipConfirm").addEventListener("click", shipConfirm);
+
+  initSectionTabs();
+  initShipScopes();
   initTabs();
   loadMpConfig();
 })();

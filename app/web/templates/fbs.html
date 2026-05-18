@@ -17,76 +17,149 @@
       </nav>
       <div class="sidebar-footer">
         <button type="button" class="btn" id="btnLogout" style="width:100%;margin-bottom:0.5rem;">Выйти</button>
-        <span class="muted">FBS · awaiting_deliver</span>
+        <span class="muted">FBS</span>
       </div>
     </aside>
     <main class="main">
       <header class="topbar">
-        <h1>FBS — список и этикетки</h1>
+        <h1 id="fbsPageTitle">FBS</h1>
       </header>
 
       <section class="view active" style="display:flex;">
-        <p class="muted" style="margin:0 0 1rem;">
-          Аналог команды <code>/ozon_labels</code>: список в Google Таблице (лист «FBS список…») и PDF-этикетки в порядке артикула.
-        </p>
-
-        <div class="fbs-mp-tabs" role="tablist">
-          <button type="button" class="fbs-mp-tab active" data-mp="ozon" role="tab">Ozon</button>
-          <button type="button" class="fbs-mp-tab" data-mp="wildberries" role="tab">Wildberries</button>
-          <button type="button" class="fbs-mp-tab" data-mp="yandex_market" role="tab">Яндекс Маркет</button>
+        <div class="fbs-section-tabs" role="tablist">
+          <button type="button" class="fbs-section-tab active" data-section="labels" role="tab">
+            Список и этикетки
+          </button>
+          <button type="button" class="fbs-section-tab" data-section="ship" role="tab">
+            Отгрузка
+          </button>
         </div>
 
-        <div id="mp-ozon" class="fbs-mp-panel active" role="tabpanel">
-          <dl class="fbs-status" id="ozonStatus">
-            <div><dt>API</dt><dd id="ozonApiStatus">—</dd></div>
-            <div><dt>Google Таблица</dt><dd id="ozonSheetStatus">—</dd></div>
-          </dl>
-          <div class="toolbar">
-            <button type="button" class="btn primary" id="btnOzonGenerate">
-              Сформировать список и этикетки
-            </button>
-            <button type="button" class="btn" id="btnOzonLabels" disabled>
-              Скачать этикетки
-            </button>
-            <button type="button" class="btn" id="btnOzonRefreshList">Только просмотр списка</button>
+        <div id="section-labels" class="fbs-section-panel active" role="tabpanel">
+          <p class="muted" style="margin:0 0 1rem;">
+            Аналог <code>/ozon_labels</code>: список в Google Таблице и PDF-этикетки в порядке артикула.
+          </p>
+
+          <div class="fbs-mp-tabs" role="tablist">
+            <button type="button" class="fbs-mp-tab active" data-mp="ozon" role="tab">Ozon</button>
+            <button type="button" class="fbs-mp-tab" data-mp="wildberries" role="tab">Wildberries</button>
+            <button type="button" class="fbs-mp-tab" data-mp="yandex_market" role="tab">Яндекс Маркет</button>
           </div>
-          <div id="ozonResult" class="fbs-result-box hidden">
-            <h3>Результат</h3>
-            <p class="muted" id="ozonSummary"></p>
-            <p id="ozonSheetBlock" class="hidden">
-              <strong>Лист:</strong>
-              <a id="ozonSheetLink" class="fbs-sheet-link" href="#" target="_blank" rel="noopener"></a>
-            </p>
-            <div id="ozonWarnings" class="movement-warnings hidden"></div>
-            <div class="table-wrap" style="margin-top:1rem;">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>№</th>
-                    <th>Артикул</th>
-                    <th class="num">Кол-во</th>
-                    <th>Номер отправления</th>
-                  </tr>
-                </thead>
-                <tbody id="ozonListBody"></tbody>
-              </table>
+
+          <div id="mp-ozon" class="fbs-mp-panel active" role="tabpanel">
+            <dl class="fbs-status" id="ozonStatus">
+              <div><dt>API</dt><dd id="ozonApiStatus">—</dd></div>
+              <div><dt>Google Таблица</dt><dd id="ozonSheetStatus">—</dd></div>
+            </dl>
+            <div class="toolbar">
+              <button type="button" class="btn primary" id="btnOzonGenerate">
+                Сформировать список и этикетки
+              </button>
+              <button type="button" class="btn" id="btnOzonLabels" disabled>
+                Скачать этикетки
+              </button>
+              <button type="button" class="btn" id="btnOzonRefreshList">Только просмотр списка</button>
+            </div>
+            <div id="ozonResult" class="fbs-result-box hidden">
+              <h3>Результат</h3>
+              <p class="muted" id="ozonSummary"></p>
+              <p id="ozonSheetBlock" class="hidden">
+                <strong>Лист:</strong>
+                <a id="ozonSheetLink" class="fbs-sheet-link" href="#" target="_blank" rel="noopener"></a>
+              </p>
+              <div id="ozonWarnings" class="movement-warnings hidden"></div>
+              <div class="table-wrap" style="margin-top:1rem;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>№</th>
+                      <th>Артикул</th>
+                      <th class="num">Кол-во</th>
+                      <th>Номер отправления</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ozonListBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div id="mp-wildberries" class="fbs-mp-panel" role="tabpanel">
+            <p class="muted">Раздел в разработке.</p>
+            <div class="toolbar">
+              <button type="button" class="btn primary">Сформировать список и этикетки</button>
+              <button type="button" class="btn">Скачать этикетки</button>
+            </div>
+          </div>
+
+          <div id="mp-yandex_market" class="fbs-mp-panel" role="tabpanel">
+            <p class="muted">Раздел в разработке.</p>
+            <div class="toolbar">
+              <button type="button" class="btn primary">Сформировать список и этикетки</button>
+              <button type="button" class="btn">Скачать этикетки</button>
             </div>
           </div>
         </div>
 
-        <div id="mp-wildberries" class="fbs-mp-panel" role="tabpanel">
-          <p class="muted">Раздел в разработке.</p>
-          <div class="toolbar">
-            <button type="button" class="btn primary">Сформировать список и этикетки</button>
-            <button type="button" class="btn">Скачать этикетки</button>
-          </div>
-        </div>
+        <div id="section-ship" class="fbs-section-panel" role="tabpanel">
+          <p class="muted" style="margin:0 0 1rem;">
+            Аналог <code>/ship_all</code>, <code>/ship_ozon</code>, <code>/ship_wb</code>, <code>/ship_yandex</code>:
+            списание резервов <code>added</code> по статусам МП (WB/Ozon: не new; Яндекс: кроме STARTED).
+            Перед отгрузкой выполняется синхронизация заказов.
+          </p>
 
-        <div id="mp-yandex_market" class="fbs-mp-panel" role="tabpanel">
-          <p class="muted">Раздел в разработке.</p>
-          <div class="toolbar">
-            <button type="button" class="btn primary">Сформировать список и этикетки</button>
-            <button type="button" class="btn">Скачать этикетки</button>
+          <div class="fbs-ship-scopes">
+            <button type="button" class="btn fbs-ship-scope active" data-ship-scope="all">Все МП</button>
+            <button type="button" class="btn fbs-ship-scope" data-ship-scope="ozon">Ozon</button>
+            <button type="button" class="btn fbs-ship-scope" data-ship-scope="wildberries">Wildberries</button>
+            <button type="button" class="btn fbs-ship-scope" data-ship-scope="yandex_market">Яндекс Маркет</button>
+          </div>
+
+          <div id="shipPreview" class="fbs-result-box">
+            <h3>Оценка (без списания)</h3>
+            <p class="muted" id="shipPreviewSummary">Выберите маркетплейс…</p>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Маркетплейс</th>
+                    <th class="num">Резервов added</th>
+                    <th class="num">К отгрузке</th>
+                  </tr>
+                </thead>
+                <tbody id="shipPreviewBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="toolbar" style="margin-top:1rem;">
+            <button type="button" class="btn primary" id="btnShipRequestCode">Запросить код</button>
+            <label class="field-inline"
+              >Код
+              <input type="text" id="shipConfirmCode" class="input" maxlength="8" autocomplete="off" placeholder="ABC123" />
+            </label>
+            <button type="button" class="btn" id="btnShipConfirm" disabled>Выполнить отгрузку</button>
+          </div>
+
+          <p id="shipCodeHint" class="muted hidden"></p>
+
+          <div id="shipResult" class="fbs-result-box hidden">
+            <h3>Результат отгрузки</h3>
+            <p class="muted" id="shipResultSummary"></p>
+            <div id="shipResultWarnings" class="movement-warnings hidden"></div>
+            <div class="table-wrap" style="margin-top:0.75rem;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Маркетплейс</th>
+                    <th class="num">Отгружено резервов</th>
+                    <th class="num">Единиц</th>
+                    <th class="num">SKU</th>
+                  </tr>
+                </thead>
+                <tbody id="shipResultBody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>

@@ -12,9 +12,6 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from app.adapters.base import is_value_configured
-from app.adapters.ozon import OzonAdapter
-from app.adapters.wildberries import WildberriesAdapter
-from app.adapters.yandex_market import YandexMarketAdapter
 from app.bootstrap import create_inventory_stack
 from app.ozon_analytics import build_ozon_analytics_csv
 from app.ozon_fbs_labels import (
@@ -29,7 +26,7 @@ from app.repositories import (
 )
 from app.movement_args import parse_movement_edit_args, parse_movement_flags
 from app.movement_ops import execute_movement_from_sheet
-from app.ship_movement import record_fbs_ship_movement
+from app.fbs_ship import execute_fbs_ship
 from app.sheet_import import import_stocks_from_google_sheet
 
 logging.basicConfig(
@@ -867,110 +864,35 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
 
     del chat_pending[action_key]
 
-    # 1) Принудительно синхронизируемся (новые заказы/отмены) перед отгрузкой.
     await _reply_text_resilient(update.message, "Синхронизация перед отгрузкой...")
-    sync_result = await asyncio.to_thread(coordinator.sync_cycle)
+    result = await asyncio.to_thread(
+        execute_fbs_ship,
+        inventory_repo,
+        coordinator,
+        movement_repo,
+        sources,
+        sync_before=True,
+        journal_source="telegram",
+    )
+    by_source = result["by_source"]
+    source_errors = result["source_errors"]
+    movement_notes = [
+        f"- {src}: #{mid}" for src, mid in sorted((result.get("movement_ids") or {}).items())
+    ]
+    total_reserves_shipped = int(result["total_reserves_shipped"])
+    total_reserved_units = int(result["total_reserved_units"])
+    total_skus = int(result["total_skus"])
+    sync_result = result.get("sync_result") or {}
 
-    # 2) Отгружаем только заказы, подходящие под статусные правила по каждому МП:
-    # WB/Ozon: не new, Yandex: все added, кроме STARTED.
     ship_stats_by_source: list[str] = []
-    total_reserved_units = 0
-    total_reserves_shipped = 0
-    total_skus = 0
-    source_errors: list[str] = []
-
-    def _do_ship_ready() -> tuple[dict[str, dict[str, int]], list[str], list[str]]:
-        by_source_out: dict[str, dict[str, int]] = {}
-        errs: list[str] = []
-        movement_notes: list[str] = []
-        adapters_by_name = {a.name: a for a in coordinator.adapters if a.is_configured()}
-        for src in sorted(sources):
-            adapter = adapters_by_name.get(src)
-            if adapter is None:
-                continue
-            try:
-                active_external_ids = inventory_repo.get_active_reserve_external_ids(src)
-                if not active_external_ids:
-                    by_source_out[src] = {
-                        "reserves_shipped": 0,
-                        "reserved_units": 0,
-                        "affected_skus": 0,
-                    }
-                    continue
-
-                if isinstance(adapter, WildberriesAdapter):
-                    ready_external_ids = adapter.fetch_ready_to_ship_external_ids(active_external_ids)
-                    ids_to_ship = set(active_external_ids) & set(ready_external_ids)
-                elif isinstance(adapter, OzonAdapter) or isinstance(adapter, YandexMarketAdapter):
-                    ready_external_ids = adapter.fetch_ready_to_ship_external_ids()
-                    if isinstance(adapter, YandexMarketAdapter):
-                        # Для Яндекса исключаем STARTED по orderId (без sku), чтобы
-                        # расхождения в SKU-идентификаторах не оставляли заказ в резерве.
-                        started_order_ids: set[str] = set()
-                        for ext in ready_external_ids:
-                            order_id = str(ext).split(":", 1)[0].strip()
-                            if order_id:
-                                started_order_ids.add(order_id)
-                        ids_to_ship = set()
-                        for ext in active_external_ids:
-                            order_id = str(ext).split(":", 1)[0].strip()
-                            if not order_id or order_id not in started_order_ids:
-                                ids_to_ship.add(ext)
-                    else:
-                        ids_to_ship = set(active_external_ids) & set(ready_external_ids)
-                else:
-                    ids_to_ship = set()
-                stats = inventory_repo.ship_active_reserves_by_external_ids(src, ids_to_ship)
-                by_source_out[src] = {
-                    "reserves_shipped": int(stats.get("reserves_shipped", 0)),
-                    "reserved_units": int(stats.get("reserved_units", 0)),
-                    "affected_skus": int(stats.get("affected_skus", 0)),
-                }
-                if int(stats.get("reserves_shipped", 0)) > 0:
-                    mid = record_fbs_ship_movement(
-                        movement_repo,
-                        source=src,
-                        external_order_ids=list(stats.get("external_order_ids") or []),
-                        qty_by_sku=dict(stats.get("qty_by_sku") or {}),
-                    )
-                    if mid is not None:
-                        movement_notes.append(f"- {src}: #{mid}")
-            except Exception as exc:  # noqa: BLE001
-                errs.append(f"{src}: ship failed ({exc})")
-                logger.exception("Ship-by-status failed for source=%s", src)
-                by_source_out[src] = {
-                    "reserves_shipped": 0,
-                    "reserved_units": 0,
-                    "affected_skus": 0,
-                }
-        return by_source_out, errs, movement_notes
-
-    by_source, source_errors, movement_notes = await asyncio.to_thread(_do_ship_ready)
-
     for src in sorted(by_source.keys()):
         st = by_source[src]
-        shipped = int(st.get("reserves_shipped", 0))
-        units = int(st.get("reserved_units", 0))
-        skus = int(st.get("affected_skus", 0))
-        total_reserves_shipped += shipped
-        total_reserved_units += units
-        total_skus += skus
-        ship_stats_by_source.append(f"- {src}: shipped={shipped}, units={units}, skus={skus}")
+        ship_stats_by_source.append(
+            f"- {src}: shipped={int(st.get('reserves_shipped', 0))}, "
+            f"units={int(st.get('reserved_units', 0))}, skus={int(st.get('affected_skus', 0))}"
+        )
     if not ship_stats_by_source:
         ship_stats_by_source.append("- (нет configured источников для отгрузки)")
-
-    # После списания обновим остатки на маркетплейсах (без повторного fetch заказов).
-    def _push_stocks_after_ship() -> None:
-        available = inventory_repo.get_available_stock_map()
-        for a in coordinator.adapters:
-            if a.is_configured():
-                a.sync_available_stock(available)
-
-    await asyncio.to_thread(_push_stocks_after_ship)
-
-    coordinator.last_run_at = None
-    coordinator.last_error = None
-    coordinator.last_warnings = []
 
     warn_lines = ""
     if sync_result.get("adapter_errors"):

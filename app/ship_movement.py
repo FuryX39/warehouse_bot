@@ -28,6 +28,7 @@ def record_fbs_ship_movement(
     source: str,
     external_order_ids: list[str],
     qty_by_sku: dict[str, int],
+    journal_source: str = "telegram",
 ) -> int | None:
     """
     Запись расхода в журнал (остатки уже списаны в ship_active_reserves_by_external_ids).
@@ -57,7 +58,7 @@ def record_fbs_ship_movement(
     return movement_repo.create_movement(
         created_at_ts=ts,
         direction="out",
-        source="telegram",
+        source=(journal_source or "telegram").strip() or "telegram",
         sheet_url="",
         lines=lines,
         warnings=warnings,
