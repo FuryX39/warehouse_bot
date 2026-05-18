@@ -23,19 +23,19 @@ NAME_MAX_LINES = 3
 
 
 def _render_code128_image(barcode_value: str) -> Image.Image:
-    """Полосы Code 128 без подписи под полосами."""
-    opts = {
-        "module_width": 0.28,
-        "module_height": 9.0,
-        "quiet_zone": 1.2,
-        "font_size": 0,
-        "text_distance": 0,
-        "write_text": False,
-    }
+    """Полосы Code 128 (узкий вариант, лучше читается сканером). Цифры — в подписи «ШК»."""
     writer = ImageWriter()
-    writer.set_options(opts)
+    writer.set_options(
+        {
+            "module_width": 0.22,
+            "module_height": 10.0,
+            "quiet_zone": 1.5,
+            "font_size": 0,
+            "text_distance": 0,
+        }
+    )
     buf = io.BytesIO()
-    Code128(barcode_value, writer=writer).write(buf, options=opts)
+    Code128(barcode_value, writer=writer).write(buf, options={"write_text": False})
     buf.seek(0)
     return Image.open(buf).convert("RGB")
 
