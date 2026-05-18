@@ -8,19 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.adapters.ozon import OZON_AWAITING_SHIPMENT_STATUSES, OzonAdapter, OzonFbsPosting
-from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_sheet
+from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_from_template
 from app.services import StockCoordinator
-
-_FBS_SHEET_HEADER = [
-    "id",
-    "картинка",
-    "название",
-    "количество",
-    "номер отправления",
-    "артикул",
-]
-_FBS_PRODUCTS_SHEET = "products"
-
 
 @dataclass(frozen=True)
 class OzonFbsListRow:
@@ -112,46 +101,21 @@ def _fetch_labels_in_order(
     return label_files, warnings
 
 
-def _fbs_sheet_formula_image(sheet_row: int) -> str:
-    """Картинка: XLOOKUP артикула (кол. F) → «Ссылка на картинку» (кол. F) на листе products."""
-    p = _FBS_PRODUCTS_SHEET
-    return f"=IMAGE(XLOOKUP(F{sheet_row};{p}!$A:$A;{p}!$F:$F))"
-
-
-def _fbs_sheet_formula_name(sheet_row: int) -> str:
-    """Название: XLOOKUP артикула → «Название» (кол. B) на листе products."""
-    p = _FBS_PRODUCTS_SHEET
-    return f"=XLOOKUP(F{sheet_row};{p}!$A:$A;{p}!$B:$B)"
-
-
-def _fbs_sheet_data_row(row: OzonFbsListRow, *, sheet_row: int) -> list:
-    return [
-        str(row.seq),
-        _fbs_sheet_formula_image(sheet_row),
-        _fbs_sheet_formula_name(sheet_row),
-        str(row.quantity),
-        row.posting_number,
-        row.sku,
-    ]
-
-
 def _export_list_to_google_sheet(
     *,
     spreadsheet_url: str,
     credentials_path: str,
     sheet_title: str,
     list_rows: list[OzonFbsListRow],
+    template_sheet_name: str,
 ) -> str:
-    rows = [
-        _fbs_sheet_data_row(r, sheet_row=i + 2)
-        for i, r in enumerate(list_rows)
-    ]
-    return write_fbs_list_sheet(
+    data = [(r.sku, r.quantity, r.posting_number) for r in list_rows]
+    return write_fbs_list_from_template(
         spreadsheet_url,
         credentials_path,
         sheet_title,
-        _FBS_SHEET_HEADER,
-        rows,
+        data,
+        template_sheet_name=template_sheet_name,
     )
 
 
@@ -161,6 +125,7 @@ def fetch_awaiting_shipment_labels(
     statuses: tuple[str, ...] = OZON_AWAITING_SHIPMENT_STATUSES,
     fbs_list_sheet_url: str = "",
     google_service_account_file: str = "",
+    fbs_list_template_sheet: str = "FBSTemplate",
 ) -> OzonAwaitingShipmentBundle:
     """Список по артикулу, этикетки в том же порядке, лист в Google Таблице."""
     postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
@@ -183,6 +148,7 @@ def fetch_awaiting_shipment_labels(
                 credentials_path=creds_path,
                 sheet_title=sheet_title,
                 list_rows=list_rows,
+                template_sheet_name=(fbs_list_template_sheet or "FBSTemplate").strip(),
             )
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Google Таблица: {exc}")

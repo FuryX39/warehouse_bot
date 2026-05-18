@@ -605,6 +605,7 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             adapter,
             fbs_list_sheet_url=settings.fbs_list_sheet_url,
             google_service_account_file=settings.google_service_account_file,
+            fbs_list_template_sheet=settings.fbs_list_template_sheet,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ozon labels failed")
