@@ -314,25 +314,118 @@ class OzonAdapter(MarketplaceAdapter):
 
         return parts, warnings
 
+    def _resolve_product_ids(self, offer_ids: list[str], headers: dict[str, str]) -> dict[str, int]:
+        """offer_id → product_id для POST /v2/products/stocks (Ozon надёжнее принимает оба поля)."""
+        out: dict[str, int] = {}
+        ids = [str(x).strip() for x in offer_ids if str(x).strip()]
+        if not ids:
+            return out
+        chunk_size = 100
+        for start in range(0, len(ids), chunk_size):
+            chunk = ids[start : start + chunk_size]
+            response = requests.post(
+                f"{self.base_url}/v3/product/info/list",
+                headers=headers,
+                json={"offer_id": chunk, "product_id": [], "sku": []},
+                timeout=30,
+            )
+            response.raise_for_status()
+            items = response.json().get("items") or []
+            if not items and isinstance(response.json().get("result"), dict):
+                items = response.json()["result"].get("items") or []
+            for item in items:
+                offer = str(item.get("offer_id") or "").strip()
+                pid = item.get("id") or item.get("product_id")
+                if offer and pid is not None:
+                    try:
+                        out[offer] = int(pid)
+                    except (TypeError, ValueError):
+                        continue
+        return out
+
+    @staticmethod
+    def _parse_stocks_update_result(body: dict) -> tuple[int, list[str]]:
+        """Считает успешные обновления и тексты ошибок из ответа /v2/products/stocks."""
+        updated = 0
+        errors: list[str] = []
+        rows = body.get("result")
+        if rows is None:
+            rows = body.get("results") or []
+        if not isinstance(rows, list):
+            return 0, [f"неожиданный ответ API: {body!r}"[:500]]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("updated") is True:
+                updated += 1
+                continue
+            offer = str(row.get("offer_id") or "").strip()
+            for err in row.get("errors") or []:
+                if isinstance(err, dict):
+                    msg = str(err.get("message") or err.get("code") or err).strip()
+                else:
+                    msg = str(err).strip()
+                if msg:
+                    prefix = f"{offer}: " if offer else ""
+                    errors.append(prefix + msg)
+            if not row.get("errors") and row.get("updated") is not True:
+                errors.append(f"{offer or '?'}: не обновлено (updated=false)")
+        return updated, errors
+
     def sync_available_stock(self, available_stock_by_sku: dict[str, int]) -> None:
         if not self.is_configured() or not available_stock_by_sku:
             return
         if not is_value_configured(self.warehouse_id):
             raise RuntimeError("Set OZON_WAREHOUSE_ID in .env for Ozon stock sync")
-        headers = {
-            "Client-Id": self.client_id,
-            "Api-Key": self.api_key,
-            "Content-Type": "application/json",
-        }
-        stocks = [
-            {
-                "offer_id": sku,
-                "stock": max(available, 0),
-                "warehouse_id": int(self.warehouse_id),
+        try:
+            warehouse_id = int(str(self.warehouse_id).strip())
+        except ValueError as exc:
+            raise RuntimeError(
+                f"OZON_WAREHOUSE_ID должен быть числом (id склада FBS из /v1/warehouse/list), сейчас: {self.warehouse_id!r}"
+            ) from exc
+
+        headers = self._headers()
+        quantities: dict[str, int] = {}
+        for sku, available in available_stock_by_sku.items():
+            key = str(sku).strip()
+            if not key:
+                continue
+            quantities[key] = max(int(available), 0)
+
+        if not quantities:
+            return
+
+        offer_ids = list(quantities.keys())
+        product_ids = self._resolve_product_ids(offer_ids, headers)
+        unknown = [oid for oid in offer_ids if oid not in product_ids]
+        if unknown:
+            logger.warning(
+                "Ozon stock: %s offer_id не найдены в каталоге (первые 10): %s",
+                len(unknown),
+                unknown[:10],
+            )
+
+        stocks: list[dict] = []
+        for offer_id, qty in quantities.items():
+            pid = product_ids.get(offer_id)
+            if pid is None:
+                continue
+            row: dict = {
+                "offer_id": offer_id,
+                "product_id": pid,
+                "stock": qty,
+                "warehouse_id": warehouse_id,
             }
-            for sku, available in available_stock_by_sku.items()
-        ]
-        # Ozon: от 1 до 100 позиций в одном запросе.
+            stocks.append(row)
+
+        if not stocks:
+            raise RuntimeError(
+                "Ozon stock: ни один артикул не сопоставлен с каталогом Ozon "
+                "(проверьте, что product_stocks.sku = offer_id в ЛК Ozon)"
+            )
+
+        total_updated = 0
+        all_errors: list[str] = []
         chunk_size = 100
         for start in range(0, len(stocks), chunk_size):
             chunk = stocks[start : start + chunk_size]
@@ -349,3 +442,27 @@ class OzonAdapter(MarketplaceAdapter):
                 if details:
                     raise requests.HTTPError(f"{exc}; body={details}") from exc
                 raise
+            updated, errs = self._parse_stocks_update_result(response.json())
+            total_updated += updated
+            all_errors.extend(errs)
+
+        logger.info(
+            "Ozon stock push: отправлено %s поз., обновлено %s, ошибок %s, пропущено (нет в каталоге) %s",
+            len(stocks),
+            total_updated,
+            len(all_errors),
+            len(unknown),
+        )
+        if total_updated == 0:
+            sample = "; ".join(all_errors[:5])
+            raise RuntimeError(
+                "Ozon stock: API не обновил ни одной позиции"
+                + (f" ({sample})" if sample else "")
+            )
+        if all_errors:
+            logger.warning(
+                "Ozon stock: обновлено %s/%s, ошибки (первые 5): %s",
+                total_updated,
+                len(stocks),
+                "; ".join(all_errors[:5]),
+            )

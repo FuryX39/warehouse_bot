@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 import logging
 import time
 
-from app.adapters.base import MarketplaceAdapter, ReservationAction
+from app.adapters.base import MarketplaceAdapter, ReservationAction, is_value_configured
+from app.adapters.ozon import OzonAdapter
 from app.repositories import AVAILABLE_STOCK_SYNC_KEY, InventoryRepository, available_stock_map_hash
 
 logger = logging.getLogger(__name__)
@@ -211,17 +212,37 @@ class StockCoordinator:
             current_stock_hash = available_stock_map_hash(available_stock)
             last_stock_hash = self.inventory_repo.get_sync_int(AVAILABLE_STOCK_SYNC_KEY)
             stock_changed = last_stock_hash is None or int(last_stock_hash) != int(current_stock_hash)
+            reserves_touched = (
+                int(order_items_stats.get("touched", 0))
+                + int(reconcile_removed)
+                + int(reconcile_updated)
+            ) > 0
+            if reserves_touched:
+                stock_changed = True
 
             if stock_changed:
+                stock_push_ok = True
                 for adapter in self.adapters:
                     if not adapter.is_configured():
+                        continue
+                    if isinstance(adapter, OzonAdapter) and not is_value_configured(adapter.warehouse_id):
+                        adapter_errors.append(
+                            "ozon: задайте OZON_WAREHOUSE_ID (id склада FBS) — пуш остатков пропущен"
+                        )
+                        stock_push_ok = False
                         continue
                     try:
                         adapter.sync_available_stock(available_stock)
                     except Exception as exc:  # noqa: BLE001
                         adapter_errors.append(f"{adapter.name}: stock sync failed ({exc})")
                         logger.exception("Adapter stock sync failed: %s", adapter.name)
-                self.inventory_repo.set_sync_int(AVAILABLE_STOCK_SYNC_KEY, current_stock_hash)
+                        stock_push_ok = False
+                if stock_push_ok:
+                    self.inventory_repo.set_sync_int(AVAILABLE_STOCK_SYNC_KEY, current_stock_hash)
+                else:
+                    logger.warning(
+                        "Stock push hash not updated — повторим пуш на следующем цикле синка"
+                    )
             else:
                 logger.info("Skip stock push: available stock unchanged")
 
