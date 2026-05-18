@@ -11,7 +11,15 @@ from app.adapters.ozon import OZON_AWAITING_SHIPMENT_STATUSES, OzonAdapter, Ozon
 from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_sheet
 from app.services import StockCoordinator
 
-_FBS_SHEET_HEADER = ["№", "Отправление", "Артикул", "Кол-во", "Статус"]
+_FBS_SHEET_HEADER = [
+    "id",
+    "картинка",
+    "название",
+    "количество",
+    "номер отправления",
+    "артикул",
+]
+_FBS_PRODUCTS_SHEET = "products"
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,29 @@ def _fetch_labels_in_order(
     return label_files, warnings
 
 
+def _fbs_sheet_formula_image(sheet_row: int) -> str:
+    """Картинка: XLOOKUP артикула (кол. F) → «Ссылка на картинку» (кол. F) на листе products."""
+    p = _FBS_PRODUCTS_SHEET
+    return f"=IMAGE(XLOOKUP(F{sheet_row};{p}!$A:$A;{p}!$F:$F))"
+
+
+def _fbs_sheet_formula_name(sheet_row: int) -> str:
+    """Название: XLOOKUP артикула → «Название» (кол. B) на листе products."""
+    p = _FBS_PRODUCTS_SHEET
+    return f"=XLOOKUP(F{sheet_row};{p}!$A:$A;{p}!$B:$B)"
+
+
+def _fbs_sheet_data_row(row: OzonFbsListRow, *, sheet_row: int) -> list:
+    return [
+        str(row.seq),
+        _fbs_sheet_formula_image(sheet_row),
+        _fbs_sheet_formula_name(sheet_row),
+        str(row.quantity),
+        row.posting_number,
+        row.sku,
+    ]
+
+
 def _export_list_to_google_sheet(
     *,
     spreadsheet_url: str,
@@ -112,8 +143,8 @@ def _export_list_to_google_sheet(
     list_rows: list[OzonFbsListRow],
 ) -> str:
     rows = [
-        [str(r.seq), r.posting_number, r.sku, str(r.quantity), r.status]
-        for r in list_rows
+        _fbs_sheet_data_row(r, sheet_row=i + 2)
+        for i, r in enumerate(list_rows)
     ]
     return write_fbs_list_sheet(
         spreadsheet_url,
@@ -188,7 +219,7 @@ def format_postings_summary(
 ) -> str:
     if list_rows is not None:
         lines = [
-            f"{r.seq}. {r.posting_number} — {r.sku}×{r.quantity} ({r.status})"
+            f"{r.seq}. {r.sku}×{r.quantity} — {r.posting_number}"
             for r in list_rows[:max_lines]
         ]
         total = len(list_rows)

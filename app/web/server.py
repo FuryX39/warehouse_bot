@@ -271,11 +271,10 @@ def create_dashboard_app(
             "status": "awaiting_deliver",
             "list_rows": [
                 {
-                    "seq": r.seq,
-                    "posting_number": r.posting_number,
+                    "id": r.seq,
                     "sku": r.sku,
                     "quantity": r.quantity,
-                    "status": r.status,
+                    "posting_number": r.posting_number,
                 }
                 for r in list_rows
             ],
