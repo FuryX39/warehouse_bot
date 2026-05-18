@@ -11,6 +11,7 @@ HTTP API и раздача веб-страницы панели.
   POST /api/login     — проверка пароля, создание сессии
   POST /api/import_sheet — импорт остатков из Google Sheets (как /import_sheet)
   POST /api/logout    — выход
+  GET  /fbs           — FBS: списки и этикетки по маркетплейсам
   GET  /              — панель (редирект на /login без сессии)
   GET  /static/*      — CSS/JS (без данных; основная защита — API и /)
 """
@@ -37,6 +38,7 @@ from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.barcode_label_pdf import generate_barcode_label_pdf
+from app.fbs_labels_cache import pop_label_files, store_label_files
 from app.ozon_fbs_labels import (
     build_labels_zip,
     build_sorted_list_rows,
@@ -287,6 +289,80 @@ def create_dashboard_app(
             ],
         }
 
+    def _fbs_label_files_response(label_files: list[tuple[str, bytes]]) -> Response:
+        if len(label_files) == 1:
+            name, pdf = label_files[0]
+            return Response(
+                content=pdf,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            )
+        zip_bytes = build_labels_zip(label_files)
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="ozon_awaiting_labels.zip"'},
+        )
+
+    @app.post("/api/fbs/ozon/generate", dependencies=[Depends(require_login)])
+    async def api_fbs_ozon_generate() -> dict:
+        """FBS Ozon: список в Google Таблице + этикетки (без тела запроса — без Field required)."""
+        adapter = get_configured_ozon_adapter(coordinator)
+        if adapter is None:
+            raise HTTPException(status_code=400, detail="Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)")
+        loop = asyncio.get_running_loop()
+        try:
+            bundle = await loop.run_in_executor(
+                None,
+                lambda: fetch_awaiting_shipment_labels(
+                    adapter,
+                    fbs_list_sheet_url=settings.fbs_list_sheet_url,
+                    google_service_account_file=settings.google_service_account_file,
+                    fbs_list_template_sheet=settings.fbs_list_template_sheet,
+                    ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ozon API: {exc}") from exc
+        if not bundle.postings:
+            raise HTTPException(status_code=404, detail="Нет отправлений awaiting_deliver")
+        labels_token: str | None = None
+        if bundle.label_files:
+            labels_token = store_label_files(bundle.label_files)
+        elif bundle.warnings:
+            raise HTTPException(
+                status_code=502,
+                detail="Не удалось получить PDF-этикетки: " + "; ".join(bundle.warnings[:5]),
+            )
+        else:
+            raise HTTPException(status_code=502, detail="Не удалось получить PDF-этикетки")
+        return {
+            "count": len(bundle.list_rows),
+            "status": "awaiting_deliver",
+            "list_rows": [
+                {
+                    "seq": r.seq,
+                    "sku": r.sku,
+                    "quantity": r.quantity,
+                    "posting_number": r.posting_number,
+                }
+                for r in bundle.list_rows
+            ],
+            "sheet_title": bundle.sheet_title,
+            "sheet_url": bundle.sheet_url,
+            "warnings": bundle.warnings,
+            "labels_token": labels_token,
+        }
+
+    @app.get("/api/fbs/ozon/labels", dependencies=[Depends(require_login)])
+    async def api_fbs_ozon_labels(
+        token: Annotated[str, Query(description="Токен после POST /api/fbs/ozon/generate")],
+    ) -> Response:
+        label_files = pop_label_files(token)
+        if not label_files:
+            raise HTTPException(status_code=404, detail="Ссылка на этикетки устарела или уже использована")
+        return _fbs_label_files_response(label_files)
+
     @app.get("/api/ozon/awaiting-shipment-labels", dependencies=[Depends(require_login)])
     async def api_ozon_awaiting_shipment_labels() -> Response:
         """ZIP с PDF-этикетками для отправлений awaiting_deliver."""
@@ -314,19 +390,7 @@ def create_dashboard_app(
             if bundle.warnings:
                 detail += ": " + "; ".join(bundle.warnings[:5])
             raise HTTPException(status_code=502, detail=detail)
-        if len(bundle.label_files) == 1:
-            name, pdf = bundle.label_files[0]
-            return Response(
-                content=pdf,
-                media_type="application/pdf",
-                headers={"Content-Disposition": f'attachment; filename="{name}"'},
-            )
-        zip_bytes = build_labels_zip(bundle.label_files)
-        return Response(
-            content=zip_bytes,
-            media_type="application/zip",
-            headers={"Content-Disposition": 'attachment; filename="ozon_awaiting_labels.zip"'},
-        )
+        return _fbs_label_files_response(bundle.label_files)
 
     @app.get("/api/barcode-label", dependencies=[Depends(require_login)])
     async def api_barcode_label(
@@ -728,6 +792,22 @@ def create_dashboard_app(
     static_dir = _WEB_ROOT / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/fbs")
+    async def fbs_page(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url="/login", status_code=302)
+        html_path = _WEB_ROOT / "templates" / "fbs.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон FBS не найден")
+        return FileResponse(
+            html_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
 
     @app.get("/")
     async def index_page(request: Request):
