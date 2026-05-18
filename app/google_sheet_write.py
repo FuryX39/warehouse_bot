@@ -16,6 +16,76 @@ _SCOPES = (
 # Лист-шаблон: шапка + одна строка с форматированием и формулами (Картинка, название).
 DEFAULT_FBS_TEMPLATE_SHEET = "FBSTemplate"
 _FBS_DATA_COLS = 5
+# Колонка E (0-based: 4) — «номер отправления»
+_FBS_POSTING_COL_INDEX = 4
+_FBS_POSTING_NORMAL_FONT_PT = 10
+_FBS_POSTING_HIGHLIGHT_FONT_PT = 14
+
+
+def ozon_posting_highlight_range(posting_number: str) -> tuple[int, int]:
+    """
+    Диапазон [start, end) для подсветки как на этикетке Ozon:
+    4 символа непосредственно перед первым «-» (если дефиса нет — первые 4 символа).
+    """
+    pn = str(posting_number or "").strip()
+    if not pn:
+        return 0, 0
+    dash = pn.find("-")
+    if dash <= 0:
+        return 0, min(4, len(pn))
+    start = max(0, dash - 4)
+    return start, dash
+
+
+def _posting_cell_with_highlight(
+    posting_number: str,
+    *,
+    normal_pt: int = _FBS_POSTING_NORMAL_FONT_PT,
+    highlight_pt: int = _FBS_POSTING_HIGHLIGHT_FONT_PT,
+) -> dict:
+    """Ячейка с rich text: код сборки жирным и крупнее."""
+    pn = str(posting_number).strip()
+    hi_start, hi_end = ozon_posting_highlight_range(pn)
+    normal_fmt = {"bold": False, "fontSize": normal_pt}
+    hi_fmt = {"bold": True, "fontSize": highlight_pt}
+    runs: list[dict] = []
+    if hi_start > 0:
+        runs.append({"format": normal_fmt, "startIndex": 0})
+    if hi_end > hi_start:
+        runs.append({"format": hi_fmt, "startIndex": hi_start})
+    if hi_end < len(pn):
+        runs.append({"format": normal_fmt, "startIndex": hi_end})
+    if not runs:
+        runs.append({"format": normal_fmt, "startIndex": 0})
+    return {
+        "userEnteredValue": {"stringValue": pn},
+        "textFormatRuns": runs,
+    }
+
+
+def _fill_posting_column_highlighted(worksheet, posting_numbers: Sequence[str]) -> None:
+    if not posting_numbers:
+        return
+    rows = [{"values": [_posting_cell_with_highlight(pn)]} for pn in posting_numbers]
+    worksheet.spreadsheet.batch_update(
+        {
+            "requests": [
+                {
+                    "updateCells": {
+                        "range": {
+                            "sheetId": worksheet.id,
+                            "startRowIndex": 1,
+                            "endRowIndex": 1 + len(posting_numbers),
+                            "startColumnIndex": _FBS_POSTING_COL_INDEX,
+                            "endColumnIndex": _FBS_POSTING_COL_INDEX + 1,
+                        },
+                        "rows": rows,
+                        "fields": "userEnteredValue,textFormatRuns",
+                    }
+                }
+            ]
+        }
+    )
 
 
 def fbs_list_sheet_title(when: datetime | None = None) -> str:
@@ -118,10 +188,10 @@ def write_fbs_list_from_template(
     last_row = 1 + len(rows)
     skus = [[sku] for sku, _, _ in rows]
     qtys = [[str(qty)] for _, qty, _ in rows]
-    postings = [[pn] for _, _, pn in rows]
+    posting_numbers = [pn for _, _, pn in rows]
 
     new_ws.update(f"A2:A{last_row}", skus, value_input_option="USER_ENTERED")
     new_ws.update(f"D2:D{last_row}", qtys, value_input_option="USER_ENTERED")
-    new_ws.update(f"E2:E{last_row}", postings, value_input_option="USER_ENTERED")
+    _fill_posting_column_highlighted(new_ws, posting_numbers)
 
     return f"https://docs.google.com/spreadsheets/d/{sh.id}/edit#gid={new_ws.id}"
