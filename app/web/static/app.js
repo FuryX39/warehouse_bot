@@ -167,7 +167,7 @@
       b.addEventListener("click", function () {
         var sku = b.getAttribute("data-sku");
         if (!confirm("Удалить остаток для артикула «" + sku + "»? Резервы не изменятся.")) return;
-        api("/api/stock/" + encodeURIComponent(sku), { method: "DELETE" })
+        api("/api/stock?sku=" + encodeURIComponent(sku), { method: "DELETE" })
           .then(function () {
             return loadInventory();
           })
@@ -231,6 +231,81 @@
     return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   }
 
+  function formatBarcodesList(barcodes) {
+    var list = barcodes && barcodes.length ? barcodes : [];
+    if (!list.length) return "—";
+    var text = list.join(", ");
+    return text.length > 80 ? text.slice(0, 77) + "…" : text;
+  }
+
+  function buildBarcodePrintHtml(sku, name, barcodes) {
+    var list = barcodes && barcodes.length ? barcodes : [];
+    if (!list.length) {
+      return '<td class="barcode-print-col muted">—</td>';
+    }
+    var opts = list
+      .map(function (b) {
+        return '<option value="' + encodeAttr(b) + '">' + escapeHtml(b) + "</option>";
+      })
+      .join("");
+    return (
+      '<td class="barcode-print-col"><div class="barcode-print">' +
+      '<select class="barcode-select" aria-label="Штрихкод для PDF">' +
+      opts +
+      '</select><button type="button" class="btn btn-barcode-pdf" data-sku="' +
+      encodeAttr(sku) +
+      '">Скачать PDF</button></div></td>'
+    );
+  }
+
+  async function downloadBarcodeLabelPdf(sku, barcode) {
+    var url =
+      "/api/barcode-label?sku=" +
+      encodeURIComponent(sku) +
+      "&barcode=" +
+      encodeURIComponent(barcode);
+    var res = await fetch(url, { credentials: "include" });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      throw new Error("Сессия истекла или требуется вход");
+    }
+    if (!res.ok) {
+      var text = await res.text();
+      var data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (e) {
+        data = null;
+      }
+      var msg = formatApiDetail(data && data.detail) || text || res.statusText;
+      throw new Error(msg || "Не удалось сформировать PDF");
+    }
+    var blob = await res.blob();
+    var dispo = res.headers.get("Content-Disposition") || "";
+    var filename = "barcode.pdf";
+    var m = /filename="?([^";]+)"?/i.exec(dispo);
+    if (m && m[1]) filename = m[1];
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".btn-barcode-pdf");
+    if (!btn) return;
+    e.preventDefault();
+    var wrap = btn.closest(".barcode-print");
+    var sel = wrap && wrap.querySelector(".barcode-select");
+    var sku = btn.getAttribute("data-sku");
+    var barcode = sel && sel.value;
+    if (!sku || !barcode) return;
+    downloadBarcodeLabelPdf(sku, barcode).catch(showErr);
+  });
+
   async function loadInventory() {
     var meta = document.getElementById("inventoryMeta");
     var body = document.getElementById("inventoryBody");
@@ -290,6 +365,97 @@
       .catch(showErr);
   });
 
+  var nomenclatureRows = [];
+  var dlgNomenclature = document.getElementById("dlgNomenclature");
+  var dlgNomSku = document.getElementById("dlgNomSku");
+  var dlgNomName = document.getElementById("dlgNomName");
+  var dlgNomImageUrl = document.getElementById("dlgNomImageUrl");
+  var dlgNomBarcodes = document.getElementById("dlgNomBarcodes");
+  var dlgNomTitle = document.getElementById("dlgNomTitle");
+
+  function parseBarcodesInput(text) {
+    var seen = {};
+    var out = [];
+    String(text || "")
+      .split(/[,;\n|]+/)
+      .forEach(function (part) {
+        var code = part.trim();
+        if (!code || seen[code]) return;
+        seen[code] = true;
+        out.push(code);
+      });
+    return out;
+  }
+
+  function barcodesToTextarea(codes) {
+    return (codes && codes.length ? codes : []).join("\n");
+  }
+
+  function openNomenclatureDialog(row) {
+    if (row) {
+      dlgNomTitle.textContent = "Редактировать номенклатуру";
+      dlgNomSku.value = row.sku || "";
+      dlgNomSku.readOnly = true;
+      dlgNomSku.classList.add("readonly");
+      dlgNomName.value = row.name || "";
+      dlgNomImageUrl.value = row.image_url || "";
+      dlgNomBarcodes.value = barcodesToTextarea(row.barcodes);
+    } else {
+      dlgNomTitle.textContent = "Новая позиция";
+      dlgNomSku.value = "";
+      dlgNomSku.readOnly = false;
+      dlgNomSku.classList.remove("readonly");
+      dlgNomName.value = "";
+      dlgNomImageUrl.value = "";
+      dlgNomBarcodes.value = "";
+    }
+    dlgNomenclature.showModal();
+    if (!row) dlgNomSku.focus();
+    else dlgNomName.focus();
+  }
+
+  document.getElementById("btnAddNomenclature").addEventListener("click", function () {
+    openNomenclatureDialog(null);
+  });
+  document.getElementById("dlgNomCancel").addEventListener("click", function () {
+    dlgNomenclature.close();
+  });
+  document.getElementById("formNomenclature").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var sku = dlgNomSku.value.trim();
+    if (!sku) {
+      alert("Укажите артикул");
+      return;
+    }
+    if (sku.length > 128) {
+      alert("Артикул не длиннее 128 символов");
+      return;
+    }
+    var name = dlgNomName.value.trim();
+    if (name.length > 512) {
+      alert("Название не длиннее 512 символов");
+      return;
+    }
+    var imageUrl = dlgNomImageUrl.value.trim();
+    if (imageUrl.length > 2048) {
+      alert("Ссылка на картинку не длиннее 2048 символов");
+      return;
+    }
+    var barcodes = parseBarcodesInput(dlgNomBarcodes.value);
+    var payload = {};
+    payload[sku] = { name: name, image_url: imageUrl, barcodes: barcodes };
+    api("/api/nomenclature", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: payload }),
+    })
+      .then(function () {
+        dlgNomenclature.close();
+        return loadNomenclature();
+      })
+      .catch(showErr);
+  });
+
   async function loadNomenclature() {
     var meta = document.getElementById("nomenclatureMeta");
     var body = document.getElementById("nomenclatureBody");
@@ -297,6 +463,7 @@
     body.innerHTML = "";
     var data = await api("/api/nomenclature");
     var rows = data.rows || [];
+    nomenclatureRows = rows;
     meta.textContent = "Строк: " + rows.length;
     rows.forEach(function (r) {
       var imgUrl = String(r.image_url || "").trim();
@@ -332,16 +499,35 @@
         escapeHtml(r.name || "") +
         "</td>" +
         linkCell +
-        '<td class="actions-col"><button type="button" class="btn btn-danger btn-del-nom" data-sku="' +
+        '<td class="barcodes-col" title="' +
+        encodeAttr((r.barcodes || []).join(", ")) +
+        '">' +
+        escapeHtml(formatBarcodesList(r.barcodes)) +
+        "</td>" +
+        buildBarcodePrintHtml(r.sku, r.name || "", r.barcodes) +
+        '<td class="actions-col"><button type="button" class="btn btn-edit-nom" data-sku="' +
+        encodeAttr(r.sku) +
+        '">Изменить</button> ' +
+        '<button type="button" class="btn btn-danger btn-del-nom" data-sku="' +
         encodeAttr(r.sku) +
         '">Удалить</button></td>';
       body.appendChild(tr);
+    });
+    body.querySelectorAll(".btn-edit-nom").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var sku = b.getAttribute("data-sku");
+        var row = nomenclatureRows.find(function (x) {
+          return x.sku === sku;
+        });
+        if (!row) return;
+        openNomenclatureDialog(row);
+      });
     });
     body.querySelectorAll(".btn-del-nom").forEach(function (b) {
       b.addEventListener("click", function () {
         var sku = b.getAttribute("data-sku");
         if (!confirm("Удалить «" + sku + "» из номенклатуры? Остатки не изменятся.")) return;
-        api("/api/nomenclature/" + encodeURIComponent(sku), { method: "DELETE" })
+        api("/api/nomenclature?sku=" + encodeURIComponent(sku), { method: "DELETE" })
           .then(function () {
             return loadNomenclature();
           })
@@ -405,10 +591,10 @@
       alert("Остаток должен быть целым числом ≥ 0");
       return;
     }
-    api("/api/stock/" + encodeURIComponent(sku), {
+    api("/api/stock", {
       method: "PUT",
       headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-      body: new URLSearchParams({ stock: String(stock) }).toString(),
+      body: new URLSearchParams({ sku: sku, stock: String(stock) }).toString(),
     })
       .then(function () {
         dlg.close();
@@ -438,10 +624,10 @@
       alert("Остаток должен быть целым числом ≥ 0");
       return;
     }
-    api("/api/stock/" + encodeURIComponent(sku), {
+    api("/api/stock", {
       method: "PUT",
       headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-      body: new URLSearchParams({ stock: String(stock) }).toString(),
+      body: new URLSearchParams({ sku: sku, stock: String(stock) }).toString(),
     })
       .then(function () {
         dlgSetStock.close();
@@ -578,14 +764,17 @@
       tr.innerHTML =
         "<td>" +
         escapeHtml(ln.sku) +
-        "</td><td class=\"num\">" +
+        '</td><td class="name-col">' +
+        escapeHtml(ln.name || "") +
+        '</td><td class="num">' +
         ln.quantity +
-        "</td><td class=\"num" +
+        '</td><td class="num' +
         (delta < 0 ? " neg" : "") +
-        "\">" +
+        '">' +
         (delta > 0 ? "+" : "") +
         delta +
-        "</td>";
+        "</td>" +
+        buildBarcodePrintHtml(ln.sku, ln.name || "", ln.barcodes);
       linesBody.appendChild(tr);
     });
     applySearch("dlgMovementLines", document.getElementById("globalSearch").value);

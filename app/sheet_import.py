@@ -4,6 +4,8 @@ from urllib.parse import quote
 
 import requests
 
+from app.nomenclature_barcodes import parse_barcodes_cell
+
 
 def _extract_sheet_id(url: str) -> str:
     marker = "/spreadsheets/d/"
@@ -70,8 +72,8 @@ def import_stocks_from_google_sheet(sheet_url: str) -> tuple[dict[str, int], lis
     return parse_sheet_stocks_csv(response.text)
 
 
-def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, str]], list[str]]:
-    """Парсинг листа номенклатуры: sku, name, image_url (гибкие заголовки)."""
+def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, str, list[str]]], list[str]]:
+    """Парсинг листа номенклатуры: sku, name, image_url, barcodes (гибкие заголовки)."""
     reader = csv.reader(io.StringIO(csv_text))
     rows = [row for row in reader if any(cell.strip() for cell in row)]
     if not rows:
@@ -81,6 +83,7 @@ def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, st
     sku_idx = None
     name_idx = None
     img_idx = None
+    barcodes_idx = None
     for idx, name in enumerate(header):
         if name in {"sku", "артикул", "offer_id", "offersku"}:
             sku_idx = idx
@@ -101,6 +104,19 @@ def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, st
             "picture_url",
         }:
             img_idx = idx
+        if name in {
+            "barcodes",
+            "barcode",
+            "баркод",
+            "баркоды",
+            "штрихкод",
+            "штрихкоды",
+            "ean",
+            "ean13",
+            "upc",
+            "шк",
+        }:
+            barcodes_idx = idx
 
     data_rows = rows[1:]
     if sku_idx is None or name_idx is None:
@@ -109,7 +125,7 @@ def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, st
             "(например: sku и name / артикул и название). Колонка картинки опциональна."
         )
 
-    items: dict[str, tuple[str, str]] = {}
+    items: dict[str, tuple[str, str, list[str]]] = {}
     warnings: list[str] = []
     min_len = max(sku_idx, name_idx) + 1
 
@@ -125,11 +141,14 @@ def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, st
         img = ""
         if img_idx is not None and img_idx < len(row):
             img = row[img_idx].strip()
-        items[sku] = (title, img)
+        barcodes: list[str] = []
+        if barcodes_idx is not None and barcodes_idx < len(row):
+            barcodes = parse_barcodes_cell(row[barcodes_idx])
+        items[sku] = (title, img, barcodes)
     return items, warnings
 
 
-def import_nomenclature_from_google_sheet(sheet_url: str) -> tuple[dict[str, tuple[str, str]], list[str]]:
+def import_nomenclature_from_google_sheet(sheet_url: str) -> tuple[dict[str, tuple[str, str, list[str]]], list[str]]:
     """Тот же spreadsheet URL, лист Google с именем «nomenclature»."""
     csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="nomenclature")
     response = requests.get(csv_url, timeout=30)

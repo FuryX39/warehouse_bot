@@ -23,6 +23,7 @@ from app.repositories import (
 )
 from app.movement_args import parse_movement_edit_args, parse_movement_flags
 from app.movement_ops import execute_movement_from_sheet
+from app.ship_movement import record_fbs_ship_movement
 from app.sheet_import import import_stocks_from_google_sheet
 
 logging.basicConfig(
@@ -795,9 +796,10 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
     total_skus = 0
     source_errors: list[str] = []
 
-    def _do_ship_ready() -> tuple[dict[str, dict[str, int]], list[str]]:
+    def _do_ship_ready() -> tuple[dict[str, dict[str, int]], list[str], list[str]]:
         by_source_out: dict[str, dict[str, int]] = {}
         errs: list[str] = []
+        movement_notes: list[str] = []
         adapters_by_name = {a.name: a for a in coordinator.adapters if a.is_configured()}
         for src in sorted(sources):
             adapter = adapters_by_name.get(src)
@@ -841,6 +843,15 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
                     "reserved_units": int(stats.get("reserved_units", 0)),
                     "affected_skus": int(stats.get("affected_skus", 0)),
                 }
+                if int(stats.get("reserves_shipped", 0)) > 0:
+                    mid = record_fbs_ship_movement(
+                        movement_repo,
+                        source=src,
+                        external_order_ids=list(stats.get("external_order_ids") or []),
+                        qty_by_sku=dict(stats.get("qty_by_sku") or {}),
+                    )
+                    if mid is not None:
+                        movement_notes.append(f"- {src}: #{mid}")
             except Exception as exc:  # noqa: BLE001
                 errs.append(f"{src}: ship failed ({exc})")
                 logger.exception("Ship-by-status failed for source=%s", src)
@@ -849,9 +860,9 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
                     "reserved_units": 0,
                     "affected_skus": 0,
                 }
-        return by_source_out, errs
+        return by_source_out, errs, movement_notes
 
-    by_source, source_errors = await asyncio.to_thread(_do_ship_ready)
+    by_source, source_errors, movement_notes = await asyncio.to_thread(_do_ship_ready)
 
     for src in sorted(by_source.keys()):
         st = by_source[src]
@@ -893,6 +904,11 @@ async def _ship_impl(update: Update, context: ContextTypes.DEFAULT_TYPE, *, sour
         + (
             ("\n\nПредупреждения отгрузки:\n- " + "\n- ".join(source_errors))
             if source_errors
+            else ""
+        )
+        + (
+            ("\n\nЖурнал перемещений (FBS):\n" + "\n".join(movement_notes))
+            if movement_notes
             else ""
         )
         + f"{warn_lines}",

@@ -76,6 +76,7 @@
               autocomplete="off"
             />
           </label>
+          <button type="button" class="btn" id="btnAddNomenclature">Добавить</button>
           <button type="button" class="btn" id="btnImportNomSheet">Импорт из Google</button>
           <span class="muted" id="nomenclatureMeta"></span>
         </div>
@@ -87,6 +88,8 @@
                 <th scope="col">Артикул</th>
                 <th scope="col">Название</th>
                 <th scope="col">Ссылка на картинку</th>
+                <th scope="col">Баркоды</th>
+                <th scope="col">Штрихкод PDF</th>
                 <th scope="col"></th>
               </tr>
             </thead>
@@ -208,8 +211,10 @@
           <thead>
             <tr>
               <th>Артикул</th>
+              <th>Название</th>
               <th class="num">Кол-во</th>
               <th class="num">Изменение</th>
+              <th>Штрихкод PDF</th>
             </tr>
           </thead>
           <tbody id="dlgMovementLines"></tbody>
@@ -252,6 +257,29 @@
       </label>
       <div class="modal-actions">
         <button type="submit" class="btn primary">Выполнить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgNomenclature" class="modal modal-wide">
+    <form id="formNomenclature" class="movement-detail">
+      <h3 id="dlgNomTitle">Номенклатура</h3>
+      <label class="field-block">Артикул
+        <input type="text" id="dlgNomSku" class="input wide" required autocomplete="off" maxlength="128" />
+      </label>
+      <label class="field-block">Название
+        <input type="text" id="dlgNomName" class="input wide" autocomplete="off" maxlength="512" />
+      </label>
+      <label class="field-block">Ссылка на картинку
+        <input type="text" id="dlgNomImageUrl" class="input wide" autocomplete="off" maxlength="2048" placeholder="https://…" />
+      </label>
+      <label class="field-block">Баркоды
+        <textarea id="dlgNomBarcodes" class="input wide" rows="4" placeholder="Один штрихкод на строку или через запятую"></textarea>
+        <span class="muted field-hint">Несколько значений: с новой строки, через запятую или точку с запятой</span>
+      </label>
+      <div class="modal-actions">
+        <button type="submit" class="btn primary">Сохранить</button>
+        <button type="button" class="btn" id="dlgNomCancel">Отмена</button>
       </div>
     </form>
   </dialog>

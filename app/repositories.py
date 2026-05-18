@@ -5,6 +5,7 @@ from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete,
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
+from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 
 # Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
 AVAILABLE_STOCK_SYNC_KEY = "available_stock_push_hash"
@@ -81,6 +82,7 @@ class NomenclatureItem(Base):
     sku: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     image_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    barcodes_json: Mapped[str] = mapped_column(String(4096), nullable=False, default="[]")
 
 
 @dataclass
@@ -100,6 +102,7 @@ class InventoryRepository:
     def init_schema(self) -> None:
         Base.metadata.create_all(self.engine)
         self._ensure_nomenclature_image_url_column()
+        self._ensure_nomenclature_barcodes_column()
 
     def _ensure_nomenclature_image_url_column(self) -> None:
         """SQLite: create_all не добавляет новые колонки к существующей таблице."""
@@ -119,8 +122,27 @@ class InventoryRepository:
         with self.engine.begin() as conn:
             conn.execute(stmt)
 
-    def upsert_nomenclature_items(self, items: dict[str, tuple[str, str]]) -> int:
-        """Массовая запись номенклатуры: sku -> (name, image_url). Пустые SKU пропускаются."""
+    def _ensure_nomenclature_barcodes_column(self) -> None:
+        insp = inspect(self.engine)
+        if "nomenclature" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("nomenclature")}
+        if "barcodes_json" in cols:
+            return
+        dialect = self.engine.dialect.name
+        if dialect == "sqlite":
+            stmt = text("ALTER TABLE nomenclature ADD COLUMN barcodes_json VARCHAR(4096) NOT NULL DEFAULT '[]'")
+        elif dialect == "postgresql":
+            stmt = text(
+                "ALTER TABLE nomenclature ADD COLUMN IF NOT EXISTS barcodes_json VARCHAR(4096) NOT NULL DEFAULT '[]'"
+            )
+        else:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
+
+    def upsert_nomenclature_items(self, items: dict[str, tuple[str, str, list[str]]]) -> int:
+        """Массовая запись номенклатуры: sku -> (name, image_url, barcodes). Пустые SKU пропускаются."""
         if not items:
             return 0
         n = 0
@@ -135,21 +157,60 @@ class InventoryRepository:
                 img = str(pair[1] or "").strip()
                 if len(img) > 2048:
                     img = img[:2048]
+                codes = pair[2] if len(pair) > 2 else []
+                if not isinstance(codes, list):
+                    codes = []
+                bc_json = barcodes_to_json(codes)
+                if len(bc_json) > 4096:
+                    bc_json = barcodes_to_json(barcodes_from_json(bc_json)[:50])
                 row = session.get(NomenclatureItem, sku)
                 if row is None:
-                    session.add(NomenclatureItem(sku=sku, name=title, image_url=img))
+                    session.add(
+                        NomenclatureItem(sku=sku, name=title, image_url=img, barcodes_json=bc_json)
+                    )
                 else:
                     row.name = title
                     row.image_url = img
+                    row.barcodes_json = bc_json
                 n += 1
             session.commit()
         return n
 
-    def list_nomenclature_all(self) -> list[tuple[str, str, str]]:
-        """Все строки номенклатуры: (sku, name, image_url), по sku."""
+    def list_nomenclature_all(self) -> list[tuple[str, str, str, list[str]]]:
+        """Все строки номенклатуры: (sku, name, image_url, barcodes), по sku."""
         with Session(self.engine) as session:
             rows = session.scalars(select(NomenclatureItem).order_by(NomenclatureItem.sku)).all()
-            return [(r.sku, (r.name or "").strip(), (r.image_url or "").strip()) for r in rows]
+            return [
+                (
+                    r.sku,
+                    (r.name or "").strip(),
+                    (r.image_url or "").strip(),
+                    barcodes_from_json(getattr(r, "barcodes_json", None)),
+                )
+                for r in rows
+            ]
+
+    def get_barcodes_for_sku(self, sku: str) -> list[str]:
+        sku = str(sku or "").strip()
+        if not sku:
+            return []
+        with Session(self.engine) as session:
+            row = session.get(NomenclatureItem, sku)
+            if row is None:
+                return []
+            return barcodes_from_json(getattr(row, "barcodes_json", None))
+
+    def get_nomenclature_meta_for_skus(self, skus: list[str]) -> dict[str, dict[str, object]]:
+        """sku -> {name, barcodes} для существующих в справочнике позиций."""
+        if not skus:
+            return {}
+        out: dict[str, dict[str, object]] = {}
+        with Session(self.engine) as session:
+            rows_map = self._load_nomenclature_rows(session, list(skus))
+            for sku, triple in rows_map.items():
+                name, _, barcodes = triple
+                out[sku] = {"name": name, "barcodes": barcodes}
+        return out
 
     def delete_nomenclature_by_sku(self, sku: str) -> bool:
         """Удаляет строку справочника nomenclature по артикулу. Остатки и резервы не трогает."""
@@ -173,17 +234,21 @@ class InventoryRepository:
             session.commit()
             return n
 
-    def _load_nomenclature_rows(self, session: Session, skus: list[str]) -> dict[str, tuple[str, str]]:
-        """Только существующие в БД строки: sku -> (name, image_url), уже strip()."""
+    def _load_nomenclature_rows(self, session: Session, skus: list[str]) -> dict[str, tuple[str, str, list[str]]]:
+        """Только существующие в БД строки: sku -> (name, image_url, barcodes), уже strip()."""
         if not skus:
             return {}
-        out: dict[str, tuple[str, str]] = {}
+        out: dict[str, tuple[str, str, list[str]]] = {}
         step = 800
         for i in range(0, len(skus), step):
             chunk = list(skus[i : i + step])
             rows = session.scalars(select(NomenclatureItem).where(NomenclatureItem.sku.in_(chunk))).all()
             for row in rows:
-                out[row.sku] = ((row.name or "").strip(), (row.image_url or "").strip())
+                out[row.sku] = (
+                    (row.name or "").strip(),
+                    (row.image_url or "").strip(),
+                    barcodes_from_json(getattr(row, "barcodes_json", None)),
+                )
         return out
 
     def get_sync_int(self, key: str) -> int | None:
@@ -505,7 +570,7 @@ class InventoryRepository:
                     disp_name = MISSING_NOMENCLATURE_LABEL
                     img = ""
                 else:
-                    raw_n, raw_i = meta
+                    raw_n, raw_i, _ = meta
                     disp_name = MISSING_NOMENCLATURE_LABEL if raw_n == "" else raw_n
                     img = raw_i
                 snapshots.append(
@@ -609,7 +674,14 @@ class InventoryRepository:
         Это предотвращает повторное создание этих резервов (uq_order на source+external_order_id).
         """
         if not external_ids:
-            return {"affected_skus": 0, "reserved_units": 0, "reserves_shipped": 0, "stocks_updated": 0}
+            return {
+                "affected_skus": 0,
+                "reserved_units": 0,
+                "reserves_shipped": 0,
+                "stocks_updated": 0,
+                "external_order_ids": [],
+                "qty_by_sku": {},
+            }
 
         with Session(self.engine) as session:
             rows = session.scalars(
@@ -646,4 +718,6 @@ class InventoryRepository:
                 "reserved_units": reserved_units,
                 "reserves_shipped": len(rows),
                 "stocks_updated": stocks_updated,
+                "external_order_ids": [r.external_order_id for r in rows],
+                "qty_by_sku": dict(reserved_by_sku),
             }

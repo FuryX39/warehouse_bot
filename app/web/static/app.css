@@ -139,6 +139,18 @@ code { background: #eef1f6; padding: 0.1rem 0.35rem; border-radius: 4px; font-si
 }
 .field-block .input.wide { width: 100%; min-width: 0; padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 6px; }
 .field-block textarea.input.wide { resize: vertical; font-family: inherit; }
+.field-hint { display: block; margin-top: 0.25rem; font-size: 0.8rem; }
 .movement-edit-block {
   margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
 }
+.barcodes-col { max-width: 14rem; font-size: 0.85rem; word-break: break-word; }
+.barcode-print-col { white-space: nowrap; }
+.barcode-print {
+  display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
+}
+.barcode-print .barcode-select {
+  max-width: 10rem; padding: 0.25rem 0.35rem; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.btn-barcode-pdf { font-size: 0.85rem; padding: 0.3rem 0.55rem; }
+.input.readonly, .input[readonly] { background: #f0f2f6; color: var(--muted); cursor: default; }

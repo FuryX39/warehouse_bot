@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -36,6 +36,7 @@ from app.movement_ops import execute_movement_from_sheet
 from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
+from app.barcode_label_pdf import generate_barcode_label_pdf
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
 
 _WEB_ROOT = Path(__file__).resolve().parent
@@ -178,6 +179,7 @@ def create_dashboard_app(
     class NomenclatureRowIn(BaseModel):
         name: str = ""
         image_url: str = ""
+        barcodes: list[str] = Field(default_factory=list)
 
     class NomenclatureUpsertBody(BaseModel):
         items: dict[str, NomenclatureRowIn] = Field(default_factory=dict)
@@ -191,24 +193,58 @@ def create_dashboard_app(
                     "sku": sku,
                     "name": name if name else "",
                     "image_url": img,
+                    "barcodes": barcodes,
                 }
-                for sku, name, img in rows
+                for sku, name, img, barcodes in rows
             ],
         }
 
     @app.post("/api/nomenclature", dependencies=[Depends(require_login)])
     async def api_nomenclature_upsert(body: NomenclatureUpsertBody) -> dict:
-        """Массовая запись номенклатуры (артикул → название и ссылка на картинку)."""
+        """Массовая запись номенклатуры (артикул → название, картинка, баркоды)."""
         if len(body.items) > 20000:
             raise HTTPException(status_code=400, detail="Не более 20000 позиций за один запрос")
-        payload: dict[str, tuple[str, str]] = {}
+        payload: dict[str, tuple[str, str, list[str]]] = {}
         for sku_raw, row in body.items.items():
             sku = str(sku_raw).strip()
             if not sku:
                 continue
-            payload[sku] = ((row.name or "").strip(), (row.image_url or "").strip())
+            codes = [str(b).strip() for b in (row.barcodes or []) if str(b).strip()]
+            payload[sku] = ((row.name or "").strip(), (row.image_url or "").strip(), codes)
         n = inventory_repo.upsert_nomenclature_items(payload)
         return {"upserted": n}
+
+    @app.get("/api/barcode-label", dependencies=[Depends(require_login)])
+    async def api_barcode_label(
+        sku: Annotated[str, Query()],
+        barcode: Annotated[str, Query()],
+    ) -> Response:
+        """PDF-этикетка Code 128 для скачивания (без отправки на печать)."""
+        sku_n = str(sku or "").strip()
+        bc = str(barcode or "").strip()
+        if not sku_n or not bc:
+            raise HTTPException(status_code=400, detail="Укажите sku и barcode")
+        allowed = inventory_repo.get_barcodes_for_sku(sku_n)
+        if bc not in allowed:
+            raise HTTPException(status_code=404, detail="Штрихкод не привязан к этому артикулу")
+        meta = inventory_repo.get_nomenclature_meta_for_skus([sku_n]).get(sku_n, {})
+        product_name = str(meta.get("name") or "")
+        try:
+            pdf_bytes = await asyncio.to_thread(
+                generate_barcode_label_pdf,
+                bc,
+                sku=sku_n,
+                product_name=product_name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        safe_bc = "".join(c if c.isalnum() or c in "-_" else "_" for c in bc)[:48]
+        filename = f"barcode_{sku_n}_{safe_bc}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.get("/api/orders", dependencies=[Depends(require_login)])
     async def api_orders(
@@ -404,6 +440,20 @@ def create_dashboard_app(
         detail = movement_repo.get_movement(movement_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="Перемещение не найдено")
+        line_skus = [ln.sku for ln in detail.lines]
+        nom_meta = inventory_repo.get_nomenclature_meta_for_skus(line_skus)
+        lines_out = []
+        for ln in detail.lines:
+            meta = nom_meta.get(ln.sku, {})
+            lines_out.append(
+                {
+                    "sku": ln.sku,
+                    "name": str(meta.get("name") or ""),
+                    "barcodes": list(meta.get("barcodes") or []),
+                    "quantity": ln.quantity,
+                    "delta": ln.delta,
+                }
+            )
         return {
             "id": detail.id,
             "created_at_ts": detail.created_at_ts,
@@ -417,10 +467,7 @@ def create_dashboard_app(
             "sku_count": detail.sku_count,
             "total_quantity": detail.total_quantity,
             "warnings": detail.warnings,
-            "lines": [
-                {"sku": ln.sku, "quantity": ln.quantity, "delta": ln.delta}
-                for ln in detail.lines
-            ],
+            "lines": lines_out,
         }
 
     @app.patch("/api/movements/{movement_id}", dependencies=[Depends(require_login)])
@@ -515,8 +562,12 @@ def create_dashboard_app(
             raise HTTPException(status_code=502, detail=f"Ошибка перемещения: {err}")
         return result
 
-    @app.put("/api/stock/{sku}", dependencies=[Depends(require_login)])
-    async def api_put_stock(sku: str, stock: int = Form()) -> dict:
+    @app.put("/api/stock", dependencies=[Depends(require_login)])
+    async def api_put_stock(
+        sku: Annotated[str, Form()],
+        stock: int = Form(),
+    ) -> dict:
+        """Задать остаток (как /set_stock). Номенклатура не требуется."""
         sku_n = sku.strip()
         if not sku_n:
             raise HTTPException(status_code=400, detail="Пустой SKU")
@@ -525,8 +576,8 @@ def create_dashboard_app(
         inventory_repo.upsert_stock(sku_n, int(stock))
         return {"sku": sku_n, "stock": int(stock)}
 
-    @app.delete("/api/stock/{sku}", dependencies=[Depends(require_login)])
-    async def api_delete_stock(sku: str) -> dict:
+    @app.delete("/api/stock", dependencies=[Depends(require_login)])
+    async def api_delete_stock(sku: Annotated[str, Query()]) -> dict:
         sku_n = sku.strip()
         if not sku_n:
             raise HTTPException(status_code=400, detail="Пустой SKU")
@@ -534,8 +585,8 @@ def create_dashboard_app(
             raise HTTPException(status_code=404, detail="Остаток для этого артикула не найден")
         return {"sku": sku_n, "deleted": True}
 
-    @app.delete("/api/nomenclature/{sku}", dependencies=[Depends(require_login)])
-    async def api_delete_nomenclature(sku: str) -> dict:
+    @app.delete("/api/nomenclature", dependencies=[Depends(require_login)])
+    async def api_delete_nomenclature(sku: Annotated[str, Query()]) -> dict:
         sku_n = sku.strip()
         if not sku_n:
             raise HTTPException(status_code=400, detail="Пустой SKU")
