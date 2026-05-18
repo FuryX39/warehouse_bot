@@ -37,6 +37,7 @@ from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.barcode_label_pdf import generate_barcode_label_pdf
+from app.nomenclature_barcodes import parse_barcodes_cell
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
 
 _WEB_ROOT = Path(__file__).resolve().parent
@@ -213,6 +214,29 @@ def create_dashboard_app(
             payload[sku] = ((row.name or "").strip(), (row.image_url or "").strip(), codes)
         n = inventory_repo.upsert_nomenclature_items(payload)
         return {"upserted": n}
+
+    @app.put("/api/nomenclature", dependencies=[Depends(require_login)])
+    async def api_nomenclature_put(
+        sku: Annotated[str, Form()],
+        name: str = Form(default=""),
+        image_url: str = Form(default=""),
+        barcodes: str = Form(default=""),
+    ) -> dict:
+        """Сохранение одной позиции номенклатуры из веб-формы (application/x-www-form-urlencoded)."""
+        sku_n = str(sku or "").strip()
+        if not sku_n:
+            raise HTTPException(status_code=400, detail="Пустой артикул")
+        if len(sku_n) > 128:
+            raise HTTPException(status_code=400, detail="Артикул не длиннее 128 символов")
+        title = str(name or "").strip()
+        if len(title) > 512:
+            raise HTTPException(status_code=400, detail="Название не длиннее 512 символов")
+        img = str(image_url or "").strip()
+        if len(img) > 2048:
+            raise HTTPException(status_code=400, detail="Ссылка на картинку не длиннее 2048 символов")
+        codes = parse_barcodes_cell(str(barcodes or ""))
+        n = inventory_repo.upsert_nomenclature_items({sku_n: (title, img, codes)})
+        return {"upserted": n, "sku": sku_n}
 
     @app.get("/api/barcode-label", dependencies=[Depends(require_login)])
     async def api_barcode_label(

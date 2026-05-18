@@ -441,13 +441,15 @@
       alert("Ссылка на картинку не длиннее 2048 символов");
       return;
     }
-    var barcodes = parseBarcodesInput(dlgNomBarcodes.value);
-    var payload = {};
-    payload[sku] = { name: name, image_url: imageUrl, barcodes: barcodes };
     api("/api/nomenclature", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: payload }),
+      method: "PUT",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({
+        sku: sku,
+        name: name,
+        image_url: imageUrl,
+        barcodes: dlgNomBarcodes.value,
+      }).toString(),
     })
       .then(function () {
         dlgNomenclature.close();
