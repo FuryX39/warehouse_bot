@@ -4,7 +4,7 @@ from urllib.parse import quote
 
 import requests
 
-from app.nomenclature_barcodes import parse_barcodes_cell
+from app.nomenclature_barcodes import parse_barcodes_sheet_cell
 
 
 def _extract_sheet_id(url: str) -> str:
@@ -84,7 +84,10 @@ def import_stocks_from_google_sheet(sheet_url: str) -> tuple[dict[str, int], lis
 
 
 def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, str, list[str]]], list[str]]:
-    """Парсинг листа номенклатуры: sku, name, image_url, barcodes (гибкие заголовки)."""
+    """
+    Парсинг листа номенклатуры: sku, name, опционально image_url и штрихкоды.
+    Несколько ШК в ячейке — через запятую без пробелов, например: 460123,460456,460789.
+    """
     reader = csv.reader(io.StringIO(csv_text))
     rows = [row for row in reader if any(cell.strip() for cell in row)]
     if not rows:
@@ -133,7 +136,8 @@ def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, st
     if sku_idx is None or name_idx is None:
         raise ValueError(
             "В шапке листа «nomenclature» не найдены колонки артикула и названия "
-            "(например: sku и name / артикул и название). Колонка картинки опциональна."
+            "(например: sku и name / артикул и название). "
+            "Опционально: image_url / фото, barcodes / шк / штрихкод (несколько ШК через запятую)."
         )
 
     items: dict[str, tuple[str, str, list[str]]] = {}
@@ -154,7 +158,9 @@ def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, st
             img = row[img_idx].strip()
         barcodes: list[str] = []
         if barcodes_idx is not None and barcodes_idx < len(row):
-            barcodes = parse_barcodes_cell(row[barcodes_idx])
+            # Ячейка с «4601,4602» в CSV без кавычек может разбиться на несколько колонок — склеиваем хвост строки
+            tail = row[barcodes_idx:]
+            barcodes = parse_barcodes_sheet_cell(",".join(cell.strip() for cell in tail if cell is not None))
         items[sku] = (title, img, barcodes)
     return items, warnings
 

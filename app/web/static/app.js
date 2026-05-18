@@ -559,6 +559,7 @@
         else {
           parts.push("Записано SKU: " + (r.updated != null ? r.updated : "—"));
           if (r.sku_in_sheet != null) parts.push("в листе: " + r.sku_in_sheet);
+          if (r.with_barcodes != null) parts.push("со штрихкодами: " + r.with_barcodes);
         }
         if (r.warnings && r.warnings.length) {
           var wn = r.warnings.slice(0, 3).join("; ");

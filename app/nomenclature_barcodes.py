@@ -8,6 +8,23 @@ import re
 _SPLIT_RE = re.compile(r"[,;\n|]+")
 
 
+def parse_barcodes_sheet_cell(raw: str) -> list[str]:
+    """ШК из ячейки листа nomenclature: несколько значений через запятую (без пробелов между кодами)."""
+    if not raw or not str(raw).strip():
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in str(raw).split(","):
+        code = part.strip()
+        if not code or code in seen:
+            continue
+        if len(code) > 128:
+            code = code[:128]
+        seen.add(code)
+        out.append(code)
+    return out
+
+
 def parse_barcodes_cell(raw: str) -> list[str]:
     """Несколько ШК в одной ячейке: через запятую, точку с запятой, перевод строки."""
     if not raw or not str(raw).strip():

@@ -17,41 +17,27 @@ from app.pdf_fonts import get_pdf_label_fonts
 # Термоэтикетка 40×30 мм
 LABEL_WIDTH_MM = 40.0
 LABEL_HEIGHT_MM = 30.0
-BARCODE_SIDE_MARGIN_MM = 0.4
+BARCODE_SIDE_MARGIN_MM = 0.6
 TEXT_SIDE_MARGIN_MM = 1.2
 NAME_MAX_LINES = 3
 
 
-def _writer_options(*, module_width: float, module_height: float = 10.0) -> dict:
-    return {
-        "module_width": module_width,
-        "module_height": module_height,
-        "quiet_zone": 0.35,
+def _render_code128_image(barcode_value: str) -> Image.Image:
+    """Полосы Code 128 без подписи под полосами."""
+    opts = {
+        "module_width": 0.28,
+        "module_height": 9.0,
+        "quiet_zone": 1.2,
         "font_size": 0,
         "text_distance": 0,
         "write_text": False,
     }
-
-
-def _render_code128_image(barcode_value: str, *, module_width: float) -> Image.Image:
-    """Полосы Code 128; module_width задаёт реальную ширину (через write options)."""
-    opts = _writer_options(module_width=module_width)
     writer = ImageWriter()
     writer.set_options(opts)
     buf = io.BytesIO()
     Code128(barcode_value, writer=writer).write(buf, options=opts)
     buf.seek(0)
-    return _trim_barcode_whitespace(Image.open(buf).convert("RGB"))
-
-
-def _trim_barcode_whitespace(img: Image.Image) -> Image.Image:
-    """Убирает белые поля — иначе полосы визуально узкие при растягивании всего PNG."""
-    gray = img.convert("L")
-    mask = gray.point(lambda p: 255 if p < 235 else 0)
-    bbox = mask.getbbox()
-    if not bbox:
-        return img
-    return img.crop(bbox)
+    return Image.open(buf).convert("RGB")
 
 
 def _truncate_to_width(text: str, font_name: str, font_size: float, max_width: float) -> str:
@@ -126,46 +112,6 @@ def _wrap_name_lines(
     return lines[:max_lines]
 
 
-def _fit_barcode_dims(
-    barcode_value: str,
-    max_w_pt: float,
-    max_h_pt: float,
-) -> tuple[Image.Image, float, float]:
-    """
-    Подбирает толщину модуля: обрезанный штрихкод растягивается на max_w_pt по ширине.
-    """
-    best: tuple[Image.Image, float, float] | None = None
-    for mw_int in range(18, 72, 1):
-        mw = mw_int / 100.0
-        img = _render_code128_image(barcode_value, module_width=mw)
-        if img.width <= 0 or img.height <= 0:
-            continue
-        draw_w = max_w_pt
-        draw_h = draw_w * img.height / img.width
-        if draw_h <= max_h_pt:
-            # Берём максимально толстые полосы, которые ещё влезают по высоте при полной ширине
-            best = (img, draw_w, draw_h)
-
-    if best is not None:
-        img, draw_w, draw_h = best
-        px_w = max(1, int(draw_w * 2))
-        px_h = max(1, int(draw_h * 2))
-        img = img.resize((px_w, px_h), Image.Resampling.NEAREST)
-        return img, draw_w, draw_h
-
-    # Даже минимальный модуль не влезает по высоте при полной ширине — ужимаем по высоте
-    img = _render_code128_image(barcode_value, module_width=0.18)
-    draw_h = max_h_pt
-    draw_w = draw_h * img.width / img.height
-    if draw_w > max_w_pt:
-        draw_w = max_w_pt
-        draw_h = draw_w * img.height / img.width
-    px_w = max(1, int(draw_w * 2))
-    px_h = max(1, int(draw_h * 2))
-    img = img.resize((px_w, px_h), Image.Resampling.NEAREST)
-    return img, draw_w, draw_h
-
-
 def _draw_centered_lines(
     c: canvas.Canvas,
     lines: list[str],
@@ -176,7 +122,6 @@ def _draw_centered_lines(
     font_size: float,
     line_step: float,
 ) -> float:
-    """Рисует строки сверху вниз; возвращает занятую высоту (pt)."""
     if not lines:
         return 0.0
     c.setFont(font_name, font_size)
@@ -193,7 +138,7 @@ def generate_barcode_label_pdf(
     width_mm: float = LABEL_WIDTH_MM,
     height_mm: float = LABEL_HEIGHT_MM,
 ) -> bytes:
-    """Этикетка 40×30 мм: название (до 3 строк), штрихкод, ШК, артикул."""
+    """Этикетка 40×30 мм: название, штрихкод, ШК, артикул."""
     value = str(barcode_value or "").strip()
     if not value:
         raise ValueError("Пустое значение штрихкода")
@@ -206,27 +151,27 @@ def generate_barcode_label_pdf(
     pdf_buf = io.BytesIO()
     c = canvas.Canvas(pdf_buf, pagesize=(page_w, page_h))
 
-    margin_v = 0.8 * mm
+    margin_v = 1.2 * mm
     text_w = page_w - 2 * TEXT_SIDE_MARGIN_MM * mm
     barcode_w = page_w - 2 * BARCODE_SIDE_MARGIN_MM * mm
     cx = page_w / 2
 
     font, font_bold = get_pdf_label_fonts()
-    name_pt = 5.5
-    line_pt = 5.5
-    name_line_step = 2.0 * mm
-    footer_line_step = 2.0 * mm
+    name_pt = 6.5
+    line_pt = 6.0
+    name_line_step = 2.15 * mm
+    footer_line_step = 2.4 * mm
 
-    # Низ: артикул и цифры ШК (это текст, не полосы)
+    # Низ: артикул и ШК
     c.setFont(font, line_pt)
     y_art = margin_v
     y_bc = margin_v + footer_line_step
-    footer_top = y_bc + line_pt * 0.85
+    footer_top = y_bc + line_pt * 0.9
     if sku_s:
         c.drawCentredString(cx, y_art, _truncate_to_width(f"Арт. {sku_s}", font, line_pt, text_w))
     c.drawCentredString(cx, y_bc, _truncate_to_width(f"ШК {value}", font, line_pt, text_w))
 
-    zone_bottom = footer_top + 0.4 * mm
+    zone_bottom = footer_top + 0.6 * mm
     zone_top = page_h - margin_v
 
     # Верх: название (до 3 строк)
@@ -236,21 +181,34 @@ def generate_barcode_label_pdf(
             c,
             name_lines,
             cx=cx,
-            y_top=zone_top - name_pt * 0.15,
+            y_top=zone_top - name_pt * 0.2,
             font_name=font_bold,
             font_size=name_pt,
             line_step=name_line_step,
         )
-        zone_top = zone_top - name_block - 0.35 * mm
+        zone_top = zone_top - name_block - 0.5 * mm
 
-    # Центр: полосы Code 128 на всю ширину
+    # Центр: штрихкод (пропорционально, по центру зоны)
+    img = _render_code128_image(value)
+    img_w_px, img_h_px = img.size
+    max_w = barcode_w
     max_h = zone_top - zone_bottom
-    if max_h < 2.0 * mm:
-        max_h = 2.0 * mm
-    img, draw_w, draw_h = _fit_barcode_dims(value, barcode_w, max_h)
+    if max_h < 3 * mm:
+        max_h = 3 * mm
+    scale = min(max_w / img_w_px, max_h / img_h_px)
+    draw_w = img_w_px * scale
+    draw_h = img_h_px * scale
     x = (page_w - draw_w) / 2
     img_y = zone_bottom + (max_h - draw_h) / 2
-    c.drawImage(ImageReader(img), x, img_y, width=draw_w, height=draw_h, preserveAspectRatio=False, mask="auto")
+    c.drawImage(
+        ImageReader(img),
+        x,
+        img_y,
+        width=draw_w,
+        height=draw_h,
+        preserveAspectRatio=True,
+        mask="auto",
+    )
 
     c.showPage()
     c.save()

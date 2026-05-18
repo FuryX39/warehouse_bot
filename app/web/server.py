@@ -376,7 +376,7 @@ def create_dashboard_app(
     ) -> dict:
         """
         Импорт номенклатуры из Google Sheets: тот же spreadsheet, что в .env (или url в форме),
-        лист с именем «nomenclature» (колонки: sku, name, опционально image_url / фото и т.п.).
+        лист «nomenclature»: sku, name, опционально image_url, barcodes (ШК через запятую: 123,456).
         """
         raw = (url or "").strip()
         sheet_url = raw or (settings.default_stocks_sheet_url or "").strip()
@@ -396,9 +396,11 @@ def create_dashboard_app(
                     "message": "Импорт завершён: в таблице не найдено валидных строк.",
                 }
             updated = inventory_repo.upsert_nomenclature_items(items)
+            with_barcodes = sum(1 for _sku, row in items.items() if row[2])
             return {
                 "updated": updated,
                 "sku_in_sheet": len(items),
+                "with_barcodes": with_barcodes,
                 "warnings": warnings[:40],
                 "warnings_more": max(0, len(warnings) - 40),
             }
