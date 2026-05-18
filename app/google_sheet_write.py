@@ -16,10 +16,15 @@ _SCOPES = (
 # Лист-шаблон: шапка + одна строка с форматированием и формулами (Картинка, название).
 DEFAULT_FBS_TEMPLATE_SHEET = "FBSTemplate"
 _FBS_DATA_COLS = 5
-# Колонка E (0-based: 4) — «номер отправления»
 _FBS_POSTING_COL_INDEX = 4
-_FBS_POSTING_NORMAL_FONT_PT = 10
+_FBS_POSTING_NORMAL_FONT_PT = 12
 _FBS_POSTING_HIGHLIGHT_FONT_PT = 14
+_UPDATE_CELLS_FIELDS = (
+    "userEnteredValue,"
+    "textFormatRuns.startIndex,"
+    "textFormatRuns.format.bold,"
+    "textFormatRuns.format.fontSize"
+)
 
 
 def ozon_posting_highlight_range(posting_number: str) -> tuple[int, int]:
@@ -80,7 +85,7 @@ def _fill_posting_column_highlighted(worksheet, posting_numbers: Sequence[str]) 
                             "endColumnIndex": _FBS_POSTING_COL_INDEX + 1,
                         },
                         "rows": rows,
-                        "fields": "userEnteredValue,textFormatRuns",
+                        "fields": _UPDATE_CELLS_FIELDS,
                     }
                 }
             ]
