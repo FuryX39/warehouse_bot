@@ -24,6 +24,17 @@ def build_google_sheet_csv_url(url: str, *, sheet_name: str = "stocks") -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={enc}"
 
 
+def _google_sheet_csv_text(response: requests.Response) -> str:
+    """CSV из Google Sheets в UTF-8 (без ошибочной перекодировки requests)."""
+    raw = response.content
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1251")
+
+
 def parse_sheet_stocks_csv(csv_text: str) -> tuple[dict[str, int], list[str]]:
     reader = csv.reader(io.StringIO(csv_text))
     rows = [row for row in reader if any(cell.strip() for cell in row)]
@@ -69,7 +80,7 @@ def import_stocks_from_google_sheet(sheet_url: str) -> tuple[dict[str, int], lis
     csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="stocks")
     response = requests.get(csv_url, timeout=30)
     response.raise_for_status()
-    return parse_sheet_stocks_csv(response.text)
+    return parse_sheet_stocks_csv(_google_sheet_csv_text(response))
 
 
 def parse_sheet_nomenclature_csv(csv_text: str) -> tuple[dict[str, tuple[str, str, list[str]]], list[str]]:
@@ -153,7 +164,7 @@ def import_nomenclature_from_google_sheet(sheet_url: str) -> tuple[dict[str, tup
     csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="nomenclature")
     response = requests.get(csv_url, timeout=30)
     response.raise_for_status()
-    return parse_sheet_nomenclature_csv(response.text)
+    return parse_sheet_nomenclature_csv(_google_sheet_csv_text(response))
 
 
 def parse_sheet_movement_csv(csv_text: str) -> tuple[dict[str, int], list[str]]:
@@ -218,4 +229,4 @@ def import_movement_from_google_sheet(sheet_url: str) -> tuple[dict[str, int], l
     csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="movement")
     response = requests.get(csv_url, timeout=30)
     response.raise_for_status()
-    return parse_sheet_movement_csv(response.text)
+    return parse_sheet_movement_csv(_google_sheet_csv_text(response))

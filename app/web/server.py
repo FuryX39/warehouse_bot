@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -43,6 +43,10 @@ from app.sheet_import import import_nomenclature_from_google_sheet, import_stock
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
 _SESSION_KEY_PREFIX = "warehouse_web_session_signing_v1:"
+
+
+class Utf8JSONResponse(JSONResponse):
+    media_type = "application/json; charset=utf-8"
 
 
 def _session_signing_key(dashboard_secret: str) -> str:
@@ -95,7 +99,7 @@ def create_dashboard_app(
             "Задайте длинную строку в .env и перезапустите run_web.py"
         )
 
-    app = FastAPI(title="Warehouse dashboard", version="1.0")
+    app = FastAPI(title="Warehouse dashboard", version="1.0", default_response_class=Utf8JSONResponse)
     app.add_middleware(
         SessionMiddleware,
         secret_key=_session_signing_key(dashboard_secret),

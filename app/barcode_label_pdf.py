@@ -11,9 +11,14 @@ from reportlab.lib.utils import ImageReader
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
+from app.pdf_fonts import get_pdf_label_fonts
+
 # Термоэтикетка 40×30 мм
 LABEL_WIDTH_MM = 40.0
 LABEL_HEIGHT_MM = 30.0
+# Боковые поля только для полос штрихкода (текст — с чуть большим отступом)
+BARCODE_SIDE_MARGIN_MM = 0.6
+TEXT_SIDE_MARGIN_MM = 1.2
 
 
 def _render_code128_image(barcode_value: str) -> Image.Image:
@@ -21,9 +26,9 @@ def _render_code128_image(barcode_value: str) -> Image.Image:
     writer = ImageWriter()
     writer.set_options(
         {
-            "module_width": 0.22,
+            "module_width": 0.2,
             "module_height": 9.0,
-            "quiet_zone": 1.2,
+            "quiet_zone": 0.6,
             "font_size": 0,
             "text_distance": 0,
         }
@@ -68,12 +73,12 @@ def generate_barcode_label_pdf(
     pdf_buf = io.BytesIO()
     c = canvas.Canvas(pdf_buf, pagesize=(page_w, page_h))
 
-    margin = 1.5 * mm
-    content_w = page_w - 2 * margin
+    margin_v = 1.2 * mm
+    text_w = page_w - 2 * TEXT_SIDE_MARGIN_MM * mm
+    barcode_w = page_w - 2 * BARCODE_SIDE_MARGIN_MM * mm
     cx = page_w / 2
 
-    font = "Helvetica"
-    font_bold = "Helvetica-Bold"
+    font, font_bold = get_pdf_label_fonts()
     name_pt = 6.5
     line_pt = 6.0
     line_step = 2.4 * mm
@@ -82,29 +87,33 @@ def generate_barcode_label_pdf(
 
     # Низ: артикул и ШК
     c.setFont(font, line_pt)
-    y_art = margin
-    y_bc = margin + line_step
+    y_art = margin_v
+    y_bc = margin_v + line_step
     if sku_s:
-        c.drawCentredString(cx, y_art, _truncate_to_width(c, f"Арт. {sku_s}", font, line_pt, content_w))
-    c.drawCentredString(cx, y_bc, _truncate_to_width(c, f"ШК {value}", font, line_pt, content_w))
+        c.drawCentredString(cx, y_art, _truncate_to_width(c, f"Арт. {sku_s}", font, line_pt, text_w))
+    c.drawCentredString(cx, y_bc, _truncate_to_width(c, f"ШК {value}", font, line_pt, text_w))
 
     # Верх: название
-    zone_bottom = margin + footer_block
-    zone_top = page_h - margin
+    zone_bottom = margin_v + footer_block
+    zone_top = page_h - margin_v
     if name_s:
         c.setFont(font_bold, name_pt)
         y_name = zone_top - name_pt * 0.35
-        c.drawCentredString(cx, y_name, _truncate_to_width(c, name_s, font_bold, name_pt, content_w))
+        c.drawCentredString(cx, y_name, _truncate_to_width(c, name_s, font_bold, name_pt, text_w))
         zone_top = zone_top - name_block
 
-    # Центр: изображение штрихкода
+    # Центр: штрихкод на почти всю ширину этикетки
     img = _render_code128_image(value)
     img_w_px, img_h_px = img.size
-    max_w = content_w
+    max_w = barcode_w
     max_h = zone_top - zone_bottom
     if max_h < 3 * mm:
         max_h = 3 * mm
-    scale = min(max_w / img_w_px, max_h / img_h_px)
+    scale_w = max_w / img_w_px
+    scale_h = max_h / img_h_px
+    scale = scale_w
+    if img_h_px * scale > max_h:
+        scale = scale_h
     draw_w = img_w_px * scale
     draw_h = img_h_px * scale
     x = (page_w - draw_w) / 2

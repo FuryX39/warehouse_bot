@@ -357,7 +357,7 @@ async def orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 _format_order_ts(lst),
             ]
         )
-    csv_bytes = buf.getvalue().encode("utf-8")
+    csv_bytes = buf.getvalue().encode("utf-8-sig")
     fname = f"orders_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     await update.message.reply_document(
         document=InputFile(io.BytesIO(csv_bytes), filename=fname),
@@ -589,10 +589,10 @@ async def export_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
     filename = f"stocks_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    csv_bytes = output.getvalue().encode("utf-8")
+    csv_bytes = output.getvalue().encode("utf-8-sig")
     await update.message.reply_document(
         document=InputFile(io.BytesIO(csv_bytes), filename=filename),
-        caption=f"Экспорт завершен. Строк выгружено: {len(snapshots)}",
+        caption=f"Экспорт завершен. Строк выгружено: {len(snapshots)}. Открывайте в Excel как UTF-8.",
     )
 
 
