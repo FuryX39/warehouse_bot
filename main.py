@@ -17,6 +17,12 @@ from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.bootstrap import create_inventory_stack
 from app.ozon_analytics import build_ozon_analytics_csv
+from app.ozon_fbs_labels import (
+    build_labels_zip,
+    fetch_awaiting_shipment_labels,
+    format_postings_summary,
+    get_configured_ozon_adapter,
+)
 from app.repositories import (
     AVAILABLE_STOCK_SYNC_KEY,
     available_stock_map_hash,
@@ -124,6 +130,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/movement_edit ID [--name ...] [--comment ...] - изменить название и/или комментарий\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
+        "/ozon_labels - FBS awaiting_deliver: список по артикулу, лист в Google, PDF-этикетки\n"
         "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
         "/ship_ozon - отгрузка только Ozon (не new)\n"
         "/ship_yandex - отгрузка только Yandex Market (все added, кроме STARTED)\n"
@@ -576,6 +583,80 @@ async def ozon_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправления Ozon в статусе awaiting_deliver и этикетки FBS (PDF)."""
+    if update.message is None:
+        return
+    adapter = get_configured_ozon_adapter(coordinator)
+    if adapter is None:
+        await _reply_text_resilient(
+            update.message,
+            "Задайте в .env OZON_CLIENT_ID и OZON_API_KEY.",
+        )
+        return
+
+    await _reply_text_resilient(
+        update.message,
+        "Загрузка отправлений Ozon (статус «ожидает отгрузки», awaiting_deliver)…",
+    )
+    try:
+        bundle = await asyncio.to_thread(
+            fetch_awaiting_shipment_labels,
+            adapter,
+            fbs_list_sheet_url=settings.fbs_list_sheet_url,
+            google_service_account_file=settings.google_service_account_file,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Ozon labels failed")
+        await _reply_text_resilient(update.message, f"Ошибка этикеток Ozon: {exc}")
+        return
+
+    if not bundle.postings:
+        await _reply_text_resilient(
+            update.message,
+            "Нет отправлений в статусе «ожидает отгрузки» (awaiting_deliver).",
+        )
+        return
+
+    summary = format_postings_summary(list_rows=bundle.list_rows)
+    header = f"Отправлений: {len(bundle.postings)}, строк в списке: {len(bundle.list_rows)}."
+    if bundle.sheet_url:
+        header += f"\n\nGoogle Таблица — лист «{bundle.sheet_title}»:\n{bundle.sheet_url}"
+    if bundle.warnings:
+        header += "\n\nПредупреждения:\n- " + "\n- ".join(bundle.warnings[:15])
+        if len(bundle.warnings) > 15:
+            header += f"\n… ещё {len(bundle.warnings) - 15}"
+    if len(header) + len(summary) + 2 <= 4000:
+        await _reply_text_resilient(update.message, f"{header}\n\n{summary}")
+    else:
+        await _reply_text_resilient(update.message, header)
+        if summary:
+            await _reply_text_resilient(update.message, summary[:4000])
+
+    if not bundle.label_files:
+        await _reply_text_resilient(
+            update.message,
+            "PDF-этикетки не получены. Проверьте статус отправлений в ЛК Ozon "
+            "(нужен awaiting_deliver после сборки).",
+        )
+        return
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if len(bundle.label_files) == 1:
+        name, pdf = bundle.label_files[0]
+        await update.message.reply_document(
+            document=InputFile(io.BytesIO(pdf), filename=name),
+            caption=f"Этикетки Ozon ({len(bundle.postings)} отправл.)",
+        )
+        return
+
+    zip_bytes = build_labels_zip(bundle.label_files)
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(zip_bytes), filename=f"ozon_labels_{ts}.zip"),
+        caption=f"Этикетки Ozon: {len(bundle.label_files)} PDF, {len(bundle.postings)} отправл.",
+    )
+
+
 async def export_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
     snapshots = inventory_repo.get_inventory_snapshot()
@@ -997,6 +1078,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("movement_edit", movement_edit))
     app.add_handler(CommandHandler("export_sheet", export_sheet))
     app.add_handler(CommandHandler("ozon_analytics", ozon_analytics))
+    app.add_handler(CommandHandler("ozon_labels", ozon_labels))
     app.add_handler(CommandHandler("ship_all", ship_all))
     app.add_handler(CommandHandler("ship_ozon", ship_ozon))
     app.add_handler(CommandHandler("ship_yandex", ship_yandex))

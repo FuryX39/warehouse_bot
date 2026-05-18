@@ -55,6 +55,7 @@ class Settings:
     movement_db_url: str
     reserve_interval_seconds: int = 120
     default_stocks_sheet_url: str = ""
+    fbs_list_sheet_url: str = ""
     ozon_client_id: str = ""
     ozon_api_key: str = ""
     ozon_warehouse_id: str = ""
@@ -73,6 +74,8 @@ class Settings:
     web_dashboard_secret: str = ""
     web_host: str = "127.0.0.1"
     web_port: int = 8765
+    # JSON service account для записи листов в Google Таблицу (FBS список и т.п.).
+    google_service_account_file: str = ""
 
 
 def load_settings() -> Settings:
@@ -87,6 +90,7 @@ def load_settings() -> Settings:
         movement_db_url=movement_db_url,
         reserve_interval_seconds=interval,
         default_stocks_sheet_url=os.getenv("DEFAULT_STOCKS_SHEET_URL", "").strip(),
+        fbs_list_sheet_url=os.getenv("FBS_LIST_SHEET_URL", "").strip(),
         ozon_client_id=os.getenv("OZON_CLIENT_ID", "").strip(),
         ozon_api_key=os.getenv("OZON_API_KEY", "").strip(),
         ozon_warehouse_id=os.getenv("OZON_WAREHOUSE_ID", "").strip(),
@@ -101,4 +105,12 @@ def load_settings() -> Settings:
         web_dashboard_secret=_web_dashboard_secret_from_env(),
         web_host=(os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"),
         web_port=_web_port(),
+        google_service_account_file=_google_service_account_file(),
     )
+
+
+def _google_service_account_file() -> str:
+    explicit = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+    if explicit:
+        return explicit
+    return os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()

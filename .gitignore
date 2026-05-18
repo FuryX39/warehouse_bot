@@ -4,6 +4,7 @@
 !.env.example
 .env.local
 .env.*.local
+google_key.json
 
 # Python cache and bytecode
 __pycache__/

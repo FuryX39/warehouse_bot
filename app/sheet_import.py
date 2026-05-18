@@ -7,7 +7,7 @@ import requests
 from app.nomenclature_barcodes import parse_barcodes_sheet_cell
 
 
-def _extract_sheet_id(url: str) -> str:
+def extract_sheet_id(url: str) -> str:
     marker = "/spreadsheets/d/"
     if marker not in url:
         raise ValueError("Некорректная ссылка Google Sheets.")
@@ -19,7 +19,7 @@ def _extract_sheet_id(url: str) -> str:
 
 
 def build_google_sheet_csv_url(url: str, *, sheet_name: str = "stocks") -> str:
-    sheet_id = _extract_sheet_id(url)
+    sheet_id = extract_sheet_id(url)
     enc = quote(sheet_name, safe="")
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={enc}"
 

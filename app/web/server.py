@@ -37,6 +37,13 @@ from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.barcode_label_pdf import generate_barcode_label_pdf
+from app.ozon_fbs_labels import (
+    build_labels_zip,
+    build_sorted_list_rows,
+    fetch_awaiting_shipment_labels,
+    get_configured_ozon_adapter,
+    posting_numbers_in_list_order,
+)
 from app.nomenclature_barcodes import parse_barcodes_cell
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
 
@@ -241,6 +248,85 @@ def create_dashboard_app(
         codes = parse_barcodes_cell(str(barcodes or ""))
         n = inventory_repo.upsert_nomenclature_items({sku_n: (title, img, codes)})
         return {"upserted": n, "sku": sku_n}
+
+    @app.get("/api/ozon/awaiting-shipment", dependencies=[Depends(require_login)])
+    async def api_ozon_awaiting_shipment_list() -> dict:
+        """Список FBS-отправлений Ozon в статусе «ожидает отгрузки» (awaiting_deliver)."""
+        adapter = get_configured_ozon_adapter(coordinator)
+        if adapter is None:
+            raise HTTPException(status_code=400, detail="Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)")
+        loop = asyncio.get_running_loop()
+        try:
+            postings = await loop.run_in_executor(
+                None, lambda: adapter.list_awaiting_shipment_postings()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ozon API: {exc}") from exc
+        list_rows = build_sorted_list_rows(postings)
+        order = posting_numbers_in_list_order(list_rows)
+        by_pn = {p.posting_number: p for p in postings}
+        postings_ordered = [by_pn[pn] for pn in order if pn in by_pn]
+        return {
+            "count": len(postings_ordered),
+            "status": "awaiting_deliver",
+            "list_rows": [
+                {
+                    "seq": r.seq,
+                    "posting_number": r.posting_number,
+                    "sku": r.sku,
+                    "quantity": r.quantity,
+                    "status": r.status,
+                }
+                for r in list_rows
+            ],
+            "postings": [
+                {
+                    "posting_number": p.posting_number,
+                    "status": p.status,
+                    "lines": [{"sku": sku, "quantity": qty} for sku, qty in p.lines],
+                }
+                for p in postings_ordered
+            ],
+        }
+
+    @app.get("/api/ozon/awaiting-shipment-labels", dependencies=[Depends(require_login)])
+    async def api_ozon_awaiting_shipment_labels() -> Response:
+        """ZIP с PDF-этикетками для отправлений awaiting_deliver."""
+        adapter = get_configured_ozon_adapter(coordinator)
+        if adapter is None:
+            raise HTTPException(status_code=400, detail="Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)")
+        loop = asyncio.get_running_loop()
+        try:
+            bundle = await loop.run_in_executor(
+                None,
+                lambda: fetch_awaiting_shipment_labels(
+                    adapter,
+                    fbs_list_sheet_url=settings.fbs_list_sheet_url,
+                    google_service_account_file=settings.google_service_account_file,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ozon API: {exc}") from exc
+        if not bundle.postings:
+            raise HTTPException(status_code=404, detail="Нет отправлений awaiting_deliver")
+        if not bundle.label_files:
+            detail = "Не удалось получить PDF-этикетки"
+            if bundle.warnings:
+                detail += ": " + "; ".join(bundle.warnings[:5])
+            raise HTTPException(status_code=502, detail=detail)
+        if len(bundle.label_files) == 1:
+            name, pdf = bundle.label_files[0]
+            return Response(
+                content=pdf,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            )
+        zip_bytes = build_labels_zip(bundle.label_files)
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="ozon_awaiting_labels.zip"'},
+        )
 
     @app.get("/api/barcode-label", dependencies=[Depends(require_login)])
     async def api_barcode_label(
