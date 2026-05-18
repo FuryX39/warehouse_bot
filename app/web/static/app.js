@@ -185,7 +185,7 @@
     movements: "Перемещения",
     sync: "Синхронизация",
   };
-  document.querySelectorAll(".nav-item").forEach(function (btn) {
+  document.querySelectorAll(".nav-item[data-view]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var view = btn.getAttribute("data-view");
       document.querySelectorAll(".nav-item").forEach(function (b) {

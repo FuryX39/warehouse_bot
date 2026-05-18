@@ -138,6 +138,38 @@ def create_dashboard_app(
             },
         )
 
+    @app.get("/fbs")
+    async def fbs_page(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url="/login", status_code=302)
+        html_path = _WEB_ROOT / "templates" / "fbs.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон FBS не найден")
+        return FileResponse(
+            html_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.get("/")
+    async def index_page(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url="/login", status_code=302)
+        html_path = _WEB_ROOT / "templates" / "index.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон панели не найден")
+        return FileResponse(
+            html_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
     @app.post("/api/login")
     async def api_login(
         password: Annotated[str, Form()],
@@ -792,37 +824,5 @@ def create_dashboard_app(
     static_dir = _WEB_ROOT / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
-    @app.get("/fbs")
-    async def fbs_page(request: Request):
-        if not request.session.get("authenticated"):
-            return RedirectResponse(url="/login", status_code=302)
-        html_path = _WEB_ROOT / "templates" / "fbs.html"
-        if not html_path.is_file():
-            raise HTTPException(status_code=500, detail="Шаблон FBS не найден")
-        return FileResponse(
-            html_path,
-            media_type="text/html; charset=utf-8",
-            headers={
-                "Cache-Control": "no-store, no-cache, must-revalidate",
-                "Pragma": "no-cache",
-            },
-        )
-
-    @app.get("/")
-    async def index_page(request: Request):
-        if not request.session.get("authenticated"):
-            return RedirectResponse(url="/login", status_code=302)
-        html_path = _WEB_ROOT / "templates" / "index.html"
-        if not html_path.is_file():
-            raise HTTPException(status_code=500, detail="Шаблон панели не найден")
-        return FileResponse(
-            html_path,
-            media_type="text/html; charset=utf-8",
-            headers={
-                "Cache-Control": "no-store, no-cache, must-revalidate",
-                "Pragma": "no-cache",
-            },
-        )
 
     return app

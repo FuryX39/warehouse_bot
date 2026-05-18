@@ -110,20 +110,18 @@ code { background: #eef1f6; padding: 0.1rem 0.35rem; border-radius: 4px; font-si
 .modal label { display: flex; flex-direction: column; gap: 0.35rem; margin: 1rem 0; font-size: 0.9rem; }
 .modal input[type="number"] { padding: 0.45rem; border: 1px solid var(--border); border-radius: 6px; }
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; }
-.nav-link.nav-item {
+.nav .nav-link {
   text-decoration: none;
   color: inherit;
   display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  font: inherit;
-  cursor: pointer;
   padding: 0.65rem 1rem;
   border-radius: 8px;
+  margin-bottom: 2px;
 }
-.nav-link.nav-item:hover { background: var(--bg); }
+.nav .nav-link:hover {
+  background: var(--sidebar-hover);
+  color: #fff;
+}
 .hidden-row { display: none; }
 .hidden { display: none !important; }
 .modal-wide { max-width: min(920px, 96vw); width: 96vw; }
