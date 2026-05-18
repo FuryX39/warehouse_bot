@@ -366,6 +366,7 @@
   });
 
   var nomenclatureRows = [];
+  var nomenclatureSort = { col: "sku", dir: 1 };
   var dlgNomenclature = document.getElementById("dlgNomenclature");
   var dlgNomSku = document.getElementById("dlgNomSku");
   var dlgNomName = document.getElementById("dlgNomName");
@@ -458,15 +459,46 @@
       .catch(showErr);
   });
 
-  async function loadNomenclature() {
-    var meta = document.getElementById("nomenclatureMeta");
+  function compareNomenclatureRow(a, b, col) {
+    var va;
+    var vb;
+    if (col === "barcodes") {
+      va = (a.barcodes || []).join(",");
+      vb = (b.barcodes || []).join(",");
+    } else {
+      va = a[col];
+      vb = b[col];
+    }
+    va = String(va || "").toLowerCase();
+    vb = String(vb || "").toLowerCase();
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+    return 0;
+  }
+
+  function sortNomenclatureRowsCopy() {
+    var col = nomenclatureSort.col;
+    var dir = nomenclatureSort.dir;
+    return nomenclatureRows.slice().sort(function (a, b) {
+      return compareNomenclatureRow(a, b, col) * dir;
+    });
+  }
+
+  function updateNomenclatureSortThClasses() {
+    var row = document.getElementById("nomenclatureHeadRow");
+    if (!row) return;
+    row.querySelectorAll(".th-sortable").forEach(function (th) {
+      th.classList.remove("sorted-asc", "sorted-desc");
+      if (th.getAttribute("data-nom-col") === nomenclatureSort.col) {
+        th.classList.add(nomenclatureSort.dir === 1 ? "sorted-asc" : "sorted-desc");
+      }
+    });
+  }
+
+  function renderNomenclatureTable() {
     var body = document.getElementById("nomenclatureBody");
-    meta.textContent = "Загрузка…";
     body.innerHTML = "";
-    var data = await api("/api/nomenclature");
-    var rows = data.rows || [];
-    nomenclatureRows = rows;
-    meta.textContent = "Строк: " + rows.length;
+    var rows = sortNomenclatureRowsCopy();
     rows.forEach(function (r) {
       var imgUrl = String(r.image_url || "").trim();
       var imgTd;
@@ -536,11 +568,36 @@
           .catch(showErr);
       });
     });
+    updateNomenclatureSortThClasses();
     applySearch("nomenclatureBody", document.getElementById("globalSearch").value);
+  }
+
+  async function loadNomenclature() {
+    var meta = document.getElementById("nomenclatureMeta");
+    var body = document.getElementById("nomenclatureBody");
+    meta.textContent = "Загрузка…";
+    body.innerHTML = "";
+    var data = await api("/api/nomenclature");
+    nomenclatureRows = data.rows || [];
+    meta.textContent = "Строк: " + nomenclatureRows.length;
+    renderNomenclatureTable();
   }
 
   document.getElementById("btnReloadNomenclature").addEventListener("click", function () {
     loadNomenclature().catch(showErr);
+  });
+
+  document.getElementById("nomenclatureHeadRow").addEventListener("click", function (e) {
+    var th = e.target.closest(".th-sortable");
+    if (!th) return;
+    var col = th.getAttribute("data-nom-col");
+    if (!col) return;
+    if (nomenclatureSort.col === col) nomenclatureSort.dir = -nomenclatureSort.dir;
+    else {
+      nomenclatureSort.col = col;
+      nomenclatureSort.dir = 1;
+    }
+    renderNomenclatureTable();
   });
 
   document.getElementById("btnImportNomSheet").addEventListener("click", function () {
