@@ -77,6 +77,8 @@ class Settings:
     web_port: int = 8765
     # JSON service account для записи листов в Google Таблицу (FBS список и т.п.).
     google_service_account_file: str = ""
+    # Поворот PDF-этикеток Ozon (/ozon_labels): 90, -90, 0 = без поворота.
+    ozon_label_rotate_degrees: int = 90
 
 
 def load_settings() -> Settings:
@@ -109,7 +111,16 @@ def load_settings() -> Settings:
         web_host=(os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"),
         web_port=_web_port(),
         google_service_account_file=_google_service_account_file(),
+        ozon_label_rotate_degrees=_ozon_label_rotate_degrees(),
     )
+
+
+def _ozon_label_rotate_degrees() -> int:
+    raw = os.getenv("OZON_LABEL_ROTATE_DEGREES", "90").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return 90
 
 
 def _google_service_account_file() -> str:

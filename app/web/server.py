@@ -302,6 +302,7 @@ def create_dashboard_app(
                     fbs_list_sheet_url=settings.fbs_list_sheet_url,
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
+                    ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
                 ),
             )
         except Exception as exc:

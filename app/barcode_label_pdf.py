@@ -22,22 +22,34 @@ TEXT_SIDE_MARGIN_MM = 1.2
 NAME_MAX_LINES = 3
 
 
+def _trim_barcode_whitespace(img: Image.Image) -> Image.Image:
+    """Обрезка белых полей PNG — масштабируются только полосы штрихкода."""
+    gray = img.convert("L")
+    bbox = gray.getbbox()
+    if not bbox:
+        return img
+    return img.crop(bbox)
+
+
 def _render_code128_image(barcode_value: str) -> Image.Image:
-    """Полосы Code 128 (узкий вариант, лучше читается сканером). Цифры — в подписи «ШК»."""
+    """Полосы Code 128 горизонтально (скан слева направо). Цифры — в подписи «ШК»."""
     writer = ImageWriter()
-    writer.set_options(
-        {
-            "module_width": 0.22,
-            "module_height": 10.0,
-            "quiet_zone": 1.5,
-            "font_size": 0,
-            "text_distance": 0,
-        }
-    )
+    opts = {
+        "module_width": 0.22,
+        "module_height": 10.0,
+        "quiet_zone": 1.2,
+        "font_size": 0,
+        "text_distance": 0,
+        "write_text": False,
+    }
     buf = io.BytesIO()
-    Code128(barcode_value, writer=writer).write(buf, options={"write_text": False})
+    Code128(barcode_value, writer=writer).write(buf, options=opts)
     buf.seek(0)
-    return Image.open(buf).convert("RGB")
+    img = _trim_barcode_whitespace(Image.open(buf).convert("RGB"))
+    w, h = img.size
+    if h > w:
+        img = img.rotate(90, expand=True)
+    return img
 
 
 def _truncate_to_width(text: str, font_name: str, font_size: float, max_width: float) -> str:
@@ -188,16 +200,18 @@ def generate_barcode_label_pdf(
         )
         zone_top = zone_top - name_block - 0.5 * mm
 
-    # Центр: штрихкод (пропорционально, по центру зоны)
+    # Центр: штрихкод на всю ширину (горизонтально), по высоте — только если не влезает
     img = _render_code128_image(value)
     img_w_px, img_h_px = img.size
     max_w = barcode_w
     max_h = zone_top - zone_bottom
     if max_h < 3 * mm:
         max_h = 3 * mm
-    scale = min(max_w / img_w_px, max_h / img_h_px)
-    draw_w = img_w_px * scale
-    draw_h = img_h_px * scale
+    draw_w = max_w
+    draw_h = img_h_px * (max_w / img_w_px) if img_w_px else max_h
+    if draw_h > max_h:
+        draw_h = max_h
+        draw_w = img_w_px * (max_h / img_h_px) if img_h_px else max_w
     x = (page_w - draw_w) / 2
     img_y = zone_bottom + (max_h - draw_h) / 2
     c.drawImage(

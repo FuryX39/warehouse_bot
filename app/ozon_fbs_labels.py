@@ -9,6 +9,7 @@ from datetime import datetime
 
 from app.adapters.ozon import OZON_AWAITING_SHIPMENT_STATUSES, OzonAdapter, OzonFbsPosting
 from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_from_template
+from app.ozon_label_pdf import normalize_ozon_package_label_pdf
 from app.services import StockCoordinator
 
 @dataclass(frozen=True)
@@ -84,8 +85,14 @@ def _merge_label_pdfs(pdf_parts: list[bytes]) -> bytes | None:
 def _fetch_labels_in_order(
     adapter: OzonAdapter,
     posting_numbers: list[str],
+    *,
+    label_rotate_degrees: int = 90,
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
     label_files, warnings = adapter.fetch_package_label_pdf_parts(posting_numbers)
+    label_files = [
+        (name, normalize_ozon_package_label_pdf(data, rotate_degrees=label_rotate_degrees))
+        for name, data in label_files
+    ]
     pdfs = [data for _, data in label_files]
     merged = _merge_label_pdfs(pdfs)
     if merged is not None:
@@ -126,6 +133,7 @@ def fetch_awaiting_shipment_labels(
     fbs_list_sheet_url: str = "",
     google_service_account_file: str = "",
     fbs_list_template_sheet: str = "FBSTemplate",
+    ozon_label_rotate_degrees: int = 90,
 ) -> OzonAwaitingShipmentBundle:
     """Список по артикулу, этикетки в том же порядке, лист в Google Таблице."""
     postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
@@ -136,7 +144,11 @@ def fetch_awaiting_shipment_labels(
     posting_numbers = posting_numbers_in_list_order(list_rows)
     sheet_title = fbs_list_sheet_title()
 
-    label_files, warnings = _fetch_labels_in_order(adapter, posting_numbers)
+    label_files, warnings = _fetch_labels_in_order(
+        adapter,
+        posting_numbers,
+        label_rotate_degrees=ozon_label_rotate_degrees,
+    )
 
     sheet_url: str | None = None
     sheet_url_cfg = (fbs_list_sheet_url or "").strip()
