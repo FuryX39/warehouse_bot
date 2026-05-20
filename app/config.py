@@ -79,6 +79,10 @@ class Settings:
     google_service_account_file: str = ""
     # Поворот PDF-этикеток Ozon (/ozon_labels): 90, -90, 0 = без поворота.
     ozon_label_rotate_degrees: int = 90
+    # Формат этикеток Yandex (/yandex_labels): A9_HORIZONTALLY, A9, A7, A4.
+    yandex_label_format: str = "A9_HORIZONTALLY"
+    # Поворот PDF-этикеток Yandex: 0 = без поворота.
+    yandex_label_rotate_degrees: int = 0
 
 
 def load_settings() -> Settings:
@@ -112,7 +116,23 @@ def load_settings() -> Settings:
         web_port=_web_port(),
         google_service_account_file=_google_service_account_file(),
         ozon_label_rotate_degrees=_ozon_label_rotate_degrees(),
+        yandex_label_format=_yandex_label_format(),
+        yandex_label_rotate_degrees=_yandex_label_rotate_degrees(),
     )
+
+
+def _yandex_label_format() -> str:
+    raw = (os.getenv("YANDEX_LABEL_FORMAT", "A9_HORIZONTALLY") or "A9_HORIZONTALLY").strip()
+    allowed = {"A9_HORIZONTALLY", "A9", "A7", "A4"}
+    return raw if raw in allowed else "A9_HORIZONTALLY"
+
+
+def _yandex_label_rotate_degrees() -> int:
+    raw = os.getenv("YANDEX_LABEL_ROTATE_DEGREES", "0").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
 
 
 def _ozon_label_rotate_degrees() -> int:

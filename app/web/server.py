@@ -54,6 +54,12 @@ from app.ozon_fbs_labels import (
     get_configured_ozon_adapter,
     posting_numbers_in_list_order,
 )
+from app.yandex_fbs_labels import (
+    build_sorted_list_rows as build_yandex_sorted_list_rows,
+    fetch_awaiting_assembly_labels,
+    get_configured_yandex_adapter,
+    order_ids_in_list_order,
+)
 from app.nomenclature_barcodes import parse_barcodes_cell
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
 
@@ -404,6 +410,127 @@ def create_dashboard_app(
         if not label_files:
             raise HTTPException(status_code=404, detail="Ссылка на этикетки устарела или уже использована")
         return _fbs_label_files_response(label_files)
+
+    @app.get("/api/yandex/awaiting-assembly", dependencies=[Depends(require_login)])
+    async def api_yandex_awaiting_assembly_list() -> dict:
+        """Список FBS-заказов Yandex в ожидании сборки (PROCESSING + STARTED)."""
+        adapter = get_configured_yandex_adapter(coordinator)
+        if adapter is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Yandex Market API не настроен (YANDEX_CAMPAIGN_ID / YANDEX_API_KEY)",
+            )
+        loop = asyncio.get_running_loop()
+        try:
+            orders = await loop.run_in_executor(
+                None, lambda: adapter.list_awaiting_assembly_orders()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
+        list_rows = build_yandex_sorted_list_rows(orders)
+        order_ids = order_ids_in_list_order(list_rows)
+        by_id = {o.order_id: o for o in orders}
+        orders_ordered = [by_id[oid] for oid in order_ids if oid in by_id]
+        return {
+            "count": len(orders_ordered),
+            "status": "PROCESSING",
+            "substatus": "STARTED",
+            "list_rows": [
+                {
+                    "sku": r.sku,
+                    "quantity": r.quantity,
+                    "order_id": r.order_id,
+                    "posting_number": r.order_id,
+                }
+                for r in list_rows
+            ],
+            "orders": [
+                {
+                    "order_id": o.order_id,
+                    "status": o.status,
+                    "substatus": o.substatus,
+                    "lines": [{"sku": sku, "quantity": qty} for sku, qty in o.lines],
+                }
+                for o in orders_ordered
+            ],
+        }
+
+    @app.post("/api/fbs/yandex/generate", dependencies=[Depends(require_login)])
+    async def api_fbs_yandex_generate() -> dict:
+        """FBS Yandex: список в Google Таблице + этикетки (без тела запроса)."""
+        adapter = get_configured_yandex_adapter(coordinator)
+        if adapter is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Yandex Market API не настроен (YANDEX_CAMPAIGN_ID / YANDEX_API_KEY)",
+            )
+        loop = asyncio.get_running_loop()
+        try:
+            bundle = await loop.run_in_executor(
+                None,
+                lambda: fetch_awaiting_assembly_labels(
+                    adapter,
+                    fbs_list_sheet_url=settings.fbs_list_sheet_url,
+                    google_service_account_file=settings.google_service_account_file,
+                    fbs_list_template_sheet=settings.fbs_list_template_sheet,
+                    yandex_label_format=settings.yandex_label_format,
+                    yandex_label_rotate_degrees=settings.yandex_label_rotate_degrees,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
+        if not bundle.orders:
+            raise HTTPException(status_code=404, detail="Нет заказов PROCESSING + STARTED")
+        labels_token: str | None = None
+        if bundle.label_files:
+            labels_token = store_label_files(bundle.label_files)
+        elif bundle.warnings:
+            raise HTTPException(
+                status_code=502,
+                detail="Не удалось получить PDF-этикетки: " + "; ".join(bundle.warnings[:5]),
+            )
+        else:
+            raise HTTPException(status_code=502, detail="Не удалось получить PDF-этикетки")
+        return {
+            "count": len(bundle.list_rows),
+            "status": "PROCESSING",
+            "substatus": "STARTED",
+            "list_rows": [
+                {
+                    "seq": r.seq,
+                    "sku": r.sku,
+                    "quantity": r.quantity,
+                    "order_id": r.order_id,
+                    "posting_number": r.order_id,
+                }
+                for r in bundle.list_rows
+            ],
+            "sheet_title": bundle.sheet_title,
+            "sheet_url": bundle.sheet_url,
+            "warnings": bundle.warnings,
+            "labels_token": labels_token,
+        }
+
+    @app.get("/api/fbs/yandex/labels", dependencies=[Depends(require_login)])
+    async def api_fbs_yandex_labels(
+        token: Annotated[str, Query(description="Токен после POST /api/fbs/yandex/generate")],
+    ) -> Response:
+        label_files = pop_label_files(token)
+        if not label_files:
+            raise HTTPException(status_code=404, detail="Ссылка на этикетки устарела или уже использована")
+        if len(label_files) == 1:
+            name, pdf = label_files[0]
+            return Response(
+                content=pdf,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            )
+        zip_bytes = build_labels_zip(label_files)
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="yandex_awaiting_labels.zip"'},
+        )
 
     def _purge_fbs_ship_pending(session: dict) -> None:
         entry = session.get(_FBS_SHIP_SESSION_KEY)

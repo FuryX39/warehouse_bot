@@ -1,90 +1,100 @@
-"""Заказы Ozon «ожидают отгрузки» и PDF-этикетки FBS."""
+"""Заказы Yandex Market «ожидают сборки» и PDF-этикетки FBS."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from app.adapters.ozon import OZON_AWAITING_SHIPMENT_STATUSES, OzonAdapter, OzonFbsPosting
+from app.adapters.yandex_market import (
+    YANDEX_AWAITING_ASSEMBLY_SUBSTATUS,
+    YandexFbsOrder,
+    YandexMarketAdapter,
+)
 from app.fbs_labels_common import build_fbs_sorted_flat_rows, build_labels_zip, merge_label_pdfs
 from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_from_template
 from app.ozon_label_pdf import normalize_ozon_package_label_pdf
 from app.services import StockCoordinator
 
+
 @dataclass(frozen=True)
-class OzonFbsListRow:
+class YandexFbsListRow:
     seq: int
-    posting_number: str
+    order_id: str
     sku: str
     quantity: int
     status: str
 
 
 @dataclass
-class OzonAwaitingShipmentBundle:
-    postings: list[OzonFbsPosting] = field(default_factory=list)
-    list_rows: list[OzonFbsListRow] = field(default_factory=list)
+class YandexAwaitingAssemblyBundle:
+    orders: list[YandexFbsOrder] = field(default_factory=list)
+    list_rows: list[YandexFbsListRow] = field(default_factory=list)
     label_files: list[tuple[str, bytes]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     sheet_title: str = ""
     sheet_url: str | None = None
 
 
-def get_configured_ozon_adapter(coordinator: StockCoordinator) -> OzonAdapter | None:
+def get_configured_yandex_adapter(coordinator: StockCoordinator) -> YandexMarketAdapter | None:
     for adapter in coordinator.adapters:
-        if isinstance(adapter, OzonAdapter) and adapter.is_configured():
+        if isinstance(adapter, YandexMarketAdapter) and adapter.is_configured():
             return adapter
     return None
 
 
-def build_sorted_list_rows(postings: list[OzonFbsPosting]) -> list[OzonFbsListRow]:
-    """Строки списка: одна на позицию; одиночные отправления — по артикулу, 2+ SKU — в конце без сортировки."""
+def build_sorted_list_rows(orders: list[YandexFbsOrder]) -> list[YandexFbsListRow]:
+    """Строки списка: одна на позицию; одиночные заказы — по артикулу, 2+ SKU — в конце без сортировки."""
     flat = build_fbs_sorted_flat_rows(
-        postings,
-        iter_lines=lambda p: p.lines,
-        get_posting_key=lambda p: p.posting_number,
-        get_status=lambda p: p.status,
+        orders,
+        iter_lines=lambda o: o.lines,
+        get_posting_key=lambda o: o.order_id,
+        get_status=lambda o: o.substatus,
     )
     return [
-        OzonFbsListRow(i + 1, posting_number, sku, qty, status)
-        for i, (sku, posting_number, qty, status) in enumerate(flat)
+        YandexFbsListRow(i + 1, order_id, sku, qty, status)
+        for i, (sku, order_id, qty, status) in enumerate(flat)
     ]
 
 
-def posting_numbers_in_list_order(list_rows: list[OzonFbsListRow]) -> list[str]:
-    """Уникальные отправления в порядке первого появления в отсортированном списке."""
+def order_ids_in_list_order(list_rows: list[YandexFbsListRow]) -> list[str]:
+    """Уникальные заказы в порядке первого появления в отсортированном списке."""
     seen: set[str] = set()
     out: list[str] = []
     for row in list_rows:
-        if row.posting_number in seen:
+        if row.order_id in seen:
             continue
-        seen.add(row.posting_number)
-        out.append(row.posting_number)
+        seen.add(row.order_id)
+        out.append(row.order_id)
     return out
 
 
 def _fetch_labels_in_order(
-    adapter: OzonAdapter,
-    posting_numbers: list[str],
+    adapter: YandexMarketAdapter,
+    order_ids: list[str],
     *,
-    label_rotate_degrees: int = 90,
+    label_format: str = "A9_HORIZONTALLY",
+    label_rotate_degrees: int = 0,
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
-    label_files, warnings = adapter.fetch_package_label_pdf_parts(posting_numbers)
-    label_files = [
-        (name, normalize_ozon_package_label_pdf(data, rotate_degrees=label_rotate_degrees))
-        for name, data in label_files
-    ]
+    label_files, warnings = adapter.fetch_order_label_pdf_parts(
+        order_ids,
+        label_format=label_format,
+    )
+    if label_rotate_degrees:
+        label_files = [
+            (name, normalize_ozon_package_label_pdf(data, rotate_degrees=label_rotate_degrees))
+            for name, data in label_files
+        ]
     pdfs = [data for _, data in label_files]
     merged = merge_label_pdfs(pdfs)
     if merged is not None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return [(f"ozon_labels_sorted_{ts}.pdf", merged)], warnings
+        return [(f"yandex_labels_sorted_{ts}.pdf", merged)], warnings
     if not label_files:
         return [], warnings
     if len(pdfs) > 1:
         warnings.append(
             "Не удалось объединить PDF в один файл (установите pypdf). "
-            "Файлы в ZIP идут чанками API, порядок чанков сохранён."
+            "Файлы в ZIP идут по одному на заказ."
         )
     return label_files, warnings
 
@@ -94,10 +104,10 @@ def _export_list_to_google_sheet(
     spreadsheet_url: str,
     credentials_path: str,
     sheet_title: str,
-    list_rows: list[OzonFbsListRow],
+    list_rows: list[YandexFbsListRow],
     template_sheet_name: str,
 ) -> str:
-    data = [(r.sku, r.quantity, r.posting_number) for r in list_rows]
+    data = [(r.sku, r.quantity, r.order_id) for r in list_rows]
     return write_fbs_list_from_template(
         spreadsheet_url,
         credentials_path,
@@ -107,28 +117,30 @@ def _export_list_to_google_sheet(
     )
 
 
-def fetch_awaiting_shipment_labels(
-    adapter: OzonAdapter,
+def fetch_awaiting_assembly_labels(
+    adapter: YandexMarketAdapter,
     *,
-    statuses: tuple[str, ...] = OZON_AWAITING_SHIPMENT_STATUSES,
+    substatus: str = YANDEX_AWAITING_ASSEMBLY_SUBSTATUS,
     fbs_list_sheet_url: str = "",
     google_service_account_file: str = "",
     fbs_list_template_sheet: str = "FBSTemplate",
-    ozon_label_rotate_degrees: int = 90,
-) -> OzonAwaitingShipmentBundle:
+    yandex_label_format: str = "A9_HORIZONTALLY",
+    yandex_label_rotate_degrees: int = 0,
+) -> YandexAwaitingAssemblyBundle:
     """Список по артикулу, этикетки в том же порядке, лист в Google Таблице."""
-    postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
-    if not postings:
-        return OzonAwaitingShipmentBundle()
+    orders = adapter.list_awaiting_assembly_orders(substatus=substatus)
+    if not orders:
+        return YandexAwaitingAssemblyBundle()
 
-    list_rows = build_sorted_list_rows(postings)
-    posting_numbers = posting_numbers_in_list_order(list_rows)
+    list_rows = build_sorted_list_rows(orders)
+    ids_ordered = order_ids_in_list_order(list_rows)
     sheet_title = fbs_list_sheet_title()
 
     label_files, warnings = _fetch_labels_in_order(
         adapter,
-        posting_numbers,
-        label_rotate_degrees=ozon_label_rotate_degrees,
+        ids_ordered,
+        label_format=yandex_label_format,
+        label_rotate_degrees=yandex_label_rotate_degrees,
     )
 
     sheet_url: str | None = None
@@ -155,13 +167,11 @@ def fetch_awaiting_shipment_labels(
             "Google Таблица: задайте FBS_LIST_SHEET_URL (ссылка на таблицу для FBS-списков)."
         )
 
-    postings_by_number = {p.posting_number: p for p in postings}
-    ordered_postings = [
-        postings_by_number[pn] for pn in posting_numbers if pn in postings_by_number
-    ]
+    orders_by_id = {o.order_id: o for o in orders}
+    ordered_orders = [orders_by_id[oid] for oid in ids_ordered if oid in orders_by_id]
 
-    return OzonAwaitingShipmentBundle(
-        postings=ordered_postings,
+    return YandexAwaitingAssemblyBundle(
+        orders=ordered_orders,
         list_rows=list_rows,
         label_files=label_files,
         warnings=warnings,
@@ -170,27 +180,25 @@ def fetch_awaiting_shipment_labels(
     )
 
 
-def format_postings_summary(
-    postings: list[OzonFbsPosting] | None = None,
+def format_orders_summary(
+    orders: list[YandexFbsOrder] | None = None,
     *,
-    list_rows: list[OzonFbsListRow] | None = None,
+    list_rows: list[YandexFbsListRow] | None = None,
     max_lines: int = 40,
 ) -> str:
     if list_rows is not None:
         lines = [
-            f"{r.seq}. {r.sku}×{r.quantity} — {r.posting_number}"
+            f"{r.seq}. {r.sku}×{r.quantity} — {r.order_id}"
             for r in list_rows[:max_lines]
         ]
         total = len(list_rows)
     else:
-        postings = postings or []
+        orders = orders or []
         lines = []
-        for posting in postings[:max_lines]:
-            items = ", ".join(f"{sku}×{qty}" for sku, qty in posting.lines)
-            lines.append(f"{posting.posting_number} ({posting.status}): {items}")
-        total = len(postings)
+        for order in orders[:max_lines]:
+            items = ", ".join(f"{sku}×{qty}" for sku, qty in order.lines)
+            lines.append(f"{order.order_id} ({order.substatus}): {items}")
+        total = len(orders)
     if total > max_lines:
         lines.append(f"… ещё строк: {total - max_lines}")
     return "\n".join(lines)
-
-

@@ -20,6 +20,11 @@ from app.ozon_fbs_labels import (
     format_postings_summary,
     get_configured_ozon_adapter,
 )
+from app.yandex_fbs_labels import (
+    fetch_awaiting_assembly_labels,
+    format_orders_summary,
+    get_configured_yandex_adapter,
+)
 from app.repositories import (
     AVAILABLE_STOCK_SYNC_KEY,
     available_stock_map_hash,
@@ -128,6 +133,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
         "/ozon_labels - FBS awaiting_deliver: список по артикулу, лист в Google, PDF-этикетки\n"
+        "/yandex_labels - FBS PROCESSING/STARTED: список по артикулу, лист в Google, PDF-этикетки\n"
         "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
         "/ship_ozon - отгрузка только Ozon (не new)\n"
         "/ship_yandex - отгрузка только Yandex Market (все added, кроме STARTED)\n"
@@ -656,6 +662,83 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def yandex_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Заказы Yandex Market в ожидании сборки (PROCESSING + STARTED) и этикетки FBS (PDF)."""
+    if update.message is None:
+        return
+    adapter = get_configured_yandex_adapter(coordinator)
+    if adapter is None:
+        await _reply_text_resilient(
+            update.message,
+            "Задайте в .env YANDEX_CAMPAIGN_ID и YANDEX_API_KEY.",
+        )
+        return
+
+    await _reply_text_resilient(
+        update.message,
+        "Загрузка заказов Yandex Market (статус PROCESSING, подстатус STARTED — ожидают сборки)…",
+    )
+    try:
+        bundle = await asyncio.to_thread(
+            fetch_awaiting_assembly_labels,
+            adapter,
+            fbs_list_sheet_url=settings.fbs_list_sheet_url,
+            google_service_account_file=settings.google_service_account_file,
+            fbs_list_template_sheet=settings.fbs_list_template_sheet,
+            yandex_label_format=settings.yandex_label_format,
+            yandex_label_rotate_degrees=settings.yandex_label_rotate_degrees,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Yandex labels failed")
+        await _reply_text_resilient(update.message, f"Ошибка этикеток Yandex: {exc}")
+        return
+
+    if not bundle.orders:
+        await _reply_text_resilient(
+            update.message,
+            "Нет заказов в ожидании сборки (PROCESSING + STARTED).",
+        )
+        return
+
+    summary = format_orders_summary(list_rows=bundle.list_rows)
+    header = f"Заказов: {len(bundle.orders)}, строк в списке: {len(bundle.list_rows)}."
+    if bundle.sheet_url:
+        header += f"\n\nGoogle Таблица — лист «{bundle.sheet_title}»:\n{bundle.sheet_url}"
+    if bundle.warnings:
+        header += "\n\nПредупреждения:\n- " + "\n- ".join(bundle.warnings[:15])
+        if len(bundle.warnings) > 15:
+            header += f"\n… ещё {len(bundle.warnings) - 15}"
+    if len(header) + len(summary) + 2 <= 4000:
+        await _reply_text_resilient(update.message, f"{header}\n\n{summary}")
+    else:
+        await _reply_text_resilient(update.message, header)
+        if summary:
+            await _reply_text_resilient(update.message, summary[:4000])
+
+    if not bundle.label_files:
+        await _reply_text_resilient(
+            update.message,
+            "PDF-этикетки не получены. Проверьте статус заказов в ЛК Яндекс Маркета "
+            "(нужен PROCESSING + STARTED после перехода в сборку).",
+        )
+        return
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if len(bundle.label_files) == 1:
+        name, pdf = bundle.label_files[0]
+        await update.message.reply_document(
+            document=InputFile(io.BytesIO(pdf), filename=name),
+            caption=f"Этикетки Yandex ({len(bundle.orders)} заказов)",
+        )
+        return
+
+    zip_bytes = build_labels_zip(bundle.label_files)
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(zip_bytes), filename=f"yandex_labels_{ts}.zip"),
+        caption=f"Этикетки Yandex: {len(bundle.label_files)} PDF, {len(bundle.orders)} заказов.",
+    )
+
+
 async def export_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
     snapshots = inventory_repo.get_inventory_snapshot()
@@ -1003,6 +1086,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("export_sheet", export_sheet))
     app.add_handler(CommandHandler("ozon_analytics", ozon_analytics))
     app.add_handler(CommandHandler("ozon_labels", ozon_labels))
+    app.add_handler(CommandHandler("yandex_labels", yandex_labels))
     app.add_handler(CommandHandler("ship_all", ship_all))
     app.add_handler(CommandHandler("ship_ozon", ship_ozon))
     app.add_handler(CommandHandler("ship_yandex", ship_yandex))

@@ -88,17 +88,28 @@
     }, 2000);
   }
 
-  var labelsToken = null;
+  var ozonLabelsToken = null;
+  var yandexLabelsToken = null;
   var busy = false;
 
-  function setBusy(on) {
+  function setOzonBusy(on) {
     busy = on;
     var gen = document.getElementById("btnOzonGenerate");
     var dl = document.getElementById("btnOzonLabels");
     var ref = document.getElementById("btnOzonRefreshList");
     if (gen) gen.disabled = on;
     if (ref) ref.disabled = on;
-    if (dl) dl.disabled = on || !labelsToken;
+    if (dl) dl.disabled = on || !ozonLabelsToken;
+  }
+
+  function setYandexBusy(on) {
+    busy = on;
+    var gen = document.getElementById("btnYandexGenerate");
+    var dl = document.getElementById("btnYandexLabels");
+    var ref = document.getElementById("btnYandexRefreshList");
+    if (gen) gen.disabled = on;
+    if (ref) ref.disabled = on;
+    if (dl) dl.disabled = on || !yandexLabelsToken;
   }
 
   function showWarnings(warnings) {
@@ -129,7 +140,7 @@
           '</td><td class="num">' +
           (r.quantity != null ? r.quantity : "") +
           "</td><td>" +
-          escapeHtml(r.posting_number || "") +
+          escapeHtml(r.posting_number || r.order_id || "") +
           "</td></tr>"
         );
       })
@@ -137,7 +148,7 @@
     if (summary) {
       summary.textContent =
         rows.length === 0
-          ? "Нет отправлений awaiting_deliver."
+          ? "Нет строк в списке."
           : "Строк в списке: " + rows.length;
     }
     result.classList.toggle("hidden", false);
@@ -166,13 +177,79 @@
     }
   }
 
-  function applyGenerateResult(data) {
-    labelsToken = data.labels_token || null;
+  function applyOzonGenerateResult(data) {
+    ozonLabelsToken = data.labels_token || null;
     var dl = document.getElementById("btnOzonLabels");
-    if (dl) dl.disabled = !labelsToken;
+    if (dl) dl.disabled = !ozonLabelsToken;
     renderListRows(data.list_rows || []);
     applySheetLink(data.sheet_url, data.sheet_title);
     showWarnings(data.warnings || []);
+  }
+
+  function showYandexWarnings(warnings) {
+    var box = document.getElementById("yandexWarnings");
+    if (!box) return;
+    if (!warnings || !warnings.length) {
+      box.classList.add("hidden");
+      box.textContent = "";
+      return;
+    }
+    box.classList.remove("hidden");
+    box.textContent = warnings.join("\n");
+  }
+
+  function renderYandexListRows(rows) {
+    var tbody = document.getElementById("yandexListBody");
+    var result = document.getElementById("yandexResult");
+    var summary = document.getElementById("yandexSummary");
+    if (!tbody || !result) return;
+    rows = rows || [];
+    tbody.innerHTML = rows
+      .map(function (r, i) {
+        return (
+          "<tr><td>" +
+          (r.seq != null ? r.seq : i + 1) +
+          "</td><td>" +
+          escapeHtml(r.sku || "") +
+          '</td><td class="num">' +
+          (r.quantity != null ? r.quantity : "") +
+          "</td><td>" +
+          escapeHtml(r.order_id || r.posting_number || "") +
+          "</td></tr>"
+        );
+      })
+      .join("");
+    if (summary) {
+      summary.textContent =
+        rows.length === 0
+          ? "Нет заказов PROCESSING + STARTED."
+          : "Строк в списке: " + rows.length;
+    }
+    result.classList.toggle("hidden", false);
+  }
+
+  function applyYandexSheetLink(sheetUrl, sheetTitle) {
+    var block = document.getElementById("yandexSheetBlock");
+    var link = document.getElementById("yandexSheetLink");
+    if (!block || !link) return;
+    if (sheetUrl) {
+      block.classList.remove("hidden");
+      link.href = sheetUrl;
+      link.textContent = sheetTitle || sheetUrl;
+    } else {
+      block.classList.add("hidden");
+      link.href = "#";
+      link.textContent = "";
+    }
+  }
+
+  function applyYandexGenerateResult(data) {
+    yandexLabelsToken = data.labels_token || null;
+    var dl = document.getElementById("btnYandexLabels");
+    if (dl) dl.disabled = !yandexLabelsToken;
+    renderYandexListRows(data.list_rows || []);
+    applyYandexSheetLink(data.sheet_url, data.sheet_title);
+    showYandexWarnings(data.warnings || []);
   }
 
   async function loadMpConfig() {
@@ -190,51 +267,112 @@
     if (ozonSheet) {
       ozonSheet.textContent = "FBS_LIST_SHEET_URL + service account";
     }
+    var yandexApi = document.getElementById("yandexApiStatus");
+    var yandexSheet = document.getElementById("yandexSheetStatus");
+    if (yandexApi) {
+      yandexApi.textContent =
+        cfg.yandex_market && cfg.yandex_market.configured ? "настроен" : "не настроен";
+    }
+    if (yandexSheet) {
+      yandexSheet.textContent = "FBS_LIST_SHEET_URL + service account";
+    }
   }
 
   async function ozonGenerate() {
     if (busy) return;
-    setBusy(true);
+    setOzonBusy(true);
     try {
       var data = await api("/api/fbs/ozon/generate", { method: "POST" });
-      applyGenerateResult(data);
+      applyOzonGenerateResult(data);
     } catch (e) {
       alert(e.message || String(e));
     } finally {
-      setBusy(false);
+      setOzonBusy(false);
     }
   }
 
   async function ozonRefreshList() {
     if (busy) return;
-    setBusy(true);
+    setOzonBusy(true);
     try {
       var data = await api("/api/ozon/awaiting-shipment");
-      labelsToken = null;
+      ozonLabelsToken = null;
       var dl = document.getElementById("btnOzonLabels");
       if (dl) dl.disabled = true;
       renderListRows(data.list_rows || []);
       applySheetLink(null, null);
       showWarnings([]);
+      if (document.getElementById("ozonSummary")) {
+        document.getElementById("ozonSummary").textContent =
+          (data.list_rows || []).length === 0
+            ? "Нет отправлений awaiting_deliver."
+            : "Строк в списке: " + (data.list_rows || []).length;
+      }
     } catch (e) {
       alert(e.message || String(e));
     } finally {
-      setBusy(false);
+      setOzonBusy(false);
     }
   }
 
   async function ozonDownloadLabels() {
-    if (!labelsToken || busy) return;
-    setBusy(true);
+    if (!ozonLabelsToken || busy) return;
+    setOzonBusy(true);
     try {
       await downloadBlobUrl(
-        "/api/fbs/ozon/labels?token=" + encodeURIComponent(labelsToken),
+        "/api/fbs/ozon/labels?token=" + encodeURIComponent(ozonLabelsToken),
         "ozon_labels.pdf"
       );
     } catch (e) {
       alert(e.message || String(e));
     } finally {
-      setBusy(false);
+      setOzonBusy(false);
+    }
+  }
+
+  async function yandexGenerate() {
+    if (busy) return;
+    setYandexBusy(true);
+    try {
+      var data = await api("/api/fbs/yandex/generate", { method: "POST" });
+      applyYandexGenerateResult(data);
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setYandexBusy(false);
+    }
+  }
+
+  async function yandexRefreshList() {
+    if (busy) return;
+    setYandexBusy(true);
+    try {
+      var data = await api("/api/yandex/awaiting-assembly");
+      yandexLabelsToken = null;
+      var dl = document.getElementById("btnYandexLabels");
+      if (dl) dl.disabled = true;
+      renderYandexListRows(data.list_rows || []);
+      applyYandexSheetLink(null, null);
+      showYandexWarnings([]);
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setYandexBusy(false);
+    }
+  }
+
+  async function yandexDownloadLabels() {
+    if (!yandexLabelsToken || busy) return;
+    setYandexBusy(true);
+    try {
+      await downloadBlobUrl(
+        "/api/fbs/yandex/labels?token=" + encodeURIComponent(yandexLabelsToken),
+        "yandex_labels.pdf"
+      );
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      setYandexBusy(false);
     }
   }
 
@@ -510,6 +648,12 @@
     document.getElementById("btnOzonRefreshList").addEventListener("click", ozonRefreshList);
   document.getElementById("btnOzonLabels") &&
     document.getElementById("btnOzonLabels").addEventListener("click", ozonDownloadLabels);
+  document.getElementById("btnYandexGenerate") &&
+    document.getElementById("btnYandexGenerate").addEventListener("click", yandexGenerate);
+  document.getElementById("btnYandexRefreshList") &&
+    document.getElementById("btnYandexRefreshList").addEventListener("click", yandexRefreshList);
+  document.getElementById("btnYandexLabels") &&
+    document.getElementById("btnYandexLabels").addEventListener("click", yandexDownloadLabels);
   document.getElementById("btnLogout") &&
     document.getElementById("btnLogout").addEventListener("click", function () {
       api("/api/logout", { method: "POST" })

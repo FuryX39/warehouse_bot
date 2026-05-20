@@ -37,7 +37,7 @@
 
         <div id="section-labels" class="fbs-section-panel active" role="tabpanel">
           <p class="muted" style="margin:0 0 1rem;">
-            Аналог <code>/ozon_labels</code>: список в Google Таблице и PDF-этикетки в порядке артикула.
+            Аналог <code>/ozon_labels</code> и <code>/yandex_labels</code>: список в Google Таблице и PDF-этикетки в порядке артикула.
           </p>
 
           <div class="fbs-mp-tabs" role="tablist">
@@ -87,16 +87,49 @@
           <div id="mp-wildberries" class="fbs-mp-panel" role="tabpanel">
             <p class="muted">Раздел в разработке.</p>
             <div class="toolbar">
-              <button type="button" class="btn primary">Сформировать список и этикетки</button>
-              <button type="button" class="btn">Скачать этикетки</button>
+              <button type="button" class="btn primary" disabled>Сформировать список и этикетки</button>
+              <button type="button" class="btn" disabled>Скачать этикетки</button>
             </div>
           </div>
 
           <div id="mp-yandex_market" class="fbs-mp-panel" role="tabpanel">
-            <p class="muted">Раздел в разработке.</p>
+            <dl class="fbs-status" id="yandexStatus">
+              <div><dt>API</dt><dd id="yandexApiStatus">—</dd></div>
+              <div><dt>Google Таблица</dt><dd id="yandexSheetStatus">—</dd></div>
+            </dl>
+            <p class="muted" style="margin:0 0 0.75rem;">
+              Заказы в статусе <code>PROCESSING</code>, подстатус <code>STARTED</code> (ожидают сборки).
+            </p>
             <div class="toolbar">
-              <button type="button" class="btn primary">Сформировать список и этикетки</button>
-              <button type="button" class="btn">Скачать этикетки</button>
+              <button type="button" class="btn primary" id="btnYandexGenerate">
+                Сформировать список и этикетки
+              </button>
+              <button type="button" class="btn" id="btnYandexLabels" disabled>
+                Скачать этикетки
+              </button>
+              <button type="button" class="btn" id="btnYandexRefreshList">Только просмотр списка</button>
+            </div>
+            <div id="yandexResult" class="fbs-result-box hidden">
+              <h3>Результат</h3>
+              <p class="muted" id="yandexSummary"></p>
+              <p id="yandexSheetBlock" class="hidden">
+                <strong>Лист:</strong>
+                <a id="yandexSheetLink" class="fbs-sheet-link" href="#" target="_blank" rel="noopener"></a>
+              </p>
+              <div id="yandexWarnings" class="movement-warnings hidden"></div>
+              <div class="table-wrap" style="margin-top:1rem;">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>№</th>
+                      <th>Артикул</th>
+                      <th class="num">Кол-во</th>
+                      <th>Номер заказа</th>
+                    </tr>
+                  </thead>
+                  <tbody id="yandexListBody"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
