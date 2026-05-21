@@ -12,6 +12,7 @@ HTTP API и раздача веб-страницы панели.
   POST /api/import_sheet — импорт остатков из Google Sheets (как /import_sheet)
   POST /api/logout    — выход
   GET  /fbs           — FBS: списки и этикетки по маркетплейсам
+  GET  /dealer-analysis — сравнение Excel заказов дилера (2 периода → отчёт)
   GET  /              — панель (редирект на /login без сессии)
   GET  /static/*      — CSS/JS (без данных; основная защита — API и /)
 """
@@ -26,7 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -61,6 +62,8 @@ from app.yandex_fbs_labels import (
     order_ids_in_list_order,
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
+from app.dealer_analysis import run_dealer_analysis
+from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
 
 _WEB_ROOT = Path(__file__).resolve().parent
@@ -109,6 +112,20 @@ def _password_ok(attempt: str, secret: str) -> bool:
 
 
 _ORDER_ITEM_SOURCES = frozenset({"ozon", "yandex_market", "wildberries"})
+_DEALER_XLSX_MAX_BYTES = 30 * 1024 * 1024
+_DEALER_XLSX_MAGIC = b"PK\x03\x04"
+
+
+def _dealer_xlsx_ok(data: bytes, filename: str) -> bool:
+    if not data.startswith(_DEALER_XLSX_MAGIC):
+        return False
+    name = (filename or "").lower()
+    return name.endswith((".xlsx", ".xlsm", ".xltx")) or not name
+
+
+def _content_disposition_attachment(filename: str) -> str:
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in (filename or "file.xlsx"))
+    return f'attachment; filename="{safe}"'
 
 
 def create_dashboard_app(
@@ -116,6 +133,7 @@ def create_dashboard_app(
     inventory_repo: InventoryRepository,
     coordinator: StockCoordinator,
     movement_repo: MovementRepository,
+    dealer_analysis_repo: DealerAnalysisRepository,
 ) -> FastAPI:
     dashboard_secret = (settings.web_dashboard_secret or "").strip()
     if not dashboard_secret:
@@ -147,6 +165,22 @@ def create_dashboard_app(
             raise HTTPException(status_code=500, detail="Шаблон входа не найден")
         return FileResponse(
             path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.get("/dealer-analysis")
+    async def dealer_analysis_page(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url="/login", status_code=302)
+        html_path = _WEB_ROOT / "templates" / "dealer_analysis.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон анализа дилера не найден")
+        return FileResponse(
+            html_path,
             media_type="text/html; charset=utf-8",
             headers={
                 "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -1062,6 +1096,124 @@ def create_dashboard_app(
         if not inventory_repo.delete_nomenclature_by_sku(sku_n):
             raise HTTPException(status_code=404, detail="Артикул не найден в номенклатуре")
         return {"sku": sku_n, "deleted": True}
+
+    @app.get("/api/dealer-analysis/files", dependencies=[Depends(require_login)])
+    async def api_dealer_analysis_files() -> dict:
+        files = dealer_analysis_repo.list_files()
+        return {
+            "files": [
+                {
+                    "id": f.id,
+                    "file_kind": f.file_kind,
+                    "period_label": f.period_label,
+                    "run_id": f.run_id,
+                    "original_filename": f.original_filename,
+                    "file_size": f.file_size,
+                    "uploaded_at_ts": f.uploaded_at_ts,
+                }
+                for f in files
+            ]
+        }
+
+    @app.get("/api/dealer-analysis/runs", dependencies=[Depends(require_login)])
+    async def api_dealer_analysis_runs() -> dict:
+        runs = dealer_analysis_repo.list_runs()
+        return {
+            "runs": [
+                {
+                    "id": r.id,
+                    "period_a_label": r.period_a_label,
+                    "period_b_label": r.period_b_label,
+                    "source_a_file_id": r.source_a_file_id,
+                    "source_b_file_id": r.source_b_file_id,
+                    "report_file_id": r.report_file_id,
+                    "created_at_ts": r.created_at_ts,
+                    "stats": r.stats,
+                }
+                for r in runs
+            ]
+        }
+
+    @app.get("/api/dealer-analysis/files/{file_id}/download", dependencies=[Depends(require_login)])
+    async def api_dealer_analysis_download(file_id: int) -> FileResponse:
+        info = dealer_analysis_repo.get_file(file_id)
+        if info is None:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        path = dealer_analysis_repo.file_path(file_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="Файл на диске не найден")
+        media = info.mime_type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return FileResponse(
+            path,
+            media_type=media,
+            filename=info.original_filename or path.name,
+            headers={"Content-Disposition": _content_disposition_attachment(info.original_filename or path.name)},
+        )
+
+    @app.post("/api/dealer-analysis/analyze", dependencies=[Depends(require_login)])
+    async def api_dealer_analysis_analyze(
+        period_a_label: Annotated[str, Form()] = "",
+        period_b_label: Annotated[str, Form()] = "",
+        file_a: UploadFile = File(...),
+        file_b: UploadFile = File(...),
+    ) -> dict:
+        label_a = (period_a_label or "Период A").strip()[:128] or "Период A"
+        label_b = (period_b_label or "Период B").strip()[:128] or "Период B"
+        data_a = await file_a.read()
+        data_b = await file_b.read()
+        if len(data_a) > _DEALER_XLSX_MAX_BYTES or len(data_b) > _DEALER_XLSX_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 30 МБ)")
+        if not data_a or not data_b:
+            raise HTTPException(status_code=400, detail="Оба файла обязательны")
+        if not _dealer_xlsx_ok(data_a, file_a.filename or ""):
+            raise HTTPException(status_code=400, detail="Первый файл: нужен Excel .xlsx")
+        if not _dealer_xlsx_ok(data_b, file_b.filename or ""):
+            raise HTTPException(status_code=400, detail="Второй файл: нужен Excel .xlsx")
+        try:
+            _rows, stats, report_bytes = await asyncio.to_thread(
+                run_dealer_analysis,
+                data_a,
+                data_b,
+                period_a_label=label_a,
+                period_b_label=label_b,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Ошибка разбора Excel: {exc}") from exc
+
+        file_a_id = dealer_analysis_repo.store_file(
+            file_kind="source_a",
+            period_label=label_a,
+            original_filename=file_a.filename or "period_a.xlsx",
+            content=data_a,
+        )
+        file_b_id = dealer_analysis_repo.store_file(
+            file_kind="source_b",
+            period_label=label_b,
+            original_filename=file_b.filename or "period_b.xlsx",
+            content=data_b,
+        )
+        report_name = f"dealer_analysis_{label_a}_vs_{label_b}.xlsx"
+        report_id = dealer_analysis_repo.store_file(
+            file_kind="report",
+            period_label=f"{label_a} vs {label_b}",
+            original_filename=report_name,
+            content=report_bytes,
+        )
+        run_id = dealer_analysis_repo.create_run(
+            period_a_label=label_a,
+            period_b_label=label_b,
+            source_a_file_id=file_a_id,
+            source_b_file_id=file_b_id,
+            report_file_id=report_id,
+            stats=stats,
+        )
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "report_file_id": report_id,
+            "stats": stats,
+            "download_url": f"/api/dealer-analysis/files/{report_id}/download",
+        }
 
     @app.get("/api/config/marketplaces", dependencies=[Depends(require_login)])
     async def api_mp_config() -> dict:

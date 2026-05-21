@@ -14,21 +14,36 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.adapters.ozon import OzonAdapter
 from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.config import Settings, load_settings
+from app.config import dealer_analysis_data_dir_default
+from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 
 
-def create_inventory_stack() -> tuple[Settings, InventoryRepository, StockCoordinator, MovementRepository]:
+def create_inventory_stack() -> tuple[
+    Settings,
+    InventoryRepository,
+    StockCoordinator,
+    MovementRepository,
+    DealerAnalysisRepository,
+]:
     settings = load_settings()
     inventory_repo = InventoryRepository(settings.db_url)
     inventory_repo.init_schema()
     movement_repo = MovementRepository(settings.movement_db_url)
     movement_repo.init_schema()
+    dealer_data_dir = dealer_analysis_data_dir_default()
+    if settings.dealer_analysis_data_dir:
+        dealer_data_dir = Path(settings.dealer_analysis_data_dir)
+    dealer_repo = DealerAnalysisRepository(settings.dealer_analysis_db_url, dealer_data_dir)
+    dealer_repo.init_schema()
     coordinator = StockCoordinator(
         inventory_repo=inventory_repo,
         adapters=[
@@ -49,4 +64,4 @@ def create_inventory_stack() -> tuple[Settings, InventoryRepository, StockCoordi
         ],
         full_sync_interval_seconds=settings.full_sync_interval_seconds,
     )
-    return settings, inventory_repo, coordinator, movement_repo
+    return settings, inventory_repo, coordinator, movement_repo, dealer_repo

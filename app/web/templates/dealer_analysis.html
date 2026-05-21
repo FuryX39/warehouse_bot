@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Анализ заказов дилера</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/dealer_analysis.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Склад</div>
+      <nav class="nav">
+        <a class="nav-item nav-link" href="/">Панель</a>
+        <a class="nav-item nav-link" href="/fbs">FBS</a>
+        <button type="button" class="nav-item active" disabled>Анализ дилера</button>
+      </nav>
+      <div class="sidebar-footer">
+        <button type="button" class="btn" id="btnLogout" style="width:100%;margin-bottom:0.5rem;">Выйти</button>
+        <span class="muted">dealer-analysis</span>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <h1>Анализ заказов дилера</h1>
+      </header>
+
+      <section class="view active" style="display:flex;">
+        <p class="muted da-intro">
+          Загрузите два Excel-файла (например, 2024 и 2025). Формат: колонка A — артикул, B — количество,
+          C — цена за шт., D — сумма. Будет сформирован третий файл со сравнением по каждому артикулу;
+          все файлы сохраняются в базе для скачивания.
+        </p>
+
+        <form id="analyzeForm" class="da-form card">
+          <h2>Новый анализ</h2>
+          <div class="da-form-grid">
+            <label class="field-block">
+              Название первого периода
+              <input type="text" id="periodALabel" class="input" placeholder="2024" value="2024" required />
+            </label>
+            <label class="field-block">
+              Название второго периода
+              <input type="text" id="periodBLabel" class="input" placeholder="2025" value="2025" required />
+            </label>
+            <label class="field-block">
+              Excel первого периода (.xlsx)
+              <input type="file" id="fileA" accept=".xlsx,.xlsm,.xltx" required />
+            </label>
+            <label class="field-block">
+              Excel второго периода (.xlsx)
+              <input type="file" id="fileB" accept=".xlsx,.xlsm,.xltx" required />
+            </label>
+          </div>
+          <div class="toolbar">
+            <button type="submit" class="btn primary" id="btnAnalyze">Сравнить и скачать отчёт</button>
+            <span class="muted" id="analyzeStatus"></span>
+          </div>
+          <div id="analyzeResult" class="da-result hidden"></div>
+        </form>
+
+        <div class="da-section card">
+          <div class="toolbar">
+            <h2>История анализов</h2>
+            <button type="button" class="btn" id="btnReloadRuns">Обновить</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="runsTable">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Периоды</th>
+                  <th>Артикулов</th>
+                  <th>Рост</th>
+                  <th>Падение</th>
+                  <th>Новые</th>
+                  <th>Сняты</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="runsBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="da-section card">
+          <div class="toolbar">
+            <h2>Все сохранённые файлы</h2>
+            <button type="button" class="btn" id="btnReloadFiles">Обновить</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="filesTable">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Тип</th>
+                  <th>Период</th>
+                  <th>Имя файла</th>
+                  <th>Размер</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="filesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/dealer_analysis.js"></script>
+</body>
+</html>

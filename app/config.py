@@ -83,6 +83,20 @@ class Settings:
     yandex_label_format: str = "A9_HORIZONTALLY"
     # Поворот PDF-этикеток Yandex: 0 = без поворота.
     yandex_label_rotate_degrees: int = 0
+    # Анализ заказов дилера (/dealer-analysis): отдельная БД и каталог файлов.
+    dealer_analysis_db_url: str = ""
+    dealer_analysis_data_dir: str = ""
+
+
+def dealer_analysis_db_url_default() -> str:
+    return os.getenv("DEALER_ANALYSIS_DB_URL", "sqlite:///dealer_analysis.db").strip() or "sqlite:///dealer_analysis.db"
+
+
+def dealer_analysis_data_dir_default() -> Path:
+    raw = os.getenv("DEALER_ANALYSIS_DATA_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    return _PROJECT_ROOT / "data" / "dealer_analysis"
 
 
 def load_settings() -> Settings:
@@ -118,6 +132,8 @@ def load_settings() -> Settings:
         ozon_label_rotate_degrees=_ozon_label_rotate_degrees(),
         yandex_label_format=_yandex_label_format(),
         yandex_label_rotate_degrees=_yandex_label_rotate_degrees(),
+        dealer_analysis_db_url=dealer_analysis_db_url_default(),
+        dealer_analysis_data_dir=str(dealer_analysis_data_dir_default()),
     )
 
 

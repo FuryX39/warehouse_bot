@@ -72,7 +72,7 @@ SHIP_ACTION_TTL_SECONDS = 300
 
 # Инициализация БД и координатора вынесена в app/bootstrap.py — см. docstring там.
 # Здесь остаётся только вызов: поведение бота то же, что при «ручной» сборке в этом файле.
-settings, inventory_repo, coordinator, movement_repo = create_inventory_stack()
+settings, inventory_repo, coordinator, movement_repo, _dealer_analysis_repo = create_inventory_stack()
 
 
 def _format_sync_result_message(result: dict) -> str:
