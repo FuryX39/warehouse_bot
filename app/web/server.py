@@ -26,6 +26,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -122,9 +123,19 @@ def _dealer_xlsx_ok(data: bytes, filename: str) -> bool:
     return name.endswith((".xlsx", ".xlsm", ".xltx")) or not name
 
 
+def _dealer_download_ascii_filename(filename: str) -> str:
+    """Имя для заголовка HTTP (только ASCII — иначе 500 на latin-1)."""
+    raw = (filename or "dealer_analysis.xlsx").strip() or "dealer_analysis.xlsx"
+    safe = "".join(c if ord(c) < 128 and (c.isalnum() or c in "._-") else "_" for c in raw)
+    if not safe.lower().endswith((".xlsx", ".xlsm", ".xltx")):
+        safe = (safe.rstrip(".") or "dealer_analysis") + ".xlsx"
+    return safe
+
+
 def _content_disposition_attachment(filename: str) -> str:
-    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in (filename or "file.xlsx"))
-    return f'attachment; filename="{safe}"'
+    ascii_name = _dealer_download_ascii_filename(filename)
+    utf8_name = quote((filename or ascii_name).strip() or ascii_name)
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
 
 
 def create_dashboard_app(
@@ -1137,19 +1148,26 @@ def create_dashboard_app(
         }
 
     @app.get("/api/dealer-analysis/files/{file_id}/download", dependencies=[Depends(require_login)])
-    async def api_dealer_analysis_download(file_id: int) -> FileResponse:
+    async def api_dealer_analysis_download(file_id: int) -> Response:
         info = dealer_analysis_repo.get_file(file_id)
         if info is None:
             raise HTTPException(status_code=404, detail="Файл не найден")
         path = dealer_analysis_repo.file_path(file_id)
         if path is None:
             raise HTTPException(status_code=404, detail="Файл на диске не найден")
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Не удалось прочитать файл: {exc}") from exc
         media = info.mime_type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        return FileResponse(
-            path,
+        return Response(
+            content=content,
             media_type=media,
-            filename=info.original_filename or path.name,
-            headers={"Content-Disposition": _content_disposition_attachment(info.original_filename or path.name)},
+            headers={
+                "Content-Disposition": _content_disposition_attachment(
+                    info.original_filename or path.name
+                ),
+            },
         )
 
     @app.post("/api/dealer-analysis/analyze", dependencies=[Depends(require_login)])
@@ -1201,7 +1219,10 @@ def create_dashboard_app(
             original_filename=file_b.filename or "period_b.xlsx",
             content=data_b,
         )
-        report_name = f"dealer_analysis_{label_a}_vs_{label_b}.xlsx"
+        report_name = (
+            f"dealer_analysis_{_dealer_download_ascii_filename(label_a).removesuffix('.xlsx')}"
+            f"_vs_{_dealer_download_ascii_filename(label_b).removesuffix('.xlsx')}.xlsx"
+        )
         report_id = dealer_analysis_repo.store_file(
             file_kind="report",
             period_label=f"{label_a} vs {label_b}",

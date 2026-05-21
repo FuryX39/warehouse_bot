@@ -72,7 +72,7 @@ class DealerAnalysisRunInfo:
 class DealerAnalysisRepository:
     def __init__(self, db_url: str, data_dir: Path) -> None:
         self.engine = create_engine(db_url, future=True)
-        self.data_dir = data_dir
+        self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def init_schema(self) -> None:
