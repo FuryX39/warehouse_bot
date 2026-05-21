@@ -68,6 +68,47 @@ def _posting_cell_with_highlight(
     }
 
 
+def _merge_consecutive_posting_cells(
+    worksheet,
+    posting_numbers: Sequence[str],
+    *,
+    column_index: int = _FBS_POSTING_COL_INDEX,
+) -> None:
+    """Вертикально объединяет ячейки колонки отправления с одинаковым номером подряд."""
+    if len(posting_numbers) < 2:
+        return
+    requests: list[dict] = []
+    i = 0
+    while i < len(posting_numbers):
+        pn = posting_numbers[i]
+        j = i + 1
+        while j < len(posting_numbers) and posting_numbers[j] == pn:
+            j += 1
+        if j - i > 1:
+            start_row = 1 + i
+            end_row = 1 + j
+            cell_range = {
+                "sheetId": worksheet.id,
+                "startRowIndex": start_row,
+                "endRowIndex": end_row,
+                "startColumnIndex": column_index,
+                "endColumnIndex": column_index + 1,
+            }
+            requests.append({"mergeCells": {"range": cell_range, "mergeType": "MERGE_ALL"}})
+            requests.append(
+                {
+                    "repeatCell": {
+                        "range": cell_range,
+                        "cell": {"userEnteredFormat": {"verticalAlignment": "MIDDLE"}},
+                        "fields": "userEnteredFormat.verticalAlignment",
+                    }
+                }
+            )
+        i = j
+    if requests:
+        worksheet.spreadsheet.batch_update({"requests": requests})
+
+
 def _fill_posting_column_highlighted(worksheet, posting_numbers: Sequence[str]) -> None:
     if not posting_numbers:
         return
@@ -173,6 +214,7 @@ def write_fbs_list_from_template(
     """
     Копирует лист-шаблон (FBSTemplate), заполняет A, D, E: артикул, количество, номер отправления.
     Колонки B–C (картинка, название) не трогает — формулы из шаблона.
+    Подряд идущие строки с одним номером отправления (колонка E) объединяются по вертикали.
     """
     if not rows:
         raise ValueError("Нет строк для выгрузки в Google Таблицу")
@@ -198,5 +240,6 @@ def write_fbs_list_from_template(
     new_ws.update(f"A2:A{last_row}", skus, value_input_option="USER_ENTERED")
     new_ws.update(f"D2:D{last_row}", qtys, value_input_option="USER_ENTERED")
     _fill_posting_column_highlighted(new_ws, posting_numbers)
+    _merge_consecutive_posting_cells(new_ws, posting_numbers)
 
     return f"https://docs.google.com/spreadsheets/d/{sh.id}/edit#gid={new_ws.id}"
