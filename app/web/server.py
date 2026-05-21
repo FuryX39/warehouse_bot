@@ -62,7 +62,6 @@ from app.yandex_fbs_labels import (
     order_ids_in_list_order,
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
-from app.dealer_analysis import run_dealer_analysis
 from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
 
@@ -240,8 +239,11 @@ def create_dashboard_app(
         return {"ok": True}
 
     @app.get("/api/health", dependencies=[Depends(require_login)])
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> dict:
+        return {
+            "status": "ok",
+            "dealer_analysis": True,
+        }
 
     @app.get("/api/status", dependencies=[Depends(require_login)])
     async def api_status() -> dict:
@@ -1170,6 +1172,8 @@ def create_dashboard_app(
         if not _dealer_xlsx_ok(data_b, file_b.filename or ""):
             raise HTTPException(status_code=400, detail="Второй файл: нужен Excel .xlsx")
         try:
+            from app.dealer_analysis import run_dealer_analysis
+
             _rows, stats, report_bytes = await asyncio.to_thread(
                 run_dealer_analysis,
                 data_a,
@@ -1177,6 +1181,11 @@ def create_dashboard_app(
                 period_a_label=label_a,
                 period_b_label=label_b,
             )
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Ошибка разбора Excel: {exc}") from exc
 

@@ -62,7 +62,15 @@ def main() -> None:
     except RuntimeError as exc:
         logger.error("%s", exc)
         sys.exit(1)
+    except Exception as exc:
+        logger.error("Не удалось создать веб-приложение: %s", exc)
+        sys.exit(1)
     _exit_if_port_busy(settings.web_host, settings.web_port)
+    logger.info(
+        "Веб-панель: http://%s:%s/ (анализ дилера: /dealer-analysis)",
+        settings.web_host,
+        settings.web_port,
+    )
     uvicorn.run(app, host=settings.web_host, port=settings.web_port, log_level="info")
 
 

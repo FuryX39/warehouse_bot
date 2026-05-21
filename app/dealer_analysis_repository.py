@@ -1,13 +1,10 @@
 """Хранение загруженных Excel и отчётов анализа дилерских заказов."""
 
-from __future__ import annotations
-
 import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-
 from sqlalchemy import ForeignKey, Integer, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -22,7 +19,7 @@ class DealerAnalysisFileRow(DealerAnalysisBase):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     file_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # source_a | source_b | report
     period_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    run_id: Mapped[int | None] = mapped_column(
+    run_id = mapped_column(
         Integer,
         ForeignKey("dealer_analysis_runs.id", ondelete="SET NULL"),
         nullable=True,
@@ -43,7 +40,7 @@ class DealerAnalysisRunRow(DealerAnalysisBase):
     period_b_label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     source_a_file_id: Mapped[int] = mapped_column(Integer, nullable=False)
     source_b_file_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    report_file_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_file_id = mapped_column(Integer, nullable=True)
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     stats_json: Mapped[str] = mapped_column(String(8192), nullable=False, default="{}")
 
