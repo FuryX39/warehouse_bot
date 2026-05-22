@@ -123,24 +123,34 @@ def _fetch_labels_in_order(
     *,
     label_rotate_degrees: int = 90,
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
-    label_files, warnings = adapter.fetch_package_label_pdf_parts(posting_numbers)
-    label_files = [
-        (name, normalize_ozon_package_label_pdf(data, rotate_degrees=label_rotate_degrees))
-        for name, data in label_files
-    ]
-    pdfs = [data for _, data in label_files]
-    merged = merge_label_pdfs(pdfs)
+    """Этикетки в порядке posting_numbers (как отправления на листе сборки)."""
+    by_posting, warnings = adapter.fetch_package_label_by_posting(posting_numbers)
+    ordered_pdfs: list[bytes] = []
+    seen: set[str] = set()
+    for pn in posting_numbers:
+        pn = str(pn).strip()
+        if not pn or pn in seen:
+            continue
+        seen.add(pn)
+        raw = by_posting.get(pn)
+        if raw is None:
+            warnings.append(f"Нет этикетки для отправления {pn}")
+            continue
+        ordered_pdfs.append(
+            normalize_ozon_package_label_pdf(raw, rotate_degrees=label_rotate_degrees)
+        )
+    if not ordered_pdfs:
+        return [], warnings
+    merged = merge_label_pdfs(ordered_pdfs)
     if merged is not None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return [(f"ozon_labels_sorted_{ts}.pdf", merged)], warnings
-    if not label_files:
-        return [], warnings
-    if len(pdfs) > 1:
+    if len(ordered_pdfs) > 1:
         warnings.append(
             "Не удалось объединить PDF в один файл (установите pypdf). "
-            "Файлы в ZIP идут чанками API, порядок чанков сохранён."
+            "Отправлены отдельные файлы по порядку листа."
         )
-    return label_files, warnings
+    return [(f"ozon_label_{i + 1}.pdf", pdf) for i, pdf in enumerate(ordered_pdfs)], warnings
 
 
 def _export_list_to_google_sheet(
@@ -172,7 +182,7 @@ def fetch_awaiting_shipment_labels(
     first_posting_number: str | None = None,
     last_posting_number: str | None = None,
 ) -> OzonAwaitingShipmentBundle:
-    """Список по артикулу, этикетки в том же порядке, лист в Google Таблице."""
+    """Список по артикулу; этикетки — по порядку отправлений на листе; лист в Google Таблице."""
     postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
     if not postings:
         return OzonAwaitingShipmentBundle()
@@ -198,10 +208,11 @@ def fetch_awaiting_shipment_labels(
         )
 
     sheet_title = fbs_list_sheet_title()
+    label_posting_order = posting_numbers_in_list_order(list_rows)
 
     label_files, warnings = _fetch_labels_in_order(
         adapter,
-        posting_numbers,
+        label_posting_order,
         label_rotate_degrees=ozon_label_rotate_degrees,
     )
 

@@ -33,6 +33,25 @@ def build_fbs_sorted_flat_rows(
     return single_rows + multi_rows
 
 
+def split_pdf_into_pages(pdf_bytes: bytes) -> list[bytes]:
+    """Один PDF → список одностраничных PDF (порядок страниц сохраняется)."""
+    if not pdf_bytes.startswith(b"%PDF"):
+        return [pdf_bytes]
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        return [pdf_bytes]
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    pages: list[bytes] = []
+    for page in reader.pages:
+        writer = PdfWriter()
+        writer.add_page(page)
+        buf = io.BytesIO()
+        writer.write(buf)
+        pages.append(buf.getvalue())
+    return pages
+
+
 def merge_label_pdfs(pdf_parts: list[bytes]) -> bytes | None:
     if not pdf_parts:
         return None

@@ -339,6 +339,49 @@ class OzonAdapter(MarketplaceAdapter):
 
         return parts, warnings
 
+    def fetch_package_label_by_posting(
+        self,
+        posting_numbers: list[str],
+        *,
+        chunk_size: int = _PACKAGE_LABEL_MAX_POSTINGS,
+    ) -> tuple[dict[str, bytes], list[str]]:
+        """
+        Этикетка на каждое отправление. PDF из API режется по страницам
+        (порядок страниц = порядок posting_number в запросе).
+        """
+        from app.fbs_labels_common import split_pdf_into_pages
+
+        parts, warnings = self.fetch_package_label_pdf_parts(
+            posting_numbers,
+            chunk_size=chunk_size,
+        )
+        unique = list(dict.fromkeys(str(p).strip() for p in posting_numbers if str(p).strip()))
+        by_posting: dict[str, bytes] = {}
+        chunk_size = max(1, min(int(chunk_size), _PACKAGE_LABEL_MAX_POSTINGS))
+        part_idx = 0
+        for start in range(0, len(unique), chunk_size):
+            chunk = unique[start : start + chunk_size]
+            if part_idx >= len(parts):
+                warnings.append(f"Нет PDF для отправлений: {', '.join(chunk)}")
+                break
+            _, pdf = parts[part_idx]
+            part_idx += 1
+            pages = split_pdf_into_pages(pdf)
+            if len(pages) == len(chunk):
+                for pn, page_pdf in zip(chunk, pages):
+                    by_posting[pn] = page_pdf
+            elif len(chunk) == 1 and len(pages) >= 1:
+                by_posting[chunk[0]] = pages[0]
+            else:
+                warnings.append(
+                    f"Этикетки {chunk[0]}…: в PDF {len(pages)} стр., ожидалось {len(chunk)} — "
+                    "порядок этикеток может не совпасть с листом."
+                )
+                for i, pn in enumerate(chunk):
+                    if i < len(pages):
+                        by_posting[pn] = pages[i]
+        return by_posting, warnings
+
     def _resolve_product_ids(self, offer_ids: list[str], headers: dict[str, str]) -> dict[str, int]:
         """offer_id → product_id для POST /v2/products/stocks (Ozon надёжнее принимает оба поля)."""
         out: dict[str, int] = {}
