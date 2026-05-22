@@ -52,6 +52,29 @@
               <div><dt>API</dt><dd id="ozonApiStatus">—</dd></div>
               <div><dt>Google Таблица</dt><dd id="ozonSheetStatus">—</dd></div>
             </dl>
+            <div class="toolbar fbs-ozon-range">
+              <label class="field-inline"
+                >С
+                <input
+                  type="text"
+                  id="ozonFirstPosting"
+                  class="input"
+                  placeholder="первый номер отправления"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="field-inline"
+                >По
+                <input
+                  type="text"
+                  id="ozonLastPosting"
+                  class="input"
+                  placeholder="последний номер отправления"
+                  autocomplete="off"
+                />
+              </label>
+              <span class="muted">Пусто = все. Первый — старый заказ, последний — новый (как в ЛК Ozon).</span>
+            </div>
             <div class="toolbar">
               <button type="button" class="btn primary" id="btnOzonGenerate">
                 Сформировать список и этикетки

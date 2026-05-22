@@ -132,7 +132,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/movement_edit ID [--name ...] [--comment ...] - изменить название и/или комментарий\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
-        "/ozon_labels - FBS awaiting_deliver: список по артикулу, лист в Google, PDF-этикетки\n"
+        "/ozon_labels [первый_номер] [последний_номер] - FBS: лист и этикетки "
+        "(от старого заказа к новому по времени Ozon, включительно)\n"
         "/yandex_labels - FBS PROCESSING/STARTED: список по артикулу, лист в Google, PDF-этикетки\n"
         "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
         "/ship_ozon - отгрузка только Ozon (не new)\n"
@@ -598,9 +599,20 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    args = [str(a).strip() for a in (context.args or []) if str(a).strip()]
+    first_pn: str | None = None
+    last_pn: str | None = None
+    if len(args) >= 2:
+        first_pn, last_pn = args[0], args[1]
+    elif len(args) == 1:
+        first_pn = last_pn = args[0]
+
+    range_hint = ""
+    if first_pn:
+        range_hint = f" (диапазон: {first_pn} … {last_pn})"
     await _reply_text_resilient(
         update.message,
-        "Загрузка отправлений Ozon (статус «ожидает отгрузки», awaiting_deliver)…",
+        f"Загрузка отправлений Ozon (awaiting_deliver){range_hint}…",
     )
     try:
         bundle = await asyncio.to_thread(
@@ -610,7 +622,12 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             google_service_account_file=settings.google_service_account_file,
             fbs_list_template_sheet=settings.fbs_list_template_sheet,
             ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
+            first_posting_number=first_pn,
+            last_posting_number=last_pn,
         )
+    except ValueError as exc:
+        await _reply_text_resilient(update.message, str(exc))
+        return
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ozon labels failed")
         await _reply_text_resilient(update.message, f"Ошибка этикеток Ozon: {exc}")

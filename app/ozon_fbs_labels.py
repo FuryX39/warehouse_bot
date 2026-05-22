@@ -63,6 +63,60 @@ def posting_numbers_in_list_order(list_rows: list[OzonFbsListRow]) -> list[str]:
     return out
 
 
+def posting_numbers_chronological(postings: list[OzonFbsPosting]) -> list[str]:
+    """Номера отправлений по времени in_process_at: старые первые (как в ЛК Ozon сверху вниз)."""
+    ordered = sorted(postings, key=lambda p: (p.in_process_at_ts, p.posting_number))
+    return [p.posting_number for p in ordered]
+
+
+def _normalize_posting_range_args(
+    first_posting: str | None,
+    last_posting: str | None,
+) -> tuple[str | None, str | None]:
+    first = (first_posting or "").strip() or None
+    last = (last_posting or "").strip() or None
+    if first and not last:
+        last = first
+    elif last and not first:
+        first = last
+    return first, last
+
+
+def filter_by_posting_range(
+    list_rows: list[OzonFbsListRow],
+    posting_order: list[str],
+    *,
+    first_posting: str | None = None,
+    last_posting: str | None = None,
+) -> tuple[list[OzonFbsListRow], list[str]]:
+    """
+    Оставляет строки и отправления от first до last включительно
+    в порядке posting_order (хронология Ozon: старый → новый).
+    """
+    first, last = _normalize_posting_range_args(first_posting, last_posting)
+    if not first and not last:
+        return list_rows, posting_order
+
+    if first not in posting_order:
+        raise ValueError(f"Первый номер отправления не найден в списке: {first}")
+    if last not in posting_order:
+        raise ValueError(f"Последний номер отправления не найден в списке: {last}")
+
+    i0 = posting_order.index(first)
+    i1 = posting_order.index(last)
+    if i0 > i1:
+        i0, i1 = i1, i0
+        first, last = posting_order[i0], posting_order[i1]
+
+    allowed = set(posting_order[i0 : i1 + 1])
+    filtered_order = posting_order[i0 : i1 + 1]
+    filtered_rows = [
+        OzonFbsListRow(i + 1, r.posting_number, r.sku, r.quantity, r.status)
+        for i, r in enumerate(row for row in list_rows if row.posting_number in allowed)
+    ]
+    return filtered_rows, filtered_order
+
+
 def _fetch_labels_in_order(
     adapter: OzonAdapter,
     posting_numbers: list[str],
@@ -115,6 +169,8 @@ def fetch_awaiting_shipment_labels(
     google_service_account_file: str = "",
     fbs_list_template_sheet: str = "FBSTemplate",
     ozon_label_rotate_degrees: int = 90,
+    first_posting_number: str | None = None,
+    last_posting_number: str | None = None,
 ) -> OzonAwaitingShipmentBundle:
     """Список по артикулу, этикетки в том же порядке, лист в Google Таблице."""
     postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
@@ -122,7 +178,25 @@ def fetch_awaiting_shipment_labels(
         return OzonAwaitingShipmentBundle()
 
     list_rows = build_sorted_list_rows(postings)
-    posting_numbers = posting_numbers_in_list_order(list_rows)
+    posting_numbers = posting_numbers_chronological(postings)
+    range_first, range_last = _normalize_posting_range_args(
+        first_posting_number,
+        last_posting_number,
+    )
+    if range_first or range_last:
+        list_rows, posting_numbers = filter_by_posting_range(
+            list_rows,
+            posting_numbers,
+            first_posting=range_first,
+            last_posting=range_last,
+        )
+    if not list_rows:
+        return OzonAwaitingShipmentBundle(
+            warnings=[
+                "После фильтра по номерам отправлений не осталось строк для списка."
+            ],
+        )
+
     sheet_title = fbs_list_sheet_title()
 
     label_files, warnings = _fetch_labels_in_order(
@@ -159,6 +233,12 @@ def fetch_awaiting_shipment_labels(
     ordered_postings = [
         postings_by_number[pn] for pn in posting_numbers if pn in postings_by_number
     ]
+    if range_first or range_last:
+        warnings.insert(
+            0,
+            f"Диапазон отправлений: {range_first} … {range_last} "
+            f"({len(posting_numbers)} шт., по времени заказа).",
+        )
 
     return OzonAwaitingShipmentBundle(
         postings=ordered_postings,

@@ -34,6 +34,8 @@ class OzonFbsPosting:
     posting_number: str
     status: str
     lines: tuple[tuple[str, int], ...]  # (offer_id/sku, quantity)
+    # in_process_at из API: для порядка как в ЛК Ozon (сверху старые, снизу новые).
+    in_process_at_ts: int = 0
 
 
 class OzonAdapter(MarketplaceAdapter):
@@ -60,6 +62,24 @@ class OzonAdapter(MarketplaceAdapter):
     @staticmethod
     def _to_ozon_datetime(dt: datetime) -> str:
         return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    @staticmethod
+    def _in_process_at_ts(posting: dict) -> int:
+        raw = posting.get("in_process_at")
+        if not raw:
+            return 0
+        s = str(raw).strip()
+        if not s:
+            return 0
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return 0
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
 
     def _unfulfilled_payload(self, status: str, offset: int) -> dict:
         now = datetime.now(timezone.utc)
@@ -244,16 +264,21 @@ class OzonAdapter(MarketplaceAdapter):
                     if not line_map:
                         continue
                     lines = tuple(sorted(line_map.items(), key=lambda x: x[0]))
+                    in_ts = self._in_process_at_ts(posting)
+                    prev = by_posting.get(posting_number)
+                    if prev is not None and prev.in_process_at_ts > 0:
+                        in_ts = min(in_ts, prev.in_process_at_ts) if in_ts > 0 else prev.in_process_at_ts
                     by_posting[posting_number] = OzonFbsPosting(
                         posting_number=posting_number,
                         status=status,
                         lines=lines,
+                        in_process_at_ts=in_ts,
                     )
                 if len(postings) < 1000:
                     break
                 offset += 1000
 
-        return sorted(by_posting.values(), key=lambda p: p.posting_number)
+        return sorted(by_posting.values(), key=lambda p: (p.in_process_at_ts, p.posting_number))
 
     def fetch_package_label_pdf_parts(
         self,

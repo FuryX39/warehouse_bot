@@ -53,7 +53,9 @@ from app.ozon_fbs_labels import (
     build_labels_zip,
     build_sorted_list_rows,
     fetch_awaiting_shipment_labels,
+    filter_by_posting_range,
     get_configured_ozon_adapter,
+    posting_numbers_chronological,
     posting_numbers_in_list_order,
 )
 from app.yandex_fbs_labels import (
@@ -347,7 +349,10 @@ def create_dashboard_app(
         return {"upserted": n, "sku": sku_n}
 
     @app.get("/api/ozon/awaiting-shipment", dependencies=[Depends(require_login)])
-    async def api_ozon_awaiting_shipment_list() -> dict:
+    async def api_ozon_awaiting_shipment_list(
+        first_posting: Annotated[str, Query(description="Первый номер отправления в диапазоне")] = "",
+        last_posting: Annotated[str, Query(description="Последний номер отправления в диапазоне")] = "",
+    ) -> dict:
         """Список FBS-отправлений Ozon в статусе «ожидает отгрузки» (awaiting_deliver)."""
         adapter = get_configured_ozon_adapter(coordinator)
         if adapter is None:
@@ -360,7 +365,16 @@ def create_dashboard_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Ozon API: {exc}") from exc
         list_rows = build_sorted_list_rows(postings)
-        order = posting_numbers_in_list_order(list_rows)
+        order = posting_numbers_chronological(postings)
+        try:
+            list_rows, order = filter_by_posting_range(
+                list_rows,
+                order,
+                first_posting=first_posting,
+                last_posting=last_posting,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         by_pn = {p.posting_number: p for p in postings}
         postings_ordered = [by_pn[pn] for pn in order if pn in by_pn]
         return {
@@ -400,12 +414,17 @@ def create_dashboard_app(
         )
 
     @app.post("/api/fbs/ozon/generate", dependencies=[Depends(require_login)])
-    async def api_fbs_ozon_generate() -> dict:
-        """FBS Ozon: список в Google Таблице + этикетки (без тела запроса — без Field required)."""
+    async def api_fbs_ozon_generate(
+        first_posting: Annotated[str, Form()] = "",
+        last_posting: Annotated[str, Form()] = "",
+    ) -> dict:
+        """FBS Ozon: список в Google Таблице + этикетки (form: опционально first/last posting)."""
         adapter = get_configured_ozon_adapter(coordinator)
         if adapter is None:
             raise HTTPException(status_code=400, detail="Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)")
         loop = asyncio.get_running_loop()
+        first_p = (first_posting or "").strip()
+        last_p = (last_posting or "").strip()
         try:
             bundle = await loop.run_in_executor(
                 None,
@@ -415,8 +434,12 @@ def create_dashboard_app(
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
                     ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
+                    first_posting_number=first_p or None,
+                    last_posting_number=last_p or None,
                 ),
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Ozon API: {exc}") from exc
         if not bundle.postings:
@@ -434,6 +457,10 @@ def create_dashboard_app(
         return {
             "count": len(bundle.list_rows),
             "status": "awaiting_deliver",
+            "posting_range": {
+                "first": first_p or None,
+                "last": last_p or None,
+            },
             "list_rows": [
                 {
                     "seq": r.seq,

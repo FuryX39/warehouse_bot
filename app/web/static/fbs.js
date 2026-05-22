@@ -278,11 +278,40 @@
     }
   }
 
+  function ozonPostingRangeParams() {
+    var firstEl = document.getElementById("ozonFirstPosting");
+    var lastEl = document.getElementById("ozonLastPosting");
+    return {
+      first: firstEl ? String(firstEl.value || "").trim() : "",
+      last: lastEl ? String(lastEl.value || "").trim() : "",
+    };
+  }
+
+  function ozonPostingRangeFormData() {
+    var p = ozonPostingRangeParams();
+    var fd = new FormData();
+    if (p.first) fd.append("first_posting", p.first);
+    if (p.last) fd.append("last_posting", p.last);
+    return fd;
+  }
+
+  function ozonPostingRangeQuery() {
+    var p = ozonPostingRangeParams();
+    var q = new URLSearchParams();
+    if (p.first) q.set("first_posting", p.first);
+    if (p.last) q.set("last_posting", p.last);
+    var s = q.toString();
+    return s ? "?" + s : "";
+  }
+
   async function ozonGenerate() {
     if (busy) return;
     setOzonBusy(true);
     try {
-      var data = await api("/api/fbs/ozon/generate", { method: "POST" });
+      var data = await api("/api/fbs/ozon/generate", {
+        method: "POST",
+        body: ozonPostingRangeFormData(),
+      });
       applyOzonGenerateResult(data);
     } catch (e) {
       alert(e.message || String(e));
@@ -295,7 +324,7 @@
     if (busy) return;
     setOzonBusy(true);
     try {
-      var data = await api("/api/ozon/awaiting-shipment");
+      var data = await api("/api/ozon/awaiting-shipment" + ozonPostingRangeQuery());
       ozonLabelsToken = null;
       var dl = document.getElementById("btnOzonLabels");
       if (dl) dl.disabled = true;
