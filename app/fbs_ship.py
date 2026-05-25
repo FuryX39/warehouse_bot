@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from app.adapters.ozon import OzonAdapter
@@ -173,9 +174,14 @@ def execute_fbs_ship(
             }
 
     available = inventory_repo.get_available_stock_map()
+    now_ts = int(time.time())
     for adapter in coordinator.adapters:
         if adapter.is_configured():
-            adapter.sync_available_stock(available)
+            changed_available = inventory_repo.get_adapter_stock_push_delta(adapter.name, available)
+            if not changed_available:
+                continue
+            adapter.sync_available_stock(changed_available)
+            inventory_repo.mark_adapter_stock_push_applied(adapter.name, changed_available, now_ts)
 
     coordinator.last_run_at = None
     coordinator.last_error = None

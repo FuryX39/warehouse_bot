@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 _ADMIN_ALERT_MAX_LEN = 3800
 _PER_SOURCE_ALERT_MAX = 3200
+_OZON_STOCK_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60
 
 
 def _anchor_key(source: str) -> str:
@@ -18,6 +19,15 @@ def _anchor_key(source: str) -> str:
 
 def _last_full_key(source: str) -> str:
     return f"{source}_last_full_sync_start_ts"
+
+
+def _stock_backoff_until_key(source: str) -> str:
+    return f"{source}_stock_backoff_until_ts"
+
+
+def _is_stock_rate_limited_error(message: str) -> bool:
+    m = (message or "").lower()
+    return "stock is updated too frequently" in m
 
 
 def _get_anchor(repo: InventoryRepository, source: str) -> int | None:
@@ -225,6 +235,19 @@ class StockCoordinator:
                 for adapter in self.adapters:
                     if not adapter.is_configured():
                         continue
+                    changed_available = self.inventory_repo.get_adapter_stock_push_delta(
+                        adapter.name, available_stock
+                    )
+                    if not changed_available:
+                        continue
+                    backoff_until = self.inventory_repo.get_sync_int(_stock_backoff_until_key(adapter.name)) or 0
+                    if int(backoff_until) > sync_start_ts:
+                        wait_sec = int(backoff_until) - int(sync_start_ts)
+                        adapter_errors.append(
+                            f"{adapter.name}: stock sync paused ({wait_sec}s left after rate limit)"
+                        )
+                        stock_push_ok = False
+                        continue
                     if isinstance(adapter, OzonAdapter) and not is_value_configured(adapter.warehouse_id):
                         adapter_errors.append(
                             "ozon: задайте OZON_WAREHOUSE_ID (id склада FBS) — пуш остатков пропущен"
@@ -232,9 +255,25 @@ class StockCoordinator:
                         stock_push_ok = False
                         continue
                     try:
-                        adapter.sync_available_stock(available_stock)
+                        adapter.sync_available_stock(changed_available)
+                        # Успешный пуш — сбрасываем backoff.
+                        self.inventory_repo.set_sync_int(_stock_backoff_until_key(adapter.name), 0)
+                        self.inventory_repo.mark_adapter_stock_push_applied(
+                            adapter.name, changed_available, sync_start_ts
+                        )
                     except Exception as exc:  # noqa: BLE001
-                        adapter_errors.append(f"{adapter.name}: stock sync failed ({exc})")
+                        msg = str(exc)
+                        if _is_stock_rate_limited_error(msg):
+                            backoff_until = int(sync_start_ts) + _OZON_STOCK_RATE_LIMIT_BACKOFF_SECONDS
+                            self.inventory_repo.set_sync_int(
+                                _stock_backoff_until_key(adapter.name), backoff_until
+                            )
+                            adapter_errors.append(
+                                f"{adapter.name}: stock sync rate-limited, retry in "
+                                f"{_OZON_STOCK_RATE_LIMIT_BACKOFF_SECONDS}s ({msg})"
+                            )
+                        else:
+                            adapter_errors.append(f"{adapter.name}: stock sync failed ({msg})")
                         logger.exception("Adapter stock sync failed: %s", adapter.name)
                         stock_push_ok = False
                 if stock_push_ok:

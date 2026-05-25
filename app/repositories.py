@@ -74,6 +74,19 @@ class SyncState(Base):
     value_int: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class AdapterStockState(Base):
+    """Последнее успешно отправленное available по SKU для каждого маркетплейса."""
+
+    __tablename__ = "adapter_stock_state"
+    __table_args__ = (UniqueConstraint("source", "sku", name="uq_adapter_stock_state_source_sku"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    sku: Mapped[str] = mapped_column(String(128), nullable=False)
+    available: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class NomenclatureItem(Base):
     """Справочник номенклатуры: артикул → название и ссылка на изображение (та же БД, таблица nomenclature)."""
 
@@ -591,6 +604,7 @@ class InventoryRepository:
             session.execute(delete(Reserve))
             session.execute(delete(OrderItem))
             session.execute(delete(ProductStock))
+            session.execute(delete(AdapterStockState))
             session.execute(delete(SyncState))
             session.commit()
 
@@ -603,6 +617,76 @@ class InventoryRepository:
             deleted = session.execute(delete(ProductStock))
             session.commit()
             return int(deleted.rowcount or 0)
+
+    def get_adapter_stock_push_delta(self, source: str, current_available: dict[str, int]) -> dict[str, int]:
+        """
+        Возвращает только изменившиеся значения available для указанного источника.
+        Включает:
+          - SKU, где available изменился;
+          - SKU, которые раньше пушились, но сейчас отсутствуют (для них шлём 0).
+        """
+        src = str(source or "").strip()
+        if not src:
+            return {}
+
+        normalized_current: dict[str, int] = {}
+        for sku_raw, qty in (current_available or {}).items():
+            sku = str(sku_raw or "").strip()
+            if not sku:
+                continue
+            normalized_current[sku] = int(qty)
+
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(AdapterStockState).where(AdapterStockState.source == src)
+            ).all()
+            prev = {str(r.sku): int(r.available) for r in rows}
+
+        changed: dict[str, int] = {}
+        for sku, qty in normalized_current.items():
+            if prev.get(sku) != qty:
+                changed[sku] = qty
+
+        # Если SKU пропал из текущего набора, публикуем 0 один раз.
+        for sku in prev.keys():
+            if sku not in normalized_current and prev.get(sku, 0) != 0:
+                changed[sku] = 0
+
+        return changed
+
+    def mark_adapter_stock_push_applied(self, source: str, pushed_available: dict[str, int], ts: int) -> int:
+        """Фиксирует успешно отправленные available значения (только для переданных SKU)."""
+        src = str(source or "").strip()
+        if not src or not pushed_available:
+            return 0
+
+        updated = 0
+        with Session(self.engine) as session:
+            for sku_raw, qty in pushed_available.items():
+                sku = str(sku_raw or "").strip()
+                if not sku or len(sku) > 128:
+                    continue
+                row = session.scalar(
+                    select(AdapterStockState).where(
+                        AdapterStockState.source == src,
+                        AdapterStockState.sku == sku,
+                    )
+                )
+                if row is None:
+                    session.add(
+                        AdapterStockState(
+                            source=src,
+                            sku=sku,
+                            available=int(qty),
+                            updated_at_ts=int(ts),
+                        )
+                    )
+                else:
+                    row.available = int(qty)
+                    row.updated_at_ts = int(ts)
+                updated += 1
+            session.commit()
+        return updated
 
     def ship_added_orders_before_cutoff(
         self, sources: set[str] | None, cutoff_ts: int

@@ -253,11 +253,13 @@ async def push_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     def _run() -> tuple[dict[str, int], list[str]]:
         merged = inventory_repo.build_force_push_available_map()
         errs: list[str] = []
+        now_ts = int(time.time())
         for adapter in coordinator.adapters:
             if not adapter.is_configured():
                 continue
             try:
                 adapter.sync_available_stock(merged)
+                inventory_repo.mark_adapter_stock_push_applied(adapter.name, merged, now_ts)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("push_stocks: ошибка адаптера %s", adapter.name)
                 errs.append(f"{adapter.name}: {exc}")
