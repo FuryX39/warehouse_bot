@@ -28,6 +28,13 @@ _HEADER_HINTS = frozenset(
 )
 
 
+_QTY_HINTS = ("колич", "кол-во", "кол во", "qty", "quantity")
+_UNIT_PRICE_HINTS = ("цена", "price", "за шт", "за единицу")
+_TOTAL_HINTS = ("сумм", "итог", "выручк", "оборот", "amount", "total")
+_INVOICE_HINTS = ("накладн", "invoice")
+_SUMMARY_HINTS = ("итог", "всего", "итого")
+
+
 @dataclass(frozen=True)
 class DealerPeriodLine:
     sku: str
@@ -84,35 +91,106 @@ def _row_looks_like_header(cells: tuple[object, object, object, object]) -> bool
     return False
 
 
+def _looks_like_invoice_row(sku_or_name: str) -> bool:
+    low = sku_or_name.casefold()
+    return any(h in low for h in _INVOICE_HINTS)
+
+
+def _looks_like_summary_row(sku_or_name: str) -> bool:
+    low = sku_or_name.casefold()
+    return any(h in low for h in _SUMMARY_HINTS)
+
+
+def _detect_column_mapping(ws) -> tuple[int, int, int | None, int | None]:
+    """
+    Возвращает индексы: (sku, qty, unit_price|None, total|None).
+    По умолчанию старый формат A-D: артикул, кол-во, цена/шт, сумма.
+    Для отчётов дилера с группировкой обычно: A=товар, B=сумма, C=кол-во.
+    """
+    sku_col = 0
+    qty_col = 1
+    unit_col: int | None = 2
+    total_col: int | None = 3
+
+    for row in ws.iter_rows(min_row=1, max_row=25, max_col=8, values_only=True):
+        labels = [(_cell_str(v).casefold()) for v in row]
+        if not any(labels):
+            continue
+        if not any(any(h in c for h in _HEADER_HINTS) for c in labels):
+            continue
+
+        qty_idx = next((i for i, c in enumerate(labels) if any(h in c for h in _QTY_HINTS)), None)
+        total_idx = next((i for i, c in enumerate(labels) if any(h in c for h in _TOTAL_HINTS)), None)
+        unit_idx = next((i for i, c in enumerate(labels) if any(h in c for h in _UNIT_PRICE_HINTS)), None)
+        name_idx = next(
+            (
+                i
+                for i, c in enumerate(labels)
+                if any(h in c for h in ("артикул", "sku", "код", "товар", "наимен"))
+            ),
+            None,
+        )
+
+        if qty_idx is None:
+            continue
+        sku_col = name_idx if name_idx is not None else 0
+        qty_col = qty_idx
+        unit_col = unit_idx
+        total_col = total_idx
+        return sku_col, qty_col, unit_col, total_col
+
+    return sku_col, qty_col, unit_col, total_col
+
+
 def parse_dealer_orders_excel(source: bytes | BinaryIO) -> dict[str, DealerPeriodLine]:
     """Читает xlsx: колонки A–D — артикул, кол-во, цена/шт, сумма. Дубликаты SKU суммируются."""
     buf = io.BytesIO(source) if isinstance(source, bytes) else source
-    wb = load_workbook(filename=buf, read_only=True, data_only=True)
+    wb = load_workbook(filename=buf, read_only=False, data_only=True)
     try:
         ws = wb.active
+        sku_col, qty_col, unit_col, total_col = _detect_column_mapping(ws)
+
+        # Если файл с раскрывающимися группами, берём только товарные строки:
+        # как правило, это уровень на 1 ниже максимального (max=накладные, max-1=товары).
+        max_outline = 0
+        for idx, row in enumerate(ws.iter_rows(min_row=1, max_col=4, values_only=True), start=1):
+            if not any(_cell_str(v) for v in row):
+                continue
+            outline = int(getattr(ws.row_dimensions.get(idx), "outlineLevel", 0) or 0)
+            if outline > max_outline:
+                max_outline = outline
+        product_outline_level = max_outline - 1 if max_outline >= 2 else None
+
         sku_display: dict[str, str] = {}
         aggregated: dict[str, tuple[float, float]] = {}
-        for row in ws.iter_rows(min_row=1, max_col=4, values_only=True):
-            cells = (
-                row[0] if len(row) > 0 else None,
-                row[1] if len(row) > 1 else None,
-                row[2] if len(row) > 2 else None,
-                row[3] if len(row) > 3 else None,
-            )
+        max_col = max(sku_col, qty_col, unit_col or 0, total_col or 0) + 1
+        for idx, row in enumerate(ws.iter_rows(min_row=1, max_col=max_col, values_only=True), start=1):
+            cells = tuple(row) + (None,) * max(0, 4 - len(row))
             if _row_looks_like_header(cells):
                 continue
-            sku = _cell_str(cells[0])
+            if product_outline_level is not None:
+                outline = int(getattr(ws.row_dimensions.get(idx), "outlineLevel", 0) or 0)
+                if outline != product_outline_level:
+                    continue
+
+            sku = _cell_str(row[sku_col] if len(row) > sku_col else None)
             if not sku:
                 continue
-            qty = _cell_float(cells[1])
-            if qty is None or qty <= 0:
+            if _looks_like_invoice_row(sku) or _looks_like_summary_row(sku):
                 continue
-            unit_price = _cell_float(cells[2])
-            line_total = _cell_float(cells[3])
+
+            qty = _cell_float(row[qty_col] if len(row) > qty_col else None)
+            if qty is None or qty <= 0:
+                # Нулевые продажи не учитываем.
+                continue
+            unit_price = _cell_float(row[unit_col] if (unit_col is not None and len(row) > unit_col) else None)
+            line_total = _cell_float(row[total_col] if (total_col is not None and len(row) > total_col) else None)
             if line_total is None and unit_price is not None:
                 line_total = unit_price * qty
             elif line_total is None:
                 line_total = 0.0
+            if unit_price is None and qty > 0:
+                unit_price = line_total / qty
             key = sku.casefold()
             sku_display[key] = sku
             prev_q, prev_t = aggregated.get(key, (0.0, 0.0))
