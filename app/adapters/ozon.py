@@ -178,8 +178,8 @@ class OzonAdapter(MarketplaceAdapter):
     def fetch_ready_to_ship_external_ids(self) -> set[str]:
         """
         Возвращает набор external_order_id для позиций отправлений Ozon,
-        которые можно отгружать (не «новые»):
-        awaiting_approve / awaiting_packaging / awaiting_deliver.
+        которые реально готовы к отгрузке со склада:
+        awaiting_deliver.
         Формат id: "{posting_number}:{sku}".
         """
         if not self.is_configured():
@@ -190,7 +190,7 @@ class OzonAdapter(MarketplaceAdapter):
             "Content-Type": "application/json",
         }
         external_ids: set[str] = set()
-        ship_statuses: tuple[str, ...] = ("awaiting_approve", "awaiting_packaging", "awaiting_deliver")
+        ship_statuses: tuple[str, ...] = OZON_AWAITING_SHIPMENT_STATUSES
         for status in ship_statuses:
             offset = 0
             while True:
