@@ -43,6 +43,10 @@ class OzonAdapter(MarketplaceAdapter):
     base_url = "https://api-seller.ozon.ru"
     # Полный снимок резервируемых отправлений — можно снимать резервы при отмене/смене статуса.
     supports_reserve_reconciliation = True
+    # Для Ozon дельта = тот же full snapshot (см. fetch_reservations_delta),
+    # поэтому reconcile нужно делать на каждом цикле, иначе отменённые заказы
+    # могут висеть в state=added до следующего full-окна и давать лишние минусы.
+    reconcile_on_delta = True
 
     def __init__(self, client_id: str, api_key: str, warehouse_id: str) -> None:
         self.client_id = client_id
@@ -527,10 +531,10 @@ class OzonAdapter(MarketplaceAdapter):
                 "Ozon stock: API не обновил ни одной позиции"
                 + (f" ({sample})" if sample else "")
             )
-        if all_errors:
-            logger.warning(
-                "Ozon stock: обновлено %s/%s, ошибки (первые 5): %s",
-                total_updated,
-                len(stocks),
-                "; ".join(all_errors[:5]),
+        # Частичный успех для Ozon опасен: часть SKU останется со старыми остатками.
+        # Считаем такой пуш ошибкой, чтобы координатор НЕ обновил hash и повторил попытку.
+        if all_errors or total_updated < len(stocks):
+            sample = "; ".join(all_errors[:5]) if all_errors else "часть строк не обновлена без деталей"
+            raise RuntimeError(
+                f"Ozon stock: частичный пуш {total_updated}/{len(stocks)}; {sample}"
             )

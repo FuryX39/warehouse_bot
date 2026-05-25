@@ -261,7 +261,10 @@ async def push_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             except Exception as exc:  # noqa: BLE001
                 logger.exception("push_stocks: ошибка адаптера %s", adapter.name)
                 errs.append(f"{adapter.name}: {exc}")
-        inventory_repo.set_sync_int(AVAILABLE_STOCK_SYNC_KEY, available_stock_map_hash(merged))
+        # Фиксируем hash только если пуш успешен для всех настроенных адаптеров.
+        # Иначе оставляем старый hash, чтобы синк повторил отправку.
+        if not errs:
+            inventory_repo.set_sync_int(AVAILABLE_STOCK_SYNC_KEY, available_stock_map_hash(merged))
         return merged, errs
 
     merged, errs = await asyncio.to_thread(_run)

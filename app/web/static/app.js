@@ -975,10 +975,17 @@
       })
         .then(function (r) {
           out.textContent = JSON.stringify(r, null, 2);
+          if (r && r.ok === false) {
+            var errText = String((r && r.error) || "unknown error");
+            // sync API может вернуть ok=false без HTTP-ошибки,
+            // поэтому показываем явное уведомление в вебе.
+            showErr(new Error("RuntimeError: " + errText));
+          }
           return refreshStatus();
         })
         .catch(function (e) {
           out.textContent = String(e);
+          showErr(e);
         });
     });
   });
