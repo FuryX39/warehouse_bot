@@ -66,7 +66,11 @@ from app.yandex_fbs_labels import (
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
 from app.dealer_analysis_repository import DealerAnalysisRepository
-from app.sheet_import import import_nomenclature_from_google_sheet, import_stocks_from_google_sheet
+from app.sheet_import import (
+    import_nomenclature_from_google_sheet,
+    import_stocks_from_google_sheet,
+    import_tops_from_google_sheet,
+)
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -907,6 +911,37 @@ def create_dashboard_app(
             return await loop.run_in_executor(None, _run)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Ошибка импорта: {exc}") from exc
+
+    @app.post("/api/import_tops_sheet", dependencies=[Depends(require_login)])
+    async def api_import_tops_sheet(
+        url: str | None = Form(default=None),
+    ) -> dict:
+        """
+        Импорт top-флагов из Google Sheets (лист `tops`, колонка sku).
+        Поле формы `url` (пусто = DEFAULT_STOCKS_SHEET_URL из .env).
+        """
+        raw = (url or "").strip()
+        sheet_url = raw or (settings.default_stocks_sheet_url or "").strip()
+        if not sheet_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Укажите URL таблицы в форме или задайте DEFAULT_STOCKS_SHEET_URL в .env",
+            )
+
+        def _run() -> dict:
+            top_skus, warnings = import_tops_from_google_sheet(sheet_url)
+            result = inventory_repo.set_top_flags_by_skus(top_skus)
+            return {
+                **result,
+                "warnings": warnings[:40],
+                "warnings_more": max(0, len(warnings) - 40),
+            }
+
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _run)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ошибка импорта top-товаров: {exc}") from exc
 
     @app.post("/api/import_nomenclature_sheet", dependencies=[Depends(require_login)])
     async def api_import_nomenclature_sheet(

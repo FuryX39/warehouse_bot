@@ -365,6 +365,36 @@
       .catch(showErr);
   });
 
+  document.getElementById("btnImportTops").addEventListener("click", function () {
+    var meta = document.getElementById("inventoryMeta");
+    var urlEl = document.getElementById("importSheetUrl");
+    var url = urlEl ? String(urlEl.value || "").trim() : "";
+    meta.textContent = "Импорт top-товаров из листа tops…";
+    api("/api/import_tops_sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({ url: url }).toString(),
+    })
+      .then(function (r) {
+        var parts = [];
+        parts.push("Топ-импорт: SKU в листе: " + (r.sheet_skus != null ? r.sheet_skus : "—"));
+        parts.push("сброшено старых top: " + (r.reset_to_false != null ? r.reset_to_false : "—"));
+        parts.push("помечено top: " + (r.marked_top_existing != null ? r.marked_top_existing : "—"));
+        parts.push("создано со stock=0: " + (r.created_with_top != null ? r.created_with_top : "—"));
+        if (r.warnings && r.warnings.length) {
+          var wn = r.warnings.slice(0, 3).join("; ");
+          if (r.warnings.length > 3) wn += "…";
+          parts.push("Предупреждения: " + wn);
+        }
+        if (r.warnings_more && r.warnings_more > 0) {
+          parts.push("ещё предупреждений: " + r.warnings_more);
+        }
+        meta.textContent = parts.join(" · ");
+        return loadInventory();
+      })
+      .catch(showErr);
+  });
+
   var nomenclatureRows = [];
   var nomenclatureSort = { col: "sku", dir: 1 };
   var dlgNomenclature = document.getElementById("dlgNomenclature");
