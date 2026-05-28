@@ -282,6 +282,31 @@ def create_dashboard_app(
                     "stock": int(r.stock),
                     "reserve": int(r.reserve),
                     "available": int(r.available),
+                    "is_top": bool(r.is_top),
+                }
+                for r in rows
+            ],
+        }
+
+    @app.get("/api/missing_tops", dependencies=[Depends(require_login)])
+    async def api_missing_tops(
+        threshold: Annotated[int, Query(description="Порог доступного остатка (меньше этого числа)")]
+    ) -> dict:
+        if threshold < 0:
+            raise HTTPException(status_code=400, detail="threshold должен быть >= 0")
+        rows = inventory_repo.get_missing_top_items(int(threshold))
+        return {
+            "threshold": int(threshold),
+            "count": len(rows),
+            "items": [
+                {
+                    "sku": r.sku,
+                    "name": r.name,
+                    "image_url": r.image_url,
+                    "stock": int(r.stock),
+                    "reserve": int(r.reserve),
+                    "available": int(r.available),
+                    "is_top": bool(r.is_top),
                 }
                 for r in rows
             ],

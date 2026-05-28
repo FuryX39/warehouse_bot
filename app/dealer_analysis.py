@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 
 _HEADER_HINTS = frozenset(
     {
@@ -142,24 +142,49 @@ def _detect_column_mapping(ws) -> tuple[int, int, int | None, int | None]:
     return sku_col, qty_col, unit_col, total_col
 
 
+def _expand_all_grouped_rows(ws) -> None:
+    """Снимает hidden/collapsed у строк/колонок с группировкой перед парсингом."""
+    for dim in ws.row_dimensions.values():
+        try:
+            dim.hidden = False
+            dim.collapsed = False
+        except Exception:
+            continue
+    for dim in ws.column_dimensions.values():
+        try:
+            dim.hidden = False
+            dim.collapsed = False
+        except Exception:
+            continue
+
+
+def _detect_product_outline_levels(ws, sku_col: int, qty_col: int) -> set[int]:
+    """
+    Определяет уровни строк с товарами на основании структуры групп:
+    если есть строки "накладная" на уровне N, то товар обычно на уровне N-1.
+    Может вернуть несколько уровней одновременно.
+    """
+    levels: set[int] = set()
+    max_col = max(sku_col, qty_col) + 1
+    for idx, row in enumerate(ws.iter_rows(min_row=1, max_col=max_col, values_only=True), start=1):
+        sku = _cell_str(row[sku_col] if len(row) > sku_col else None)
+        if not sku or not _looks_like_invoice_row(sku):
+            continue
+        outline = int(getattr(ws.row_dimensions.get(idx), "outlineLevel", 0) or 0)
+        if outline > 0:
+            levels.add(outline - 1)
+    return levels
+
+
 def parse_dealer_orders_excel(source: bytes | BinaryIO) -> dict[str, DealerPeriodLine]:
     """Читает xlsx: колонки A–D — артикул, кол-во, цена/шт, сумма. Дубликаты SKU суммируются."""
     buf = io.BytesIO(source) if isinstance(source, bytes) else source
     wb = load_workbook(filename=buf, read_only=False, data_only=True)
     try:
         ws = wb.active
+        _expand_all_grouped_rows(ws)
         sku_col, qty_col, unit_col, total_col = _detect_column_mapping(ws)
-
-        # Если файл с раскрывающимися группами, берём только товарные строки:
-        # как правило, это уровень на 1 ниже максимального (max=накладные, max-1=товары).
-        max_outline = 0
-        for idx, row in enumerate(ws.iter_rows(min_row=1, max_col=4, values_only=True), start=1):
-            if not any(_cell_str(v) for v in row):
-                continue
-            outline = int(getattr(ws.row_dimensions.get(idx), "outlineLevel", 0) or 0)
-            if outline > max_outline:
-                max_outline = outline
-        product_outline_level = max_outline - 1 if max_outline >= 2 else None
+        product_outline_levels = _detect_product_outline_levels(ws, sku_col, qty_col)
 
         sku_display: dict[str, str] = {}
         aggregated: dict[str, tuple[float, float]] = {}
@@ -168,9 +193,9 @@ def parse_dealer_orders_excel(source: bytes | BinaryIO) -> dict[str, DealerPerio
             cells = tuple(row) + (None,) * max(0, 4 - len(row))
             if _row_looks_like_header(cells):
                 continue
-            if product_outline_level is not None:
+            if product_outline_levels:
                 outline = int(getattr(ws.row_dimensions.get(idx), "outlineLevel", 0) or 0)
-                if outline != product_outline_level:
+                if outline not in product_outline_levels:
                     continue
 
             sku = _cell_str(row[sku_col] if len(row) > sku_col else None)
@@ -320,6 +345,9 @@ def export_comparison_excel(
     wb = Workbook()
     ws = wb.active
     ws.title = "Анализ"
+    header_fill = PatternFill(fill_type="solid", fgColor="D9E1F2")
+    band_fill = PatternFill(fill_type="solid", fgColor="F7F9FC")
+    total_fill = PatternFill(fill_type="solid", fgColor="E2F0D9")
     headers = [
         "Артикул",
         "Тренд",
@@ -338,6 +366,9 @@ def export_comparison_excel(
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
+        cell.fill = header_fill
+    # Закрепляем верхнюю строку (шапку) при прокрутке.
+    ws.freeze_panes = "A2"
 
     for r in sorted_rows:
         dq = r.qty_b - r.qty_a
@@ -361,6 +392,57 @@ def export_comparison_excel(
                 round(pct_t, 1) if pct_t is not None else "",
             ]
         )
+        row_idx = ws.max_row
+        if row_idx % 2 == 0:
+            for cell in ws[row_idx]:
+                cell.fill = band_fill
+
+    total_qty_a = sum(r.qty_a for r in sorted_rows)
+    total_qty_b = sum(r.qty_b for r in sorted_rows)
+    total_rev_a = sum(r.total_a for r in sorted_rows)
+    total_rev_b = sum(r.total_b for r in sorted_rows)
+    total_qty_delta = total_qty_b - total_qty_a
+    total_rev_delta = total_rev_b - total_rev_a
+    total_qty_pct = _pct_change(total_qty_a, total_qty_b)
+    total_rev_pct = _pct_change(total_rev_a, total_rev_b)
+    sold_positions_a = sum(1 for r in sorted_rows if r.qty_a > 0)
+    sold_positions_b = sum(1 for r in sorted_rows if r.qty_b > 0)
+
+    ws.append([""] * len(headers))
+    ws.append(
+        [
+            "ИТОГО",
+            "",
+            (
+                f"Свод по всем товарам. Проданных позиций: "
+                f"{sold_positions_a} → {sold_positions_b}"
+            ),
+            round(total_qty_a, 2),
+            round(total_qty_b, 2),
+            round(total_qty_delta, 2),
+            round(total_qty_pct, 1) if total_qty_pct is not None else "",
+            "",
+            "",
+            round(total_rev_a, 2),
+            round(total_rev_b, 2),
+            round(total_rev_delta, 2),
+            round(total_rev_pct, 1) if total_rev_pct is not None else "",
+        ]
+    )
+    total_row_idx = ws.max_row
+    for cell in ws[total_row_idx]:
+        cell.font = Font(bold=True)
+        cell.fill = total_fill
+
+    # Подбираем ширину колонок, чтобы текст читался без ручного расширения.
+    for col_cells in ws.columns:
+        values = [str(c.value).strip() for c in col_cells if c.value is not None]
+        if not values:
+            continue
+        max_len = max(len(v) for v in values)
+        col_letter = col_cells[0].column_letter
+        # Ограничиваем, чтобы слишком длинные комментарии не раздували лист.
+        ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
     buf = io.BytesIO()
     wb.save(buf)

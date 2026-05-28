@@ -696,6 +696,64 @@
       .catch(showErr);
   });
 
+  var dlgMissingTops = document.getElementById("dlgMissingTops");
+  var missingTopsBody = document.getElementById("missingTopsBody");
+  var missingTopsMeta = document.getElementById("missingTopsMeta");
+
+  function renderMissingTopsRows(items) {
+    missingTopsBody.innerHTML = "";
+    (items || []).forEach(function (it) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" +
+        escapeHtml(it.sku || "") +
+        '</td><td class="name-col">' +
+        escapeHtml(it.name || "") +
+        '</td><td class="num">' +
+        Number(it.stock || 0) +
+        '</td><td class="num">' +
+        Number(it.reserve || 0) +
+        '</td><td class="num' +
+        (Number(it.available || 0) < 0 ? " neg" : "") +
+        '">' +
+        Number(it.available || 0) +
+        "</td>";
+      missingTopsBody.appendChild(tr);
+    });
+  }
+
+  document.getElementById("btnMissingTops").addEventListener("click", function () {
+    document.getElementById("missingTopsThreshold").value = "1";
+    missingTopsMeta.textContent = "Введите порог и нажмите «Показать».";
+    missingTopsBody.innerHTML = "";
+    dlgMissingTops.showModal();
+  });
+
+  document.getElementById("dlgMissingTopsClose").addEventListener("click", function () {
+    dlgMissingTops.close();
+  });
+
+  document.getElementById("formMissingTops").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var threshold = parseInt(document.getElementById("missingTopsThreshold").value, 10);
+    if (isNaN(threshold) || threshold < 0) {
+      alert("Порог должен быть целым числом >= 0");
+      return;
+    }
+    missingTopsMeta.textContent = "Загрузка…";
+    api("/api/missing_tops?threshold=" + encodeURIComponent(String(threshold)))
+      .then(function (r) {
+        var items = r.items || [];
+        renderMissingTopsRows(items);
+        missingTopsMeta.textContent =
+          "Порог: " +
+          threshold +
+          " · найдено: " +
+          items.length;
+      })
+      .catch(showErr);
+  });
+
   function buildOrdersUrl(skipDates) {
     var params = new URLSearchParams();
     params.set("limit", "5000");

@@ -1,7 +1,19 @@
 from dataclasses import dataclass
 import zlib
 
-from sqlalchemy import Integer, String, UniqueConstraint, create_engine, delete, func, inspect, or_, select, text
+from sqlalchemy import (
+    Boolean,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+    delete,
+    func,
+    inspect,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
@@ -37,6 +49,7 @@ class ProductStock(Base):
 
     sku: Mapped[str] = mapped_column(String(128), primary_key=True)
     stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_top: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class Reserve(Base):
@@ -106,6 +119,7 @@ class InventorySnapshot:
     available: int
     name: str
     image_url: str
+    is_top: bool
 
 
 class InventoryRepository:
@@ -114,8 +128,26 @@ class InventoryRepository:
 
     def init_schema(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._ensure_product_stocks_is_top_column()
         self._ensure_nomenclature_image_url_column()
         self._ensure_nomenclature_barcodes_column()
+
+    def _ensure_product_stocks_is_top_column(self) -> None:
+        insp = inspect(self.engine)
+        if "product_stocks" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("product_stocks")}
+        if "is_top" in cols:
+            return
+        dialect = self.engine.dialect.name
+        if dialect == "sqlite":
+            stmt = text("ALTER TABLE product_stocks ADD COLUMN is_top BOOLEAN NOT NULL DEFAULT 0")
+        elif dialect == "postgresql":
+            stmt = text("ALTER TABLE product_stocks ADD COLUMN IF NOT EXISTS is_top BOOLEAN NOT NULL DEFAULT FALSE")
+        else:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
 
     def _ensure_nomenclature_image_url_column(self) -> None:
         """SQLite: create_all не добавляет новые колонки к существующей таблице."""
@@ -325,6 +357,88 @@ class InventoryRepository:
                     row.stock = normalized_stock
             session.commit()
         return len(stocks_by_sku)
+
+    def set_top_flags_by_skus(self, skus: list[str]) -> dict[str, int]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for sku_raw in skus:
+            sku = str(sku_raw or "").strip()
+            if not sku or len(sku) > 128 or sku in seen:
+                continue
+            seen.add(sku)
+            normalized.append(sku)
+
+        reset_to_false = 0
+        marked_top = 0
+        created_with_top = 0
+        with Session(self.engine) as session:
+            top_rows = session.scalars(select(ProductStock).where(ProductStock.is_top.is_(True))).all()
+            for row in top_rows:
+                row.is_top = False
+                reset_to_false += 1
+
+            for sku in normalized:
+                row = session.get(ProductStock, sku)
+                if row is None:
+                    session.add(ProductStock(sku=sku, stock=0, is_top=True))
+                    created_with_top += 1
+                    continue
+                if not bool(row.is_top):
+                    row.is_top = True
+                    marked_top += 1
+            session.commit()
+
+        return {
+            "sheet_skus": len(normalized),
+            "top_total": len(normalized),
+            "reset_to_false": reset_to_false,
+            "marked_top_existing": marked_top,
+            "created_with_top": created_with_top,
+        }
+
+    def get_missing_top_items(self, threshold: int) -> list[InventorySnapshot]:
+        threshold_i = int(threshold)
+        with Session(self.engine) as session:
+            top_rows = session.scalars(
+                select(ProductStock).where(ProductStock.is_top.is_(True)).order_by(ProductStock.sku)
+            ).all()
+            if not top_rows:
+                return []
+            top_skus = [str(r.sku) for r in top_rows]
+            reserves_by_sku: dict[str, int] = {}
+            active_order_items = session.scalars(
+                select(OrderItem).where(OrderItem.state == "added", OrderItem.sku.in_(top_skus))
+            ).all()
+            for reserve in active_order_items:
+                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + int(reserve.quantity)
+            nom = self._load_nomenclature_rows(session, top_skus)
+            out: list[InventorySnapshot] = []
+            for row in top_rows:
+                stock = int(row.stock)
+                reserve = int(reserves_by_sku.get(row.sku, 0))
+                available = stock - reserve
+                if available >= threshold_i:
+                    continue
+                meta = nom.get(row.sku)
+                if meta is None:
+                    disp_name = MISSING_NOMENCLATURE_LABEL
+                    img = ""
+                else:
+                    raw_n, raw_i, _ = meta
+                    disp_name = MISSING_NOMENCLATURE_LABEL if raw_n == "" else raw_n
+                    img = raw_i
+                out.append(
+                    InventorySnapshot(
+                        sku=row.sku,
+                        stock=stock,
+                        reserve=reserve,
+                        available=available,
+                        name=disp_name,
+                        image_url=img,
+                        is_top=True,
+                    )
+                )
+            return out
 
     def apply_stock_movements(self, deltas_by_sku: dict[str, int]) -> int:
         """Прибавляет дельты к остаткам (отрицательные — списание). Остаток может уйти в минус."""
@@ -562,9 +676,9 @@ class InventoryRepository:
 
     def get_inventory_snapshot(self) -> list[InventorySnapshot]:
         with Session(self.engine) as session:
-            stocks = {
-                row.sku: row.stock for row in session.scalars(select(ProductStock)).all()
-            }
+            stock_rows = session.scalars(select(ProductStock)).all()
+            stocks = {row.sku: int(row.stock) for row in stock_rows}
+            top_flags = {row.sku: bool(getattr(row, "is_top", False)) for row in stock_rows}
             reserves_by_sku: dict[str, int] = {}
             active_order_items = session.scalars(
                 select(OrderItem).where(OrderItem.state == "added")
@@ -578,6 +692,7 @@ class InventoryRepository:
             for sku in all_skus:
                 stock = stocks.get(sku, 0)
                 reserve = reserves_by_sku.get(sku, 0)
+                is_top = bool(top_flags.get(sku, False))
                 meta = nom.get(sku)
                 if meta is None:
                     disp_name = MISSING_NOMENCLATURE_LABEL
@@ -594,6 +709,7 @@ class InventoryRepository:
                         available=stock - reserve,
                         name=disp_name,
                         image_url=img,
+                        is_top=is_top,
                     )
                 )
             return snapshots

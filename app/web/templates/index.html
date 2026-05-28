@@ -45,6 +45,7 @@
           </label>
           <button type="button" class="btn" id="btnImportSheet">Импорт из таблицы</button>
           <button type="button" class="btn primary" id="btnOpenSetStock">Задать остаток</button>
+          <button type="button" class="btn warn" id="btnMissingTops">Отсутствующие топы</button>
           <span class="muted" id="inventoryMeta"></span>
         </div>
         <div class="table-wrap">
@@ -307,6 +308,35 @@
       <div class="modal-actions">
         <button type="submit" class="btn primary">Сохранить</button>
         <button type="button" class="btn" id="dlgSetStockCancel">Отмена</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgMissingTops" class="modal modal-wide">
+    <form id="formMissingTops" class="movement-detail">
+      <h3>Отсутствующие топовые товары</h3>
+      <p class="muted">Показывает только `Топ = True`, где доступно меньше порога.</p>
+      <label>Порог доступного остатка
+        <input type="number" id="missingTopsThreshold" min="0" step="1" required value="1" />
+      </label>
+      <div class="modal-actions">
+        <button type="submit" class="btn primary">Показать</button>
+        <button type="button" class="btn" id="dlgMissingTopsClose">Закрыть</button>
+      </div>
+      <p class="muted" id="missingTopsMeta">Введите порог и нажмите «Показать».</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Артикул</th>
+              <th>Название</th>
+              <th class="num">На складе</th>
+              <th class="num">Резерв</th>
+              <th class="num">Доступно</th>
+            </tr>
+          </thead>
+          <tbody id="missingTopsBody"></tbody>
+        </table>
       </div>
     </form>
   </dialog>

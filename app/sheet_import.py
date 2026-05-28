@@ -236,3 +236,48 @@ def import_movement_from_google_sheet(sheet_url: str) -> tuple[dict[str, int], l
     response = requests.get(csv_url, timeout=30)
     response.raise_for_status()
     return parse_sheet_movement_csv(_google_sheet_csv_text(response))
+
+
+def parse_sheet_tops_csv(csv_text: str) -> tuple[list[str], list[str]]:
+    """Парсинг листа tops: колонка sku (или 1-я колонка)."""
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = [row for row in reader if any(cell.strip() for cell in row)]
+    if not rows:
+        raise ValueError("Таблица пустая.")
+
+    header = [cell.strip().lower() for cell in rows[0]]
+    sku_idx = None
+    for idx, name in enumerate(header):
+        if name in {"sku", "артикул", "offer_id", "offersku"}:
+            sku_idx = idx
+            break
+
+    data_rows = rows[1:]
+    if sku_idx is None:
+        sku_idx = 0
+        data_rows = rows
+
+    warnings: list[str] = []
+    top_skus: list[str] = []
+    seen: set[str] = set()
+    for i, row in enumerate(data_rows, start=1):
+        if len(row) <= sku_idx:
+            warnings.append(f"Строка {i}: недостаточно колонок, пропущено.")
+            continue
+        sku = row[sku_idx].strip()
+        if not sku:
+            warnings.append(f"Строка {i}: пустой SKU, пропущено.")
+            continue
+        if sku in seen:
+            continue
+        seen.add(sku)
+        top_skus.append(sku)
+    return top_skus, warnings
+
+
+def import_tops_from_google_sheet(sheet_url: str) -> tuple[list[str], list[str]]:
+    """Тот же spreadsheet URL, лист Google с именем «tops»."""
+    csv_url = build_google_sheet_csv_url(sheet_url.strip(), sheet_name="tops")
+    response = requests.get(csv_url, timeout=30)
+    response.raise_for_status()
+    return parse_sheet_tops_csv(_google_sheet_csv_text(response))

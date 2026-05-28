@@ -32,7 +32,7 @@ from app.repositories import (
 from app.movement_args import parse_movement_edit_args, parse_movement_flags
 from app.movement_ops import execute_movement_from_sheet
 from app.fbs_ship import execute_fbs_ship
-from app.sheet_import import import_stocks_from_google_sheet
+from app.sheet_import import import_stocks_from_google_sheet, import_tops_from_google_sheet
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -128,6 +128,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/clear_stock - очистить только общие остатки (без резервов и sync state)\n"
         "/push_stocks - принудительно отправить остатки на все настроенные МП (полный набор SKU из БД, без строки склада = 0)\n"
         "/import_sheet URL - импорт остатков из Google Sheets\n"
+        "/import_tops URL - импорт флагов Топ из листа «tops» (колонка sku)\n"
+        "/missing_tops ЧИСЛО - CSV: топовые товары, где доступно < числа\n"
         "/movement НАПРАВЛЕНИЕ [URL] [--name ...] [--comment ...] - приход/расход по листу «movement»\n"
         "/movement_edit ID [--name ...] [--comment ...] - изменить название и/или комментарий\n"
         "/export_sheet - экспорт остатков в CSV-файл\n"
@@ -407,6 +409,73 @@ async def import_sheet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if len(warnings) > 10:
             text += f"\n... и еще {len(warnings) - 10}"
     await update.message.reply_text(text)
+
+
+async def import_tops(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) > 1:
+        await update.message.reply_text("Использование: /import_tops [GOOGLE_SHEETS_URL]")
+        return
+    sheet_url = context.args[0].strip() if context.args else settings.default_stocks_sheet_url
+    if not sheet_url:
+        await update.message.reply_text(
+            "Ссылка не указана. Передайте URL в команде или задайте DEFAULT_STOCKS_SHEET_URL в .env"
+        )
+        return
+    try:
+        top_skus, warnings = import_tops_from_google_sheet(sheet_url)
+    except Exception as exc:  # noqa: BLE001
+        await update.message.reply_text(f"Ошибка импорта top-товаров: {exc}")
+        return
+
+    result = inventory_repo.set_top_flags_by_skus(top_skus)
+    text = (
+        "Импорт top-товаров завершен.\n"
+        f"- SKU в листе tops: {result['sheet_skus']}\n"
+        f"- Сброшено old top-флагов: {result['reset_to_false']}\n"
+        f"- Помечено top (существующие): {result['marked_top_existing']}\n"
+        f"- Создано SKU со stock=0 и top=True: {result['created_with_top']}"
+    )
+    if warnings:
+        text += "\n\nПредупреждения:\n- " + "\n- ".join(warnings[:10])
+        if len(warnings) > 10:
+            text += f"\n... и еще {len(warnings) - 10}"
+    await update.message.reply_text(text)
+
+
+async def missing_tops(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    if len(context.args) != 1:
+        await _reply_text_resilient(update.message, "Использование: /missing_tops ЧИСЛО")
+        return
+    try:
+        threshold = int(context.args[0].strip())
+    except ValueError:
+        await _reply_text_resilient(update.message, "ЧИСЛО должно быть целым.")
+        return
+    if threshold < 0:
+        await _reply_text_resilient(update.message, "ЧИСЛО должно быть >= 0.")
+        return
+
+    rows = await asyncio.to_thread(inventory_repo.get_missing_top_items, threshold)
+    if not rows:
+        await _reply_text_resilient(
+            update.message,
+            f"Топовых товаров с доступным остатком меньше {threshold} не найдено.",
+        )
+        return
+
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["sku", "name", "stock", "reserve", "available", "threshold"])
+    for r in rows:
+        w.writerow([r.sku, r.name, int(r.stock), int(r.reserve), int(r.available), int(threshold)])
+    csv_bytes = buf.getvalue().encode("utf-8-sig")
+    fname = f"missing_tops_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(csv_bytes), filename=fname),
+        caption=f"Топ-товары с доступным остатком < {threshold}. Строк: {len(rows)}",
+    )
 
 
 _MOVEMENT_ADD = frozenset(
@@ -1103,6 +1172,8 @@ async def main() -> None:
     app.add_handler(CommandHandler("push_stocks", push_stocks))
     app.add_handler(CommandHandler("orders", orders))
     app.add_handler(CommandHandler("import_sheet", import_sheet))
+    app.add_handler(CommandHandler("import_tops", import_tops))
+    app.add_handler(CommandHandler("missing_tops", missing_tops))
     app.add_handler(CommandHandler("movement", movement))
     app.add_handler(CommandHandler("movement_edit", movement_edit))
     app.add_handler(CommandHandler("export_sheet", export_sheet))
