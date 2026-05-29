@@ -82,6 +82,13 @@
       if (va > vb) return 1;
       return 0;
     }
+    if (col === "is_top") {
+      va = a.is_top ? 1 : 0;
+      vb = b.is_top ? 1 : 0;
+      if (va < vb) return -1;
+      if (va > vb) return 1;
+      return 0;
+    }
     va = String(va || "").toLowerCase();
     vb = String(vb || "").toLowerCase();
     if (va < vb) return -1;
