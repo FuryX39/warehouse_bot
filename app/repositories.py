@@ -396,6 +396,23 @@ class InventoryRepository:
             "created_with_top": created_with_top,
         }
 
+    def set_top_flag_for_sku(self, sku: str, is_top: bool) -> dict[str, object]:
+        sku_n = str(sku or "").strip()
+        if not sku_n or len(sku_n) > 128:
+            raise ValueError("Некорректный SKU")
+        top_n = bool(is_top)
+        with Session(self.engine) as session:
+            row = session.get(ProductStock, sku_n)
+            created = False
+            if row is None:
+                row = ProductStock(sku=sku_n, stock=0, is_top=top_n)
+                session.add(row)
+                created = True
+            else:
+                row.is_top = top_n
+            session.commit()
+        return {"sku": sku_n, "is_top": top_n, "created": created}
+
     def get_missing_top_items(self, threshold: int) -> list[InventorySnapshot]:
         threshold_i = int(threshold)
         with Session(self.engine) as session:

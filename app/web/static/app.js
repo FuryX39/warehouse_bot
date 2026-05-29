@@ -148,6 +148,11 @@
         '">' +
         av +
         "</td>" +
+        '<td class="num"><input type="checkbox" class="inv-top-toggle" data-sku="' +
+        encodeAttr(it.sku) +
+        '"' +
+        (it.is_top ? " checked" : "") +
+        " /></td>" +
         '<td class="actions-col"><button type="button" class="btn btn-edit" data-sku="' +
         encodeAttr(it.sku) +
         '" data-stock="' +
@@ -172,6 +177,31 @@
             return loadInventory();
           })
           .catch(showErr);
+      });
+    });
+    body.querySelectorAll(".inv-top-toggle").forEach(function (ch) {
+      ch.addEventListener("change", function () {
+        var sku = ch.getAttribute("data-sku");
+        var isTop = !!ch.checked;
+        ch.disabled = true;
+        api("/api/top_flag", {
+          method: "PUT",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: new URLSearchParams({ sku: sku, is_top: String(isTop) }).toString(),
+        })
+          .then(function () {
+            var row = inventoryRows.find(function (x) {
+              return x.sku === sku;
+            });
+            if (row) row.is_top = isTop;
+          })
+          .catch(function (e) {
+            ch.checked = !isTop;
+            showErr(e);
+          })
+          .finally(function () {
+            ch.disabled = false;
+          });
       });
     });
     updateInventorySortThClasses();

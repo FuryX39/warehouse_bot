@@ -1179,6 +1179,19 @@ def create_dashboard_app(
         inventory_repo.upsert_stock(sku_n, int(stock))
         return {"sku": sku_n, "stock": int(stock)}
 
+    @app.put("/api/top_flag", dependencies=[Depends(require_login)])
+    async def api_put_top_flag(
+        sku: Annotated[str, Form()],
+        is_top: bool = Form(),
+    ) -> dict:
+        sku_n = sku.strip()
+        if not sku_n:
+            raise HTTPException(status_code=400, detail="Пустой SKU")
+        try:
+            return inventory_repo.set_top_flag_for_sku(sku_n, bool(is_top))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.delete("/api/stock", dependencies=[Depends(require_login)])
     async def api_delete_stock(sku: Annotated[str, Query()]) -> dict:
         sku_n = sku.strip()
