@@ -222,7 +222,7 @@
     if (summary) {
       summary.textContent =
         rows.length === 0
-          ? "Нет заказов PROCESSING + STARTED."
+          ? "Нет заказов PROCESSING + READY_TO_SHIP."
           : "Строк в списке: " + rows.length;
     }
     result.classList.toggle("hidden", false);

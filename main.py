@@ -136,7 +136,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/ozon_analytics [дней] - аналитика Ozon по продажам за период (CSV)\n"
         "/ozon_labels [первый_номер] [последний_номер] - FBS: лист и этикетки "
         "(от старого заказа к новому по времени Ozon, включительно)\n"
-        "/yandex_labels - FBS PROCESSING/STARTED: список по артикулу, лист в Google, PDF-этикетки\n"
+        "/yandex_labels - FBS PROCESSING/READY_TO_SHIP (собрано): список по артикулу, лист в Google, PDF-этикетки\n"
         "/ship_all - отгрузка по всем МП (WB/Ozon: не new, Yandex: кроме STARTED; с подтверждением)\n"
         "/ship_ozon - отгрузка только Ozon (не new)\n"
         "/ship_yandex - отгрузка только Yandex Market (все added, кроме STARTED)\n"
@@ -754,7 +754,7 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def yandex_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Заказы Yandex Market в ожидании сборки (PROCESSING + STARTED) и этикетки FBS (PDF)."""
+    """Заказы Yandex Market «собрано» (PROCESSING + READY_TO_SHIP) и этикетки FBS (PDF)."""
     if update.message is None:
         return
     adapter = get_configured_yandex_adapter(coordinator)
@@ -767,7 +767,7 @@ async def yandex_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await _reply_text_resilient(
         update.message,
-        "Загрузка заказов Yandex Market (статус PROCESSING, подстатус STARTED — ожидают сборки)…",
+        "Загрузка заказов Yandex Market (статус PROCESSING, подстатус READY_TO_SHIP — собрано)…",
     )
     try:
         bundle = await asyncio.to_thread(
@@ -787,7 +787,7 @@ async def yandex_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not bundle.orders:
         await _reply_text_resilient(
             update.message,
-            "Нет заказов в ожидании сборки (PROCESSING + STARTED).",
+            "Нет заказов в статусе «собрано» (PROCESSING + READY_TO_SHIP).",
         )
         return
 
@@ -810,7 +810,7 @@ async def yandex_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await _reply_text_resilient(
             update.message,
             "PDF-этикетки не получены. Проверьте статус заказов в ЛК Яндекс Маркета "
-            "(нужен PROCESSING + STARTED после перехода в сборку).",
+            "(нужен PROCESSING + READY_TO_SHIP / «собрано»).",
         )
         return
 

@@ -1,4 +1,4 @@
-"""Заказы Yandex Market «ожидают сборки» и PDF-этикетки FBS."""
+"""Заказы Yandex Market «собрано» и PDF-этикетки FBS."""
 
 from __future__ import annotations
 

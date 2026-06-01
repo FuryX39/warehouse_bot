@@ -516,7 +516,7 @@ def create_dashboard_app(
 
     @app.get("/api/yandex/awaiting-assembly", dependencies=[Depends(require_login)])
     async def api_yandex_awaiting_assembly_list() -> dict:
-        """Список FBS-заказов Yandex в ожидании сборки (PROCESSING + STARTED)."""
+        """Список FBS-заказов Yandex «собрано» (PROCESSING + READY_TO_SHIP)."""
         adapter = get_configured_yandex_adapter(coordinator)
         if adapter is None:
             raise HTTPException(
@@ -537,7 +537,7 @@ def create_dashboard_app(
         return {
             "count": len(orders_ordered),
             "status": "PROCESSING",
-            "substatus": "STARTED",
+            "substatus": "READY_TO_SHIP",
             "list_rows": [
                 {
                     "sku": r.sku,
@@ -583,7 +583,7 @@ def create_dashboard_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
         if not bundle.orders:
-            raise HTTPException(status_code=404, detail="Нет заказов PROCESSING + STARTED")
+            raise HTTPException(status_code=404, detail="Нет заказов PROCESSING + READY_TO_SHIP")
         labels_token: str | None = None
         if bundle.label_files:
             labels_token = store_label_files(bundle.label_files)
@@ -597,7 +597,7 @@ def create_dashboard_app(
         return {
             "count": len(bundle.list_rows),
             "status": "PROCESSING",
-            "substatus": "STARTED",
+            "substatus": "READY_TO_SHIP",
             "list_rows": [
                 {
                     "seq": r.seq,

@@ -15,9 +15,9 @@ _ORDER_LIST_LOOKAHEAD_DAYS = 10
 # Для этого эндпоинта кампаний используем поддерживаемый статус PROCESSING.
 _RESERVE_ORDER_STATUSES: tuple[str, ...] = ("PROCESSING",)
 # Не резервируем отмены/просрочки/отказы и прочие причины, где товар уже не должен держаться в резерве.
-# Заказы «ожидают сборки» (FBS) — аналог Ozon awaiting_deliver для /yandex_labels.
+# Заказы для формирования FBS-списка/этикеток: «собрано» (готово к отгрузке).
 YANDEX_AWAITING_ASSEMBLY_STATUS = "PROCESSING"
-YANDEX_AWAITING_ASSEMBLY_SUBSTATUS = "STARTED"
+YANDEX_AWAITING_ASSEMBLY_SUBSTATUS = "READY_TO_SHIP"
 YANDEX_LABEL_FORMATS: tuple[str, ...] = ("A9_HORIZONTALLY", "A9", "A7", "A4")
 
 _NO_RESERVE_SUBSTATUS_PREFIXES: tuple[str, ...] = (
@@ -180,7 +180,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
         substatus: str = YANDEX_AWAITING_ASSEMBLY_SUBSTATUS,
     ) -> list[YandexFbsOrder]:
         """
-        FBS-заказы в ожидании сборки (PROCESSING + substatus STARTED по умолчанию).
+        FBS-заказы для списка/этикеток (PROCESSING + substatus READY_TO_SHIP по умолчанию).
         Одна запись на order_id (в заказе может быть несколько SKU).
         """
         if not self.is_configured():
