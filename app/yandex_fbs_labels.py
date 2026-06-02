@@ -114,6 +114,7 @@ def _export_list_to_google_sheet(
         sheet_title,
         data,
         template_sheet_name=template_sheet_name,
+        highlight_style="yandex_last4_digits",
     )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Sequence
 
 from app.sheet_import import extract_sheet_id
@@ -42,15 +43,34 @@ def ozon_posting_highlight_range(posting_number: str) -> tuple[int, int]:
     return start, dash
 
 
+def yandex_order_highlight_range(order_id: str) -> tuple[int, int]:
+    """
+    Диапазон [start, end) для подсветки заказа Яндекса:
+    последние 4 цифры номера (если цифр меньше 4 — все найденные цифры).
+    """
+    oid = str(order_id or "").strip()
+    if not oid:
+        return 0, 0
+    digit_matches = list(re.finditer(r"\d", oid))
+    if not digit_matches:
+        return max(0, len(oid) - 4), len(oid)
+    selected = digit_matches[-4:]
+    return selected[0].start(), selected[-1].end()
+
+
 def _posting_cell_with_highlight(
     posting_number: str,
     *,
     normal_pt: int = _FBS_POSTING_NORMAL_FONT_PT,
     highlight_pt: int = _FBS_POSTING_HIGHLIGHT_FONT_PT,
+    highlight_style: str = "ozon",
 ) -> dict:
     """Ячейка с rich text: код сборки жирным и крупнее."""
     pn = str(posting_number).strip()
-    hi_start, hi_end = ozon_posting_highlight_range(pn)
+    if highlight_style == "yandex_last4_digits":
+        hi_start, hi_end = yandex_order_highlight_range(pn)
+    else:
+        hi_start, hi_end = ozon_posting_highlight_range(pn)
     normal_fmt = {"bold": False, "fontSize": normal_pt}
     hi_fmt = {"bold": True, "fontSize": highlight_pt}
     runs: list[dict] = []
@@ -109,10 +129,18 @@ def _merge_consecutive_posting_cells(
         worksheet.spreadsheet.batch_update({"requests": requests})
 
 
-def _fill_posting_column_highlighted(worksheet, posting_numbers: Sequence[str]) -> None:
+def _fill_posting_column_highlighted(
+    worksheet,
+    posting_numbers: Sequence[str],
+    *,
+    highlight_style: str = "ozon",
+) -> None:
     if not posting_numbers:
         return
-    rows = [{"values": [_posting_cell_with_highlight(pn)]} for pn in posting_numbers]
+    rows = [
+        {"values": [_posting_cell_with_highlight(pn, highlight_style=highlight_style)]}
+        for pn in posting_numbers
+    ]
     worksheet.spreadsheet.batch_update(
         {
             "requests": [
@@ -210,6 +238,7 @@ def write_fbs_list_from_template(
     rows: Sequence[tuple[str, int, str]],
     *,
     template_sheet_name: str = DEFAULT_FBS_TEMPLATE_SHEET,
+    highlight_style: str = "ozon",
 ) -> str:
     """
     Копирует лист-шаблон (FBSTemplate), заполняет A, D, E: артикул, количество, номер отправления.
@@ -239,7 +268,7 @@ def write_fbs_list_from_template(
 
     new_ws.update(f"A2:A{last_row}", skus, value_input_option="USER_ENTERED")
     new_ws.update(f"D2:D{last_row}", qtys, value_input_option="USER_ENTERED")
-    _fill_posting_column_highlighted(new_ws, posting_numbers)
+    _fill_posting_column_highlighted(new_ws, posting_numbers, highlight_style=highlight_style)
     _merge_consecutive_posting_cells(new_ws, posting_numbers)
 
     return f"https://docs.google.com/spreadsheets/d/{sh.id}/edit#gid={new_ws.id}"
