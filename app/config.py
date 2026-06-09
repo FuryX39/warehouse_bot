@@ -48,12 +48,18 @@ def _web_dashboard_secret_from_env() -> str:
     return s
 
 
+def _stock_sync_enabled() -> bool:
+    raw = (os.getenv("STOCK_SYNC_ENABLED", "1") or "1").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
     db_url: str
     movement_db_url: str
     reserve_interval_seconds: int = 120
+    stock_sync_enabled: bool = True
     default_stocks_sheet_url: str = ""
     fbs_list_sheet_url: str = ""
     fbs_list_template_sheet: str = "FBSTemplate"
@@ -110,6 +116,7 @@ def load_settings() -> Settings:
         db_url=db_url,
         movement_db_url=movement_db_url,
         reserve_interval_seconds=interval,
+        stock_sync_enabled=_stock_sync_enabled(),
         default_stocks_sheet_url=os.getenv("DEFAULT_STOCKS_SHEET_URL", "").strip(),
         fbs_list_sheet_url=os.getenv("FBS_LIST_SHEET_URL", "").strip(),
         fbs_list_template_sheet=os.getenv("FBS_LIST_TEMPLATE_SHEET", "FBSTemplate").strip()

@@ -63,5 +63,6 @@ def create_inventory_stack() -> tuple[
             ),
         ],
         full_sync_interval_seconds=settings.full_sync_interval_seconds,
+        stock_sync_enabled=settings.stock_sync_enabled,
     )
     return settings, inventory_repo, coordinator, movement_repo, dealer_repo

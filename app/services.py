@@ -126,10 +126,12 @@ class StockCoordinator:
         inventory_repo: InventoryRepository,
         *,
         full_sync_interval_seconds: int = 3600,
+        stock_sync_enabled: bool = True,
     ) -> None:
         self.adapters = adapters
         self.inventory_repo = inventory_repo
         self.full_sync_interval_seconds = full_sync_interval_seconds
+        self.stock_sync_enabled = bool(stock_sync_enabled)
         self.last_run_at: datetime | None = None
         self.last_error: str | None = None
         self.last_warnings: list[str] = []
@@ -230,7 +232,10 @@ class StockCoordinator:
             if reserves_touched:
                 stock_changed = True
 
-            if stock_changed:
+            stock_push_disabled = not self.stock_sync_enabled
+            if stock_push_disabled:
+                logger.info("Skip stock push: STOCK_SYNC_ENABLED is false")
+            elif stock_changed:
                 stock_push_ok = True
                 for adapter in self.adapters:
                     if not adapter.is_configured():
@@ -312,7 +317,8 @@ class StockCoordinator:
                 "adapter_errors": adapter_errors,
                 "sync_mode": mode_l,
                 "adapter_sync_kinds": adapter_sync_kinds,
-                "stock_push_skipped": not stock_changed,
+                "stock_push_skipped": stock_push_disabled or (not stock_changed),
+                "stock_push_disabled": stock_push_disabled,
                 "admin_alert": admin_alert,
                 "sync_start_ts": sync_start_ts,
             }

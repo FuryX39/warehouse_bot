@@ -90,6 +90,8 @@ def _format_sync_result_message(result: dict) -> str:
     sm = result.get("sync_mode")
     if sm:
         text += f" (режим={sm})"
+    if result.get("stock_push_disabled"):
+        text += ". Пуш остатков отключен (STOCK_SYNC_ENABLED=0)."
     if result.get("adapter_errors"):
         text += "\n\nПредупреждения:\n- " + "\n- ".join(result["adapter_errors"])
     if result.get("admin_alert"):
@@ -250,6 +252,13 @@ async def clear_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def push_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _ = context
     if update.message is None:
+        return
+    if not settings.stock_sync_enabled:
+        await _reply_text_resilient(
+            update.message,
+            "Пуш остатков отключен настройкой STOCK_SYNC_ENABLED=0. "
+            "Чтобы включить, установите STOCK_SYNC_ENABLED=1 и перезапустите сервисы.",
+        )
         return
 
     def _run() -> tuple[dict[str, int], list[str]]:

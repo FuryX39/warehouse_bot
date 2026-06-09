@@ -272,6 +272,7 @@ def create_dashboard_app(
             "last_warnings": list(coordinator.last_warnings or []),
             "adapters": adapters,
             "telegram_configured": bool(settings.telegram_bot_token),
+            "stock_sync_enabled": bool(settings.stock_sync_enabled),
         }
 
     @app.get("/api/inventory", dependencies=[Depends(require_login)])
