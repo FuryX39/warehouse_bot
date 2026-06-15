@@ -484,7 +484,7 @@
       contentBreadcrumbEl.textContent = "";
       clearContentPanel();
       var hint =
-        sessionUser && sessionUser.is_admin
+        isAdminUser(sessionUser)
           ? "Навигация пуста — обновите страницу. Если не помогло, проверьте WAREHOUSE_ADMIN_LOGIN в .env."
           : "У вашей учётной записи нет доступа ни к одному разделу. Обратитесь к администратору.";
       contentPlaceholderEl.hidden = false;
@@ -502,13 +502,17 @@
     renderContent(tab, item);
   }
 
+  function isAdminUser(user) {
+    return !!(user && (user.is_admin === true || user.is_admin === 1));
+  }
+
   function setUserLabel() {
     if (!sessionUser) {
       userNameEl.textContent = "";
       return;
     }
     var name = sessionUser.display_name || sessionUser.login;
-    userNameEl.textContent = name + (sessionUser.is_admin ? " · администратор" : "");
+    userNameEl.textContent = name + (isAdminUser(sessionUser) ? " · администратор" : "");
   }
 
   function loadSession() {

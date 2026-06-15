@@ -112,38 +112,62 @@ class WarehouseUsersRepository:
             permissions=full_access_permissions(),
         )
 
-    def sync_env_admin(self, login: str, password: str, *, display_name: str = "Администратор") -> None:
+    def sync_env_admin(self, login: str, password: str, *, display_name: str = "Администратор") -> WarehouseUserRow | None:
         """Гарантирует, что логин из .env — активный администратор с полным доступом."""
         login_n = login.strip()
         password_n = password.strip()
         if not login_n or not password_n:
-            return
+            return None
         if self.count_users() == 0:
             self.ensure_bootstrap_admin(login_n, password_n, display_name=display_name)
-            return
-        now = int(time.time())
+            return self.get_by_login(login_n)
+        return self.upsert_env_admin(login_n, password_n, display_name=display_name)
+
+    def get_by_login(self, login: str) -> WarehouseUserRow | None:
+        login_n = login.strip()
+        if not login_n:
+            return None
         with Session(self.engine) as session:
             row = session.scalar(select(WarehouseUser).where(WarehouseUser.login == login_n))
             if row is None:
-                return
-            changed = False
-            if not row.is_admin:
-                row.is_admin = True
-                changed = True
-            if not row.is_active:
-                row.is_active = True
-                changed = True
-            full_perms = permissions_to_json(full_access_permissions())
-            if row.permissions_json != full_perms:
-                row.permissions_json = full_perms
-                changed = True
-            name = (display_name or "").strip()[:128]
-            if name and not row.display_name:
-                row.display_name = name
-                changed = True
-            if changed:
-                row.updated_at_ts = now
+                return None
+            return self._row_from_model(row)
+
+    def upsert_env_admin(self, login: str, password: str, *, display_name: str = "Администратор") -> WarehouseUserRow:
+        login_n = login.strip()
+        password_n = password.strip()
+        if not login_n or not password_n:
+            raise ValueError("Логин и пароль администратора обязательны")
+        name = (display_name or "Администратор").strip()[:128]
+        now = int(time.time())
+        full_perms = permissions_to_json(full_access_permissions())
+        with Session(self.engine) as session:
+            row = session.scalar(select(WarehouseUser).where(WarehouseUser.login == login_n))
+            if row is None:
+                row = WarehouseUser(
+                    login=login_n,
+                    password_hash=hash_password(password_n),
+                    display_name=name,
+                    is_admin=True,
+                    is_active=True,
+                    permissions_json=full_perms,
+                    created_at_ts=now,
+                    updated_at_ts=now,
+                )
+                session.add(row)
                 session.commit()
+                session.refresh(row)
+                return self._row_from_model(row)
+            row.is_admin = True
+            row.is_active = True
+            row.password_hash = hash_password(password_n)
+            row.permissions_json = full_perms
+            if name and not (row.display_name or "").strip():
+                row.display_name = name
+            row.updated_at_ts = now
+            session.commit()
+            session.refresh(row)
+            return self._row_from_model(row)
 
     def _row_from_model(self, row: WarehouseUser) -> WarehouseUserRow:
         return WarehouseUserRow(
@@ -280,7 +304,7 @@ class WarehouseUsersRepository:
             "id": row.id,
             "login": row.login,
             "display_name": row.display_name,
-            "is_admin": row.is_admin,
+            "is_admin": bool(row.is_admin),
             "is_active": row.is_active,
             "permissions": row.permissions,
             "created_at_ts": row.created_at_ts,

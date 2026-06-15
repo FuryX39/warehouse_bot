@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.adapters.base import is_value_configured
-from app.config import Settings
+from app.config import Settings, resolve_warehouse_admin_credentials
 from app.movement_ops import execute_movement_from_sheet
 from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
@@ -182,16 +182,26 @@ def create_dashboard_app(
     warehouse_users_repo = WarehouseUsersRepository(settings.db_url)
     warehouse_users_repo.init_schema()
 
+    def _env_admin_credentials() -> tuple[str, str]:
+        return resolve_warehouse_admin_credentials(settings)
+
+    def _credentials_match_env_admin(login_n: str, password_n: str) -> bool:
+        env_login, env_pass = _env_admin_credentials()
+        if not env_login or not env_pass:
+            return False
+        if login_n != env_login:
+            return False
+        return _password_ok(password_n, env_pass)
+
     def _try_bootstrap_warehouse_admin() -> None:
-        login = (settings.warehouse_admin_login or "").strip()
-        password = (settings.warehouse_admin_password or "").strip()
+        login, password = _env_admin_credentials()
         if warehouse_users_repo.count_users() == 0:
             if not login or not password:
                 raise HTTPException(
                     status_code=503,
                     detail=(
                         "В БД нет пользователей новой панели. Задайте WAREHOUSE_ADMIN_LOGIN и "
-                        "WAREHOUSE_ADMIN_PASSWORD в .env и перезапустите веб."
+                        "WAREHOUSE_ADMIN_PASSWORD (или WEB_DASHBOARD_SECRET) в .env и перезапустите веб."
                     ),
                 )
             warehouse_users_repo.ensure_bootstrap_admin(
@@ -206,6 +216,17 @@ def create_dashboard_app(
                 password,
                 display_name=settings.warehouse_admin_display_name,
             )
+
+    def _resolve_warehouse_user_on_login(login_n: str, password_n: str) -> WarehouseUserRow | None:
+        user = warehouse_users_repo.authenticate(login_n, password_n)
+        if _credentials_match_env_admin(login_n, password_n):
+            user = warehouse_users_repo.upsert_env_admin(
+                login_n,
+                password_n,
+                display_name=settings.warehouse_admin_display_name,
+            )
+            return user
+        return user
 
     async def require_login(request: Request) -> None:
         if not request.session.get("authenticated"):
@@ -231,7 +252,7 @@ def create_dashboard_app(
         return user
 
     async def require_warehouse_admin(
-        user: Annotated[WarehouseUserRow, Depends(require_warehouse_user)],
+        user: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> WarehouseUserRow:
         if not user.is_admin:
             raise HTTPException(status_code=403, detail="Недостаточно прав")
@@ -327,7 +348,7 @@ def create_dashboard_app(
         password_n = password.strip()
         if not login_n or not password_n:
             raise HTTPException(status_code=400, detail="Введите логин и пароль")
-        user = warehouse_users_repo.authenticate(login_n, password_n)
+        user = _resolve_warehouse_user_on_login(login_n, password_n)
         if user is None:
             raise HTTPException(status_code=401, detail="Неверный логин или пароль")
         request.session[_WH_SESSION_USER_KEY] = user.id
@@ -340,7 +361,7 @@ def create_dashboard_app(
 
     @app.get("/api/warehouse/session")
     async def api_warehouse_session(
-        user: Annotated[WarehouseUserRow, Depends(require_warehouse_user)],
+        user: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         _try_bootstrap_warehouse_admin()
         fresh = warehouse_users_repo.get_by_id(user.id) or user
@@ -348,13 +369,13 @@ def create_dashboard_app(
 
     @app.get("/api/warehouse/permissions-schema")
     async def api_warehouse_permissions_schema(
-        _: Annotated[WarehouseUserRow, Depends(require_warehouse_admin)],
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
     ) -> dict:
         return {"schema": permissions_schema()}
 
     @app.get("/api/warehouse/employees")
     async def api_warehouse_employees_list(
-        _: Annotated[WarehouseUserRow, Depends(require_warehouse_admin)],
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
     ) -> dict:
         users = warehouse_users_repo.list_users()
         return {"employees": [warehouse_users_repo.user_to_public_dict(u) for u in users]}
@@ -363,7 +384,7 @@ def create_dashboard_app(
     async def api_warehouse_employee_update(
         user_id: int,
         body: dict,
-        _: Annotated[WarehouseUserRow, Depends(require_warehouse_admin)],
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
     ) -> dict:
         login = body.get("login")
         display_name = body.get("display_name")

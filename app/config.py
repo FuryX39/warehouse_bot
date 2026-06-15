@@ -109,6 +109,21 @@ def dealer_analysis_data_dir_default() -> Path:
     return _PROJECT_ROOT / "data" / "dealer_analysis"
 
 
+def resolve_warehouse_admin_credentials(settings: Settings) -> tuple[str, str]:
+    """Логин/пароль администратора новой панели из .env.
+
+    WAREHOUSE_ADMIN_PASSWORD может быть не задан — тогда используется WEB_DASHBOARD_SECRET.
+    WAREHOUSE_ADMIN_LOGIN по умолчанию — admin.
+    """
+    login = (settings.warehouse_admin_login or "admin").strip()
+    password = (settings.warehouse_admin_password or settings.web_dashboard_secret or "").strip()
+    if login.startswith("\ufeff"):
+        login = login.lstrip("\ufeff").strip()
+    if password.startswith("\ufeff"):
+        password = password.lstrip("\ufeff").strip()
+    return login, password
+
+
 def load_settings() -> Settings:
     load_dotenv(_PROJECT_ROOT / ".env", override=False)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
