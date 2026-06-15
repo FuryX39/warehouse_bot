@@ -183,23 +183,29 @@ def create_dashboard_app(
     warehouse_users_repo.init_schema()
 
     def _try_bootstrap_warehouse_admin() -> None:
-        if warehouse_users_repo.count_users() > 0:
-            return
         login = (settings.warehouse_admin_login or "").strip()
         password = (settings.warehouse_admin_password or "").strip()
-        if not login or not password:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "В БД нет пользователей новой панели. Задайте WAREHOUSE_ADMIN_LOGIN и "
-                    "WAREHOUSE_ADMIN_PASSWORD в .env и перезапустите веб."
-                ),
+        if warehouse_users_repo.count_users() == 0:
+            if not login or not password:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "В БД нет пользователей новой панели. Задайте WAREHOUSE_ADMIN_LOGIN и "
+                        "WAREHOUSE_ADMIN_PASSWORD в .env и перезапустите веб."
+                    ),
+                )
+            warehouse_users_repo.ensure_bootstrap_admin(
+                login,
+                password,
+                display_name=settings.warehouse_admin_display_name,
             )
-        warehouse_users_repo.ensure_bootstrap_admin(
-            login,
-            password,
-            display_name=settings.warehouse_admin_display_name,
-        )
+            return
+        if login and password:
+            warehouse_users_repo.sync_env_admin(
+                login,
+                password,
+                display_name=settings.warehouse_admin_display_name,
+            )
 
     async def require_login(request: Request) -> None:
         if not request.session.get("authenticated"):
@@ -336,7 +342,9 @@ def create_dashboard_app(
     async def api_warehouse_session(
         user: Annotated[WarehouseUserRow, Depends(require_warehouse_user)],
     ) -> dict:
-        return _warehouse_session_payload(user)
+        _try_bootstrap_warehouse_admin()
+        fresh = warehouse_users_repo.get_by_id(user.id) or user
+        return _warehouse_session_payload(fresh)
 
     @app.get("/api/warehouse/permissions-schema")
     async def api_warehouse_permissions_schema(

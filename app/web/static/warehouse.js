@@ -57,11 +57,23 @@
     });
   }
 
-  function findTab(tabId) {
+  function getTab(tabId) {
     for (var i = 0; i < NAV.length; i++) {
       if (NAV[i].id === tabId) return NAV[i];
     }
-    return NAV[0] || null;
+    return null;
+  }
+
+  function findTab(tabId) {
+    return getTab(tabId) || NAV[0] || null;
+  }
+
+  function findItemStrict(tab, itemId) {
+    if (!tab || !tab.items) return null;
+    for (var i = 0; i < tab.items.length; i++) {
+      if (tab.items[i].id === itemId) return tab.items[i];
+    }
+    return null;
   }
 
   function findItem(tab, itemId) {
@@ -83,22 +95,23 @@
       if (kv[0] === "tab" && kv[1]) tabId = decodeURIComponent(kv[1]);
       if (kv[0] === "item" && kv[1]) itemId = decodeURIComponent(kv[1]);
     });
-    if (tabId && findTab(tabId)) activeTabId = tabId;
-    var tab = findTab(activeTabId);
-    var item = findItem(tab, itemId);
+    if (tabId && getTab(tabId)) activeTabId = tabId;
+    var tab = getTab(activeTabId) || NAV[0];
+    if (tab) activeTabId = tab.id;
+    var item = findItemStrict(tab, itemId);
     if (item) activeItemId = item.id;
     else if (tab && tab.items[0]) activeItemId = tab.items[0].id;
   }
 
   function ensureActiveSelection() {
     if (!NAV.length) return;
-    if (!findTab(activeTabId)) {
+    if (!getTab(activeTabId)) {
       activeTabId = NAV[0].id;
       activeItemId = NAV[0].items[0] ? NAV[0].items[0].id : "";
       return;
     }
-    var tab = findTab(activeTabId);
-    if (!findItem(tab, activeItemId) && tab.items[0]) {
+    var tab = getTab(activeTabId);
+    if (!findItemStrict(tab, activeItemId) && tab.items[0]) {
       activeItemId = tab.items[0].id;
     }
   }
@@ -464,11 +477,25 @@
   }
 
   function render() {
-    if (!NAV.length) return;
+    if (!NAV.length) {
+      mainTabsEl.innerHTML = "";
+      subnavListEl.innerHTML = "";
+      contentTitleEl.textContent = "Нет доступных разделов";
+      contentBreadcrumbEl.textContent = "";
+      clearContentPanel();
+      var hint =
+        sessionUser && sessionUser.is_admin
+          ? "Навигация пуста — обновите страницу. Если не помогло, проверьте WAREHOUSE_ADMIN_LOGIN в .env."
+          : "У вашей учётной записи нет доступа ни к одному разделу. Обратитесь к администратору.";
+      contentPlaceholderEl.hidden = false;
+      contentPlaceholderEl.textContent = hint;
+      return;
+    }
     ensureActiveSelection();
-    var tab = findTab(activeTabId);
+    var tab = getTab(activeTabId) || NAV[0];
     if (!tab) return;
-    var item = findItem(tab, activeItemId) || tab.items[0];
+    activeTabId = tab.id;
+    var item = findItemStrict(tab, activeItemId) || tab.items[0];
     if (item) activeItemId = item.id;
     renderMainTabs();
     renderSubnav(tab);
