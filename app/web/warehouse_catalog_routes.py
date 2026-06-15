@@ -112,6 +112,19 @@ def register_warehouse_catalog_routes(
             raise HTTPException(status_code=404, detail="Товар не найден")
         return {"product": catalog_repo.product_to_dict(row)}
 
+    @app.delete("/api/warehouse/catalog/products/{product_id}")
+    async def api_catalog_delete_product(
+        product_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            deleted = catalog_repo.delete_product(product_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        return {"ok": True}
+
 
 def _filters_from_query(params: Any) -> dict[str, str]:
     keys = (

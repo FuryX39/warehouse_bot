@@ -363,6 +363,16 @@ body.wh-body {
   filter: brightness(1.05);
 }
 
+.wh-btn-danger {
+  background: #c62828;
+  border-color: #b71c1c;
+  color: #fff;
+}
+
+.wh-btn-danger:hover {
+  filter: brightness(1.05);
+}
+
 .wh-msg {
   font-size: 0.85rem;
   margin-top: 0.5rem;

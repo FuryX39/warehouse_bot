@@ -396,6 +396,9 @@
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whCatBackList">&larr; К списку</button>' +
+          (productId
+            ? '<button type="button" class="wh-btn wh-btn-danger" id="whCatDelete">Удалить</button>'
+            : "") +
           '<button type="button" class="wh-btn wh-btn-primary" id="whCatSave">Сохранить</button>' +
           "</div>" +
           '<p class="wh-msg" id="whCatFormMsg"></p>' +
@@ -465,6 +468,11 @@
         root.querySelector("#whCatSave").addEventListener("click", function () {
           saveProduct(root, productId);
         });
+        if (productId) {
+          root.querySelector("#whCatDelete").addEventListener("click", function () {
+            deleteProduct(root, productId, p);
+          });
+        }
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
@@ -617,6 +625,23 @@
       .catch(function (err) {
         msg.className = "wh-msg wh-msg-error";
         msg.textContent = err.message || "Ошибка сохранения";
+      });
+  }
+
+  function deleteProduct(root, productId, p) {
+    var label = (p.name || "товар") + (p.sku ? " («" + p.sku + "»)" : "");
+    if (!confirm("Удалить " + label + "? Это действие нельзя отменить.")) return;
+    var msg = root.querySelector("#whCatFormMsg");
+    msg.textContent = "";
+    msg.className = "wh-msg";
+    fetchJson("/api/warehouse/catalog/products/" + productId, { method: "DELETE" })
+      .then(function () {
+        editingId = null;
+        renderList();
+      })
+      .catch(function (err) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = err.message || "Ошибка удаления";
       });
   }
 

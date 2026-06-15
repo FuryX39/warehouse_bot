@@ -393,6 +393,40 @@ class CatalogRepository:
                 return None
         return self._save_product(int(product_id), data)
 
+    def delete_product(self, product_id: int) -> bool:
+        """Удаляет товар/комплект. False если не найден."""
+        with Session(self.engine) as session:
+            row = session.get(CatalogProduct, int(product_id))
+            if row is None:
+                return False
+            kits = self._kits_containing_component(session, int(product_id))
+            if kits:
+                parts = [
+                    f"«{name}» (арт. {sku}, код {code})" for _id, name, sku, code in kits
+                ]
+                raise ValueError(
+                    "Нельзя удалить: товар входит в состав комплектов: " + "; ".join(parts)
+                )
+            session.delete(row)
+            session.commit()
+            return True
+
+    def _kits_containing_component(
+        self, session: Session, component_product_id: int
+    ) -> list[tuple[int, str, str, str]]:
+        rows = session.execute(
+            select(
+                CatalogProduct.id,
+                CatalogProduct.name,
+                CatalogProduct.sku,
+                CatalogProduct.code,
+            )
+            .join(CatalogKitComponent, CatalogKitComponent.kit_product_id == CatalogProduct.id)
+            .where(CatalogKitComponent.component_product_id == int(component_product_id))
+            .order_by(CatalogProduct.name)
+        ).all()
+        return [(int(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in rows]
+
     def _save_product(self, product_id: int | None, data: dict[str, Any]) -> CatalogProductRow:
         is_kit = bool(data.get("is_kit"))
         name = str(data.get("name") or "").strip()
