@@ -13,6 +13,7 @@ HTTP API и раздача веб-страницы панели.
   POST /api/logout    — выход
   GET  /fbs           — FBS: списки и этикетки по маркетплейсам
   GET  /dealer-analysis — сравнение Excel заказов дилера (2 периода → отчёт)
+  GET  /warehouse     — новая система складского учёта (навигация, разделы в разработке)
   GET  /              — панель (редирект на /login без сессии)
   GET  /static/*      — CSS/JS (без данных; основная защита — API и /)
 """
@@ -203,6 +204,26 @@ def create_dashboard_app(
                 "Pragma": "no-cache",
             },
         )
+
+    def _warehouse_html_response():
+        html_path = _WEB_ROOT / "templates" / "warehouse.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон складского учёта не найден")
+        return FileResponse(
+            html_path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.get("/warehouse")
+    @app.get("/warehouse/")
+    async def warehouse_page(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url="/login", status_code=302)
+        return _warehouse_html_response()
 
     @app.get("/fbs")
     async def fbs_page(request: Request):

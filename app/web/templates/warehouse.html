@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Складской учёт</title>
+  <link rel="stylesheet" href="/static/warehouse.css" />
+</head>
+<body class="wh-body">
+  <div class="wh-app">
+    <header class="wh-topbar">
+      <div class="wh-brand">Складской учёт</div>
+      <div class="wh-topbar-actions">
+        <a class="wh-btn wh-btn-ghost" href="/">Старая панель</a>
+        <button type="button" class="wh-btn wh-btn-ghost" id="btnWhLogout">Выйти</button>
+      </div>
+    </header>
+
+    <nav class="wh-main-tabs" id="whMainTabs" aria-label="Разделы системы"></nav>
+
+    <div class="wh-workspace">
+      <aside class="wh-subnav" aria-label="Подразделы">
+        <h2 class="wh-subnav-title" id="whSubnavTitle">Склад</h2>
+        <ul class="wh-subnav-list" id="whSubnavList"></ul>
+      </aside>
+
+      <main class="wh-content">
+        <div class="wh-content-card">
+          <p class="wh-breadcrumb" id="whContentBreadcrumb"></p>
+          <h2 id="whContentTitle">Оприходования</h2>
+          <p class="wh-placeholder" id="whContentPlaceholder">
+            Раздел в разработке.
+          </p>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="/static/warehouse.js"></script>
+</body>
+</html>

@@ -1,0 +1,223 @@
+:root {
+  --wh-bg: #eef1f6;
+  --wh-surface: #ffffff;
+  --wh-header: #1e2a3b;
+  --wh-header-text: #e8eef7;
+  --wh-tab-active: #2f6fed;
+  --wh-tab-hover: #2a3f5c;
+  --wh-border: #d8dee9;
+  --wh-muted: #5c6b82;
+  --wh-text: #1c2434;
+  --wh-subnav-bg: #f7f9fc;
+  --wh-subnav-active: #e8f0fe;
+  --wh-shadow: 0 1px 3px rgba(28, 36, 52, 0.08);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial, sans-serif;
+  color: var(--wh-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body.wh-body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--wh-bg);
+}
+
+.wh-app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.wh-topbar {
+  background: var(--wh-header);
+  color: var(--wh-header-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wh-brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  white-space: nowrap;
+}
+
+.wh-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wh-btn {
+  border: 1px solid var(--wh-border);
+  background: var(--wh-surface);
+  color: var(--wh-text);
+  padding: 0.4rem 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.wh-btn:hover {
+  background: #f0f3f8;
+}
+
+.wh-btn-ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--wh-header-text);
+}
+
+.wh-btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.wh-main-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  background: #243447;
+  border-bottom: 2px solid rgba(0, 0, 0, 0.15);
+  padding: 0 0.5rem;
+}
+
+.wh-main-tab {
+  border: none;
+  background: transparent;
+  color: #b8c5d9;
+  padding: 0.75rem 1.1rem;
+  font-size: 0.92rem;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.wh-main-tab:hover {
+  color: #fff;
+  background: var(--wh-tab-hover);
+}
+
+.wh-main-tab.active {
+  color: #fff;
+  background: rgba(47, 111, 237, 0.2);
+  border-bottom-color: var(--wh-tab-active);
+  font-weight: 600;
+}
+
+.wh-workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.wh-subnav {
+  width: 260px;
+  min-width: 220px;
+  flex-shrink: 0;
+  background: var(--wh-subnav-bg);
+  border-right: 1px solid var(--wh-border);
+  padding: 0.75rem 0;
+  overflow-y: auto;
+}
+
+.wh-subnav-title {
+  margin: 0;
+  padding: 0.5rem 1rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--wh-muted);
+}
+
+.wh-subnav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wh-subnav-link {
+  display: block;
+  padding: 0.55rem 1rem 0.55rem 1.25rem;
+  color: var(--wh-text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+}
+
+.wh-subnav-link:hover {
+  background: #edf2fa;
+}
+
+.wh-subnav-link.active {
+  background: var(--wh-subnav-active);
+  border-left-color: var(--wh-tab-active);
+  font-weight: 600;
+}
+
+.wh-subnav-code {
+  display: inline-block;
+  min-width: 2.2rem;
+  color: var(--wh-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wh-content {
+  flex: 1;
+  padding: 1.25rem 1.5rem;
+  overflow: auto;
+}
+
+.wh-content-card {
+  background: var(--wh-surface);
+  border: 1px solid var(--wh-border);
+  border-radius: 10px;
+  box-shadow: var(--wh-shadow);
+  padding: 1.5rem 1.75rem;
+  max-width: 56rem;
+}
+
+.wh-content-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+}
+
+.wh-content-card .wh-breadcrumb {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--wh-muted);
+}
+
+.wh-placeholder {
+  margin: 0;
+  padding: 1rem 1.25rem;
+  background: #f8fafc;
+  border: 1px dashed var(--wh-border);
+  border-radius: 8px;
+  color: var(--wh-muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .wh-workspace {
+    flex-direction: column;
+  }
+
+  .wh-subnav {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--wh-border);
+    max-height: 12rem;
+  }
+}
