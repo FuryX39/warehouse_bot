@@ -103,11 +103,11 @@ def register_warehouse_catalog_routes(
             },
         )
 
-    @app.post("/api/warehouse/catalog/products/import")
+    @app.post("/api/warehouse/catalog/products/import", response_model=None)
     async def api_catalog_import_products(
         file: UploadFile = File(...),
         _: WarehouseUserRow = Depends(require_warehouse_user),
-    ) -> Response | dict:
+    ):
         data = await file.read()
         if len(data) > _IMPORT_MAX_BYTES:
             raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 10 МБ)")
