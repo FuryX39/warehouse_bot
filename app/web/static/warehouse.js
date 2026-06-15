@@ -212,6 +212,10 @@
       window.WhStorage.renderWarehouses(tab, item);
       return;
     }
+    if (tab.id === "warehouse" && item.id === "stock" && window.WhStock) {
+      window.WhStock.renderStock(tab, item);
+      return;
+    }
     if (tab.id === "products" && item.id === "catalog" && window.WhProducts) {
       window.WhProducts.renderCatalog(tab, item);
       return;

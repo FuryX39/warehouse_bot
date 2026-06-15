@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from app.catalog_bulk_import import build_import_template, import_products_from_xlsx
 from app.catalog_repository import CatalogRepository
+from app.warehouse_stock_repository import WarehouseStockRepository
 from app.warehouse_users_repository import WarehouseUserRow
 
 _IMPORT_MAX_BYTES = 10 * 1024 * 1024
@@ -19,6 +20,7 @@ def register_warehouse_catalog_routes(
     app,
     catalog_repo: CatalogRepository,
     require_warehouse_user,
+    stock_repo: WarehouseStockRepository | None = None,
 ) -> None:
     @app.get("/api/warehouse/catalog/meta")
     async def api_catalog_meta(
@@ -137,6 +139,8 @@ def register_warehouse_catalog_routes(
                     "X-Import-Total": str(result.total_rows),
                 },
             )
+        if stock_repo is not None and result.created:
+            stock_repo.rebuild_all()
         return {"ok": True, "created": result.created, "total_rows": result.total_rows}
 
     @app.get("/api/warehouse/catalog/products/next-code")
@@ -164,6 +168,8 @@ def register_warehouse_catalog_routes(
             row = catalog_repo.create_product(body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if stock_repo is not None and row.sku:
+            stock_repo.recalculate_skus({row.sku})
         return {"product": catalog_repo.product_to_dict(row)}
 
     @app.put("/api/warehouse/catalog/products/{product_id}")
@@ -172,12 +178,18 @@ def register_warehouse_catalog_routes(
         body: dict,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
+        old = catalog_repo.get_product(product_id)
+        old_sku = str(old.sku).strip() if old and old.sku else ""
         try:
             row = catalog_repo.update_product(product_id, body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if row is None:
             raise HTTPException(status_code=404, detail="Товар не найден")
+        if stock_repo is not None:
+            skus = {s for s in (old_sku, str(row.sku or "").strip()) if s}
+            if skus:
+                stock_repo.recalculate_skus(skus)
         return {"product": catalog_repo.product_to_dict(row)}
 
     @app.delete("/api/warehouse/catalog/products/{product_id}")
@@ -185,12 +197,17 @@ def register_warehouse_catalog_routes(
         product_id: int,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
+        old = catalog_repo.get_product(product_id)
+        old_sku = str(old.sku).strip() if old and old.sku else ""
         try:
             deleted = catalog_repo.delete_product(product_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not deleted:
             raise HTTPException(status_code=404, detail="Товар не найден")
+        if stock_repo is not None and old_sku:
+            stock_repo.remove_cached_sku(old_sku)
+            stock_repo.recalculate_skus({old_sku})
         return {"ok": True}
 
 

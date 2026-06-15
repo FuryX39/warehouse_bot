@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, func, inspect, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
@@ -83,6 +83,19 @@ class StorageWarehouseRepository:
         from sqlalchemy import create_engine
 
         self.engine = create_engine(db_url, future=True)
+        self._on_sku_changed: Callable[[str], None] | None = None
+
+    def set_stock_balance_hook(self, on_sku_changed: Callable[[str], None] | None) -> None:
+        self._on_sku_changed = on_sku_changed
+
+    def get_default_warehouse_id(self) -> int | None:
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(StorageWarehouse).where(StorageWarehouse.is_default.is_(True)).limit(1)
+            )
+            if row is None:
+                row = session.scalar(select(StorageWarehouse).order_by(StorageWarehouse.id).limit(1))
+            return int(row.id) if row is not None else None
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
@@ -320,7 +333,7 @@ class StorageWarehouseRepository:
             )
             return int(row.stock) if row else 0
 
-    def set_stock(self, warehouse_id: int, sku: str, stock: int) -> None:
+    def set_stock(self, warehouse_id: int, sku: str, stock: int, *, skip_recalc: bool = False) -> None:
         sku_n = sku.strip()
         if not sku_n:
             raise ValueError("SKU обязателен")
@@ -334,6 +347,8 @@ class StorageWarehouseRepository:
             )
             if row is None:
                 if qty == 0:
+                    if not skip_recalc and self._on_sku_changed:
+                        self._on_sku_changed(sku_n)
                     return
                 session.add(StorageStock(warehouse_id=int(warehouse_id), sku=sku_n, stock=qty))
             else:
@@ -342,6 +357,8 @@ class StorageWarehouseRepository:
                 else:
                     row.stock = qty
             session.commit()
+        if not skip_recalc and self._on_sku_changed:
+            self._on_sku_changed(sku_n)
 
     def list_stocks_for_warehouse(self, warehouse_id: int) -> dict[str, int]:
         with Session(self.engine) as session:

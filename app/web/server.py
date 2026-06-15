@@ -87,7 +87,8 @@ from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepos
 from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
 from app.web.warehouse_staff_routes import register_warehouse_staff_routes
-from app.web.warehouse_storage_routes import register_warehouse_storage_routes
+from app.warehouse_stock_repository import WarehouseStockRepository
+from app.web.warehouse_stock_routes import register_warehouse_stock_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -203,6 +204,24 @@ def create_dashboard_app(
 
     catalog_repo = CatalogRepository(settings.db_url)
     catalog_repo.init_schema()
+
+    stock_repo = WarehouseStockRepository(settings.db_url)
+    stock_repo.init_schema()
+
+    def _sync_legacy_stock_to_storage(sku: str, stock: int) -> None:
+        wh_id = storage_repo.get_default_warehouse_id()
+        if wh_id is None:
+            return
+        storage_repo.set_stock(int(wh_id), sku, int(stock), skip_recalc=True)
+
+    def _recalc_stock_skus(skus: set[str]) -> None:
+        stock_repo.recalculate_skus(skus)
+
+    storage_repo.set_stock_balance_hook(_recalc_stock_skus)
+    inventory_repo.set_stock_balance_hook(
+        _recalc_stock_skus,
+        after_stock_write=_sync_legacy_stock_to_storage,
+    )
 
     def _env_admin_credentials() -> tuple[str, str]:
         return resolve_warehouse_admin_credentials(settings)
@@ -424,7 +443,8 @@ def create_dashboard_app(
     )
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
-    register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user)
+    register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo)
+    register_warehouse_stock_routes(app, stock_repo, require_warehouse_user)
 
     @app.get("/fbs")
     async def fbs_page(request: Request):

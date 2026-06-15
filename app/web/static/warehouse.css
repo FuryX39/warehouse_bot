@@ -741,6 +741,93 @@ body.wh-body {
   background: #f0f4fa;
 }
 
+.wh-stock-view-toggle {
+  display: inline-flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.wh-stock-table .wh-stock-num {
+  white-space: nowrap;
+}
+
+.wh-stock-qty {
+  display: inline-block;
+  min-width: 2.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.wh-stock-qty--negative {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.wh-stock-drill {
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+
+.wh-stock-drill:hover {
+  background: #f0f4fa;
+}
+
+.wh-stock-breakdown-row td {
+  background: #f8fafc;
+  padding: 0.5rem 0.75rem;
+}
+
+.wh-stock-breakdown {
+  border-left: 3px solid var(--wh-accent, #3b6ea8);
+  padding: 0.35rem 0 0.35rem 0.75rem;
+}
+
+.wh-stock-breakdown-title {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.wh-stock-breakdown-list {
+  margin: 0.25rem 0 0.5rem 1.1rem;
+  padding: 0;
+}
+
+.wh-stock-breakdown-list li {
+  margin-bottom: 0.2rem;
+}
+
+.wh-stock-breakdown-total {
+  font-size: 0.9rem;
+}
+
+.wh-stock-breakdown-note {
+  font-size: 0.82rem;
+  margin: 0 0 0.35rem;
+}
+
+.wh-stock-wh-block {
+  margin-bottom: 1.5rem;
+}
+
+.wh-stock-wh-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.wh-stock-filter-check label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+}
+
 @media (max-width: 768px) {
   .wh-workspace {
     flex-direction: column;

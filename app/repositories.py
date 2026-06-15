@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import zlib
+from typing import Callable, Iterable
 
 from sqlalchemy import (
     Boolean,
@@ -125,6 +126,22 @@ class InventorySnapshot:
 class InventoryRepository:
     def __init__(self, db_url: str) -> None:
         self.engine = create_engine(db_url, future=True)
+        self._on_skus_affected: Callable[[set[str]], None] | None = None
+        self._after_stock_write: Callable[[str, int], None] | None = None
+
+    def set_stock_balance_hook(
+        self,
+        on_skus_affected: Callable[[set[str]], None] | None,
+        *,
+        after_stock_write: Callable[[str, int], None] | None = None,
+    ) -> None:
+        self._on_skus_affected = on_skus_affected
+        self._after_stock_write = after_stock_write
+
+    def _notify_skus(self, skus: Iterable[str]) -> None:
+        normalized = {str(s or "").strip() for s in skus if str(s or "").strip()}
+        if self._on_skus_affected and normalized:
+            self._on_skus_affected(normalized)
 
     def init_schema(self) -> None:
         Base.metadata.create_all(self.engine)
@@ -322,14 +339,19 @@ class InventoryRepository:
             return [(str(a), str(b), int(c)) for a, b, c in rows]
 
     def upsert_stock(self, sku: str, stock: int) -> None:
+        sku_n = str(sku or "").strip()
+        qty = max(stock, 0)
         with Session(self.engine) as session:
-            row = session.get(ProductStock, sku)
+            row = session.get(ProductStock, sku_n)
             if row is None:
-                row = ProductStock(sku=sku, stock=max(stock, 0))
+                row = ProductStock(sku=sku_n, stock=qty)
                 session.add(row)
             else:
-                row.stock = max(stock, 0)
+                row.stock = qty
             session.commit()
+        if self._after_stock_write:
+            self._after_stock_write(sku_n, qty)
+        self._notify_skus({sku_n})
 
     def delete_stock_by_sku(self, sku: str) -> bool:
         """Удаляет строку остатка (product_stocks). Резервы и заказы не трогает."""
@@ -342,7 +364,10 @@ class InventoryRepository:
                 return False
             session.delete(row)
             session.commit()
-            return True
+        if self._after_stock_write:
+            self._after_stock_write(sku, 0)
+        self._notify_skus({sku})
+        return True
 
     def upsert_stocks(self, stocks_by_sku: dict[str, int]) -> int:
         if not stocks_by_sku:
@@ -356,6 +381,10 @@ class InventoryRepository:
                 else:
                     row.stock = normalized_stock
             session.commit()
+        if self._after_stock_write:
+            for sku, stock in stocks_by_sku.items():
+                self._after_stock_write(str(sku).strip(), max(int(stock), 0))
+        self._notify_skus(stocks_by_sku.keys())
         return len(stocks_by_sku)
 
     def set_top_flags_by_skus(self, skus: list[str]) -> dict[str, int]:
@@ -462,6 +491,7 @@ class InventoryRepository:
         if not deltas_by_sku:
             return 0
         n = 0
+        touched_skus: set[str] = set()
         with Session(self.engine) as session:
             for sku_raw, delta in deltas_by_sku.items():
                 sku = str(sku_raw).strip()
@@ -475,8 +505,16 @@ class InventoryRepository:
                     session.add(ProductStock(sku=sku, stock=delta_i))
                 else:
                     row.stock = int(row.stock) + delta_i
+                touched_skus.add(sku)
                 n += 1
             session.commit()
+            if self._after_stock_write:
+                for sku in touched_skus:
+                    row = session.get(ProductStock, sku)
+                    qty = int(row.stock) if row is not None else 0
+                    self._after_stock_write(sku, max(qty, 0))
+        if touched_skus:
+            self._notify_skus(touched_skus)
         return n
 
     def apply_reservations(self, actions: list[ReservationAction]) -> int:
@@ -534,6 +572,9 @@ class InventoryRepository:
                     updated += 1
                     touched += 1
             session.commit()
+        affected = {str(a.sku or "").strip() for a in actions if str(a.sku or "").strip()}
+        if touched:
+            self._notify_skus(affected)
         return {"inserted": inserted, "updated": updated, "touched": touched}
 
     def list_order_items(
@@ -595,6 +636,7 @@ class InventoryRepository:
 
         removed = 0
         updated = 0
+        affected_skus: set[str] = set()
         with Session(self.engine) as session:
             active = session.scalars(
                 select(OrderItem).where(OrderItem.source == source, OrderItem.state == "added")
@@ -602,6 +644,9 @@ class InventoryRepository:
             for row in active:
                 key = (row.source, row.external_order_id)
                 if key not in desired_keys:
+                    sku_s = str(row.sku or "").strip()
+                    if sku_s:
+                        affected_skus.add(sku_s)
                     row.state = "cancelled"
                     removed += 1
 
@@ -613,6 +658,9 @@ class InventoryRepository:
                     )
                 )
                 if row is None:
+                    sku_s = str(action.sku or "").strip()
+                    if sku_s:
+                        affected_skus.add(sku_s)
                     session.add(
                         OrderItem(
                             source=action.source,
@@ -633,15 +681,26 @@ class InventoryRepository:
                     row.state = "added"
                     changed = True
                 if row.sku != action.sku:
+                    old_sku = str(row.sku or "").strip()
+                    if old_sku:
+                        affected_skus.add(old_sku)
+                    new_sku = str(action.sku or "").strip()
+                    if new_sku:
+                        affected_skus.add(new_sku)
                     row.sku = action.sku
                     changed = True
                 if int(row.quantity) != int(action.quantity):
                     row.quantity = int(action.quantity)
                     changed = True
+                    sku_s = str(row.sku or "").strip()
+                    if sku_s:
+                        affected_skus.add(sku_s)
                 if changed:
                     updated += 1
 
             session.commit()
+        if affected_skus:
+            self._notify_skus(affected_skus)
         return removed, updated
 
     def get_active_reserve_external_ids(self, source: str) -> set[str]:
@@ -929,6 +988,13 @@ class InventoryRepository:
                 r.state = "shipped"
 
             session.commit()
+
+            if self._after_stock_write:
+                for sku in reserved_by_sku:
+                    stock_row = session.get(ProductStock, sku)
+                    qty_after = int(stock_row.stock) if stock_row is not None else 0
+                    self._after_stock_write(sku, qty_after)
+            self._notify_skus(reserved_by_sku.keys())
 
             return {
                 "affected_skus": len(reserved_by_sku),
