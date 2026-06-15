@@ -70,6 +70,7 @@ from app.yandex_fbs_labels import (
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
 from app.crm_repository import CrmRepository
+from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.sheet_import import (
     import_nomenclature_from_google_sheet,
@@ -83,6 +84,7 @@ from app.warehouse_permissions import (
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
+from app.web.warehouse_storage_routes import register_warehouse_storage_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -186,6 +188,9 @@ def create_dashboard_app(
 
     crm_repo = CrmRepository(settings.db_url)
     crm_repo.init_schema()
+
+    storage_repo = StorageWarehouseRepository(settings.db_url)
+    storage_repo.init_schema()
 
     def _env_admin_credentials() -> tuple[str, str]:
         return resolve_warehouse_admin_credentials(settings)
@@ -419,6 +424,7 @@ def create_dashboard_app(
         return {"employee": warehouse_users_repo.user_to_public_dict(updated)}
 
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
+    register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
 
     @app.get("/fbs")
     async def fbs_page(request: Request):

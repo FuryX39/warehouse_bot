@@ -483,6 +483,10 @@
       window.WhCrm.renderPriceTypes(tab, item);
       return;
     }
+    if (tab.id === "warehouse" && item.id === "warehouses" && window.WhStorage) {
+      window.WhStorage.renderWarehouses(tab, item);
+      return;
+    }
     showPlaceholder(tab, item);
   }
 
