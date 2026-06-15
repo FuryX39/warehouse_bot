@@ -828,6 +828,52 @@ body.wh-body {
   min-height: 2.25rem;
 }
 
+.wh-cat-thumb-cell {
+  width: 3rem;
+  padding: 0.35rem 0.5rem;
+  vertical-align: middle;
+}
+
+.wh-cat-thumb {
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.wh-cat-prices-row {
+  align-items: end;
+}
+
+.wh-cat-pt-table tbody tr.wh-cat-pt-row {
+  cursor: pointer;
+}
+
+.wh-cat-pt-table tbody tr.wh-cat-pt-row:hover {
+  background: #f5f8fc;
+}
+
+.wh-cat-pt-name {
+  width: 100%;
+  min-width: 12rem;
+  box-sizing: border-box;
+}
+
+.wh-cat-price-cell {
+  white-space: nowrap;
+}
+
+.wh-cat-price-input {
+  width: 7rem;
+  max-width: 100%;
+}
+
+.wh-modal-tall .wh-modal-body {
+  max-height: min(70vh, 36rem);
+  overflow: auto;
+}
+
 @media (max-width: 768px) {
   .wh-workspace {
     flex-direction: column;

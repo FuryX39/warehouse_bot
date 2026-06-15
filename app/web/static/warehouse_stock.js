@@ -123,6 +123,16 @@
     return "Полный остаток";
   }
 
+  function productThumbCell(imageUrl) {
+    var u = String(imageUrl || "").trim();
+    if (!u) return '<td class="wh-cat-thumb-cell"></td>';
+    return (
+      '<td class="wh-cat-thumb-cell">' +
+      '<img class="wh-cat-thumb" src="' + esc(u) + '" alt="" loading="lazy" ' +
+      'onerror="this.remove()" /></td>'
+    );
+  }
+
   function qtyCell(sku, metric, value) {
     var cls = "wh-stock-qty";
     if (metric === "free" && Number(value) < 0) cls += " wh-stock-qty--negative";
@@ -138,6 +148,7 @@
         var typeLabel = it.is_kit ? "Комплект" : "Товар";
         return (
           '<tr data-sku="' + esc(it.sku) + '">' +
+          productThumbCell(it.image_url) +
           "<td>" + esc(it.name) + "</td>" +
           "<td>" + esc(typeLabel) + "</td>" +
           "<td>" + esc(it.sku) + "</td>" +
@@ -152,7 +163,7 @@
       .join("");
     return (
       '<table class="wh-employees-table wh-crm-table wh-stock-table"><thead><tr>' +
-      "<th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th>" +
+      "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th>" +
       "<th>Полный остаток</th><th>Резерв</th><th>Свободный остаток</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table>"
     );
@@ -168,6 +179,7 @@
           .map(function (line) {
             return (
               '<tr data-sku="' + esc(line.sku) + '">' +
+              productThumbCell(line.image_url) +
               "<td>" + esc(line.name) + "</td>" +
               "<td>" + (line.is_kit ? "Комплект" : "Товар") + "</td>" +
               "<td>" + esc(line.sku) + "</td>" +
@@ -184,7 +196,7 @@
           '<section class="wh-stock-wh-block">' +
           '<h3 class="wh-stock-wh-title">' + esc(wh.warehouse_name) + " <span class=\"wh-muted\">(" + esc(wh.warehouse_code) + ")</span></h3>" +
           '<table class="wh-employees-table wh-crm-table wh-stock-table"><thead><tr>' +
-          "<th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>На складе</th>" +
+          "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>На складе</th>" +
           "<th>Полный остаток</th><th>Резерв</th><th>Свободный остаток</th>" +
           "</tr></thead><tbody>" + lines + "</tbody></table></section>"
         );

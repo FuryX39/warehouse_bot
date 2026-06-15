@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from app.catalog_bulk_import import build_import_template, import_products_from_xlsx
 from app.catalog_repository import CatalogRepository
+from app.crm_repository import CrmRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.warehouse_users_repository import WarehouseUserRow
 
@@ -21,12 +22,16 @@ def register_warehouse_catalog_routes(
     catalog_repo: CatalogRepository,
     require_warehouse_user,
     stock_repo: WarehouseStockRepository | None = None,
+    crm_repo: CrmRepository | None = None,
 ) -> None:
     @app.get("/api/warehouse/catalog/meta")
     async def api_catalog_meta(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        return catalog_repo.get_meta()
+        meta = catalog_repo.get_meta()
+        if crm_repo is not None:
+            meta["price_types"] = crm_repo.get_meta().get("price_types", [])
+        return meta
 
     @app.put("/api/warehouse/catalog/groups")
     async def api_catalog_save_groups(
@@ -57,6 +62,34 @@ def register_warehouse_catalog_routes(
         if not isinstance(items, list):
             raise HTTPException(status_code=400, detail="items должен быть массивом")
         return {"marking_types": catalog_repo.save_marking_types(items)}
+
+    @app.get("/api/warehouse/catalog/price-types/{price_type_id}/products")
+    async def api_catalog_price_type_products(
+        price_type_id: int,
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        filters = _filters_from_query(request.query_params)
+        try:
+            products = catalog_repo.list_products_for_price_type(price_type_id, filters)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"products": products}
+
+    @app.put("/api/warehouse/catalog/price-types/{price_type_id}/prices")
+    async def api_catalog_price_type_save_prices(
+        price_type_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        items = body.get("items")
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="items должен быть массивом")
+        try:
+            updated = catalog_repo.save_prices_for_price_type(price_type_id, items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"updated": updated}
 
     @app.get("/api/warehouse/catalog/products")
     async def api_catalog_list_products(

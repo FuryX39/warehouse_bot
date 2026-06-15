@@ -18,6 +18,7 @@ _DEFAULT_TYPES = (
     "Физическое лицо",
     "Индивидуальный предприниматель",
 )
+_DEFAULT_PRICE_TYPES = ("Розничная цена",)
 
 
 class _Base(DeclarativeBase):
@@ -57,6 +58,7 @@ class CrmPriceType(_Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class CrmCounterparty(_Base):
@@ -160,7 +162,24 @@ class CrmRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_price_type_defaults()
         self._seed_defaults()
+
+    def _migrate_price_type_defaults(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "crm_price_types" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("crm_price_types")}
+        if "is_default" not in cols:
+            with Session(self.engine) as session:
+                session.execute(
+                    text(
+                        "ALTER TABLE crm_price_types "
+                        "ADD COLUMN is_default BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+                session.commit()
 
     def _seed_defaults(self) -> None:
         with Session(self.engine) as session:
@@ -175,6 +194,11 @@ class CrmRepository:
                 for i, name in enumerate(_DEFAULT_TYPES):
                     session.add(
                         CrmCounterpartyType(name=name, sort_order=i, is_default=True)
+                    )
+            if not session.scalar(select(func.count()).select_from(CrmPriceType)):
+                for i, name in enumerate(_DEFAULT_PRICE_TYPES):
+                    session.add(
+                        CrmPriceType(name=name, sort_order=i, is_default=True)
                     )
             session.commit()
 
@@ -226,7 +250,12 @@ class CrmRepository:
         }
 
     def _price_type_dict(self, row: CrmPriceType) -> dict[str, Any]:
-        return {"id": row.id, "name": row.name, "sort_order": row.sort_order}
+        return {
+            "id": row.id,
+            "name": row.name,
+            "sort_order": row.sort_order,
+            "is_default": bool(row.is_default),
+        }
 
     def save_statuses(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         with Session(self.engine) as session:
@@ -357,6 +386,8 @@ class CrmRepository:
                 keep_ids.add(int(row.id))
             for pid, row in existing.items():
                 if pid not in keep_ids:
+                    if bool(row.is_default):
+                        continue
                     session.delete(row)
             session.commit()
             rows = session.scalars(

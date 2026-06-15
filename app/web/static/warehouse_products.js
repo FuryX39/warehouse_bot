@@ -1,6 +1,6 @@
 (function (global) {
   var CONFIGURE_VALUE = "__configure__";
-  var meta = { groups: [], units: [], marking_types: [] };
+  var meta = { groups: [], units: [], marking_types: [], price_types: [] };
   var listFilters = {};
   var filterPanelOpen = false;
   var editingId = null;
@@ -41,8 +41,45 @@
       meta.groups = data.groups || [];
       meta.units = data.units || [];
       meta.marking_types = data.marking_types || [];
+      meta.price_types = data.price_types || [];
       return meta;
     });
+  }
+
+  function productThumbCell(imageUrl) {
+    var u = String(imageUrl || "").trim();
+    if (!u) return '<td class="wh-cat-thumb-cell"></td>';
+    return (
+      '<td class="wh-cat-thumb-cell">' +
+      '<img class="wh-cat-thumb" src="' + esc(u) + '" alt="" loading="lazy" ' +
+      'onerror="this.remove()" /></td>'
+    );
+  }
+
+  function formatPriceInput(value) {
+    if (value === null || value === undefined || value === "") return "";
+    return String(value);
+  }
+
+  function renderProductPriceFields(prices) {
+    var byType = {};
+    (prices || []).forEach(function (row) {
+      byType[String(row.price_type_id)] = row.price;
+    });
+    var types = meta.price_types || [];
+    if (!types.length) {
+      return '<p class="wh-msg">Нет видов цен. Добавьте их в разделе «Виды цен».</p>';
+    }
+    return types
+      .map(function (pt) {
+        var val = formatPriceInput(byType[String(pt.id)]);
+        return (
+          '<div><label>' + esc(pt.name) + '</label>' +
+          '<input type="text" class="wh-cat-price-input" data-price-type-id="' + esc(pt.id) + '" ' +
+          'value="' + esc(val) + '" placeholder="Не задана" inputmode="decimal" /></div>'
+        );
+      })
+      .join("");
   }
 
   function defaultUnitId() {
@@ -262,6 +299,7 @@
           : "товар";
         return (
           "<tr data-id=\"" + p.id + '">' +
+          productThumbCell(p.image_url) +
           "<td>" + esc(p.name) + "</td>" +
           "<td>" + typeLabel + "</td>" +
           "<td><code>" + esc(p.sku) + "</code></td>" +
@@ -274,7 +312,7 @@
       .join("");
     return (
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th><th>Ед.</th><th>ШК</th>" +
+      "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th><th>Ед.</th><th>ШК</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table>"
     );
   }
@@ -529,6 +567,14 @@
         kitComponents = (p.components || []).slice();
         var barcodesHtml = (p.barcodes || []).map(barcodeRow).join("");
         var componentsHtml = kitComponents.map(componentRow).join("");
+        var pricesList =
+          p.prices && p.prices.length
+            ? p.prices
+            : (meta.price_types || []).map(function (pt) {
+                return { price_type_id: pt.id, price_type_name: pt.name, price: null };
+              });
+        var pricesHtml = renderProductPriceFields(pricesList);
+        var kitSectionNum = formIsKit ? "5" : "4";
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whCatBackList">&larr; К списку</button>' +
@@ -560,9 +606,11 @@
           '<section class="wh-crm-section"><div class="wh-crm-section-head"><h4 class="wh-crm-section-title">3. Штрихкоды (Code128)</h4>' +
           '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddBarcode" title="Добавить">+</button></div>' +
           '<div id="whPrBarcodes">' + barcodesHtml + "</div></section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">4. Цены</h4>' +
+          '<div class="wh-form-row wh-cat-prices-row">' + pricesHtml + "</div></section>" +
           (formIsKit
             ? '<section class="wh-crm-section" id="whPrKitSection"><div class="wh-crm-section-head">' +
-              '<h4 class="wh-crm-section-title">4. Компоненты</h4>' +
+              '<h4 class="wh-crm-section-title">' + kitSectionNum + '. Компоненты</h4>' +
               '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddComponent" title="Добавить">+</button></div>' +
               '<div id="whPrComponents">' + componentsHtml + "</div></section>"
             : "");
@@ -745,6 +793,13 @@
       marking_type_id: root.querySelector("#whPrMarking").value || null,
       barcodes: barcodes,
       components: components,
+      prices: (meta.price_types || []).map(function (pt) {
+        var inp = root.querySelector('[data-price-type-id="' + pt.id + '"]');
+        return {
+          price_type_id: pt.id,
+          price: inp ? inp.value.trim() : "",
+        };
+      }),
     };
   }
 
@@ -796,6 +851,225 @@
       });
   }
 
+  function renderPriceTypeList(root) {
+    var types = meta.price_types || [];
+    if (!types.length) {
+      root.querySelector("#whPtListWrap").innerHTML =
+        '<p class="wh-msg">Нет видов цен. Добавьте первый.</p>';
+      return;
+    }
+    var rows = types
+      .map(function (pt) {
+        var delBtn = pt.is_default
+          ? '<span class="wh-muted wh-cat-pt-default">по умолчанию</span>'
+          : '<button type="button" class="wh-btn wh-btn-sm wh-cat-pt-remove" data-id="' + esc(pt.id) + '">Удалить</button>';
+        return (
+          '<tr class="wh-cat-pt-row" data-id="' + esc(pt.id) + '">' +
+          '<td class="wh-cat-pt-name-cell">' +
+          '<input type="text" class="wh-cat-pt-name" value="' + esc(pt.name) + '" data-id="' + esc(pt.id) + '" />' +
+          "</td>" +
+          '<td class="wh-cat-pt-actions">' + delBtn + "</td></tr>"
+        );
+      })
+      .join("");
+    root.querySelector("#whPtListWrap").innerHTML =
+      '<table class="wh-employees-table wh-crm-table wh-cat-pt-table"><thead><tr>' +
+      "<th>Название</th><th></th></tr></thead><tbody>" + rows + "</tbody></table>";
+    root.querySelectorAll(".wh-cat-pt-row").forEach(function (tr) {
+      tr.addEventListener("click", function (e) {
+        if (e.target.closest("input, button")) return;
+        var id = parseInt(tr.getAttribute("data-id"), 10);
+        if (!id) {
+          alert("Сначала сохраните названия видов цен.");
+          return;
+        }
+        var pt = null;
+        for (var i = 0; i < types.length; i++) {
+          if (types[i].id === id) {
+            pt = types[i];
+            break;
+          }
+        }
+        if (pt) openPriceTypeProductsModal(pt);
+      });
+    });
+    root.querySelectorAll(".wh-cat-pt-remove").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var id = btn.getAttribute("data-id");
+        meta.price_types = meta.price_types.filter(function (p) {
+          return String(p.id) !== String(id);
+        });
+        renderPriceTypeList(root);
+      });
+    });
+  }
+
+  function savePriceTypeNames(root) {
+    var msg = root.querySelector("#whPtMsg");
+    msg.textContent = "";
+    msg.className = "wh-msg";
+    var items = [];
+    root.querySelectorAll(".wh-cat-pt-name").forEach(function (inp) {
+      var name = inp.value.trim();
+      if (!name) return;
+      var item = { name: name };
+      var id = inp.getAttribute("data-id");
+      if (id) item.id = parseInt(id, 10);
+      items.push(item);
+    });
+    return fetchJson("/api/warehouse/crm/price-types", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items }),
+    }).then(function (data) {
+      meta.price_types = data.price_types || [];
+      msg.className = "wh-msg wh-msg-ok";
+      msg.textContent = "Сохранено.";
+      renderPriceTypeList(root);
+    });
+  }
+
+  function openPriceTypeProductsModal(priceType) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal wh-modal-wide wh-modal-tall" role="dialog">' +
+      '<div class="wh-modal-header"><h3>' + esc(priceType.name) + " — цены товаров</h3>" +
+      '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<input type="search" id="whPtModalSearch" class="wh-crm-search" placeholder="Поиск по названию, артикулу…" />' +
+      '<div id="whPtModalList"><p class="wh-msg">Загрузка…</p></div>' +
+      '<p class="wh-msg" id="whPtModalMsg"></p></div>' +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whPtModalSave">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) close();
+    });
+
+    function renderModalTable(products) {
+      if (!products.length) {
+        backdrop.querySelector("#whPtModalList").innerHTML = '<p class="wh-msg">Товары не найдены.</p>';
+        return;
+      }
+      var rows = products
+        .map(function (p) {
+          return (
+            "<tr>" +
+            productThumbCell(p.image_url) +
+            "<td><code>" + esc(p.sku) + "</code></td>" +
+            "<td>" + esc(p.name) + (p.is_kit ? ' <span class="wh-badge wh-badge-admin">комплект</span>' : "") + "</td>" +
+            '<td class="wh-cat-price-cell">' +
+            '<input type="text" class="wh-cat-price-input wh-cat-pt-product-price" ' +
+            'data-product-id="' + esc(p.product_id) + '" value="' + esc(formatPriceInput(p.price)) + '" ' +
+            'placeholder="—" inputmode="decimal" /></td></tr>'
+          );
+        })
+        .join("");
+      backdrop.querySelector("#whPtModalList").innerHTML =
+        '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
+        "<th></th><th>Артикул</th><th>Название</th><th>Цена</th></tr></thead><tbody>" +
+        rows + "</tbody></table>";
+    }
+
+    function loadProducts(q) {
+      var url =
+        "/api/warehouse/catalog/price-types/" +
+        encodeURIComponent(priceType.id) +
+        "/products?q=" +
+        encodeURIComponent(q || "");
+      return fetchJson(url).then(function (data) {
+        renderModalTable(data.products || []);
+      });
+    }
+
+    loadProducts("").catch(function (err) {
+      backdrop.querySelector("#whPtModalList").innerHTML =
+        '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+    });
+
+    var search = backdrop.querySelector("#whPtModalSearch");
+    var timer = null;
+    search.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        loadProducts(search.value.trim()).catch(function (err) {
+          backdrop.querySelector("#whPtModalMsg").className = "wh-msg wh-msg-error";
+          backdrop.querySelector("#whPtModalMsg").textContent = err.message;
+        });
+      }, 250);
+    });
+
+    backdrop.querySelector("#whPtModalSave").addEventListener("click", function () {
+      var msg = backdrop.querySelector("#whPtModalMsg");
+      msg.textContent = "";
+      msg.className = "wh-msg";
+      var items = [];
+      backdrop.querySelectorAll(".wh-cat-pt-product-price").forEach(function (inp) {
+        items.push({
+          product_id: parseInt(inp.getAttribute("data-product-id"), 10),
+          price: inp.value.trim(),
+        });
+      });
+      fetchJson("/api/warehouse/catalog/price-types/" + encodeURIComponent(priceType.id) + "/prices", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: items }),
+      })
+        .then(function () {
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent = "Цены сохранены.";
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка сохранения";
+        });
+    });
+  }
+
+  function renderPriceTypes(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML = "<p class=\"wh-msg\">Загрузка…</p>";
+    loadMeta()
+      .then(function () {
+        root.innerHTML =
+          '<div class="wh-crm-toolbar">' +
+          '<button type="button" class="wh-btn wh-btn-primary" id="whPtSave">Сохранить названия</button>' +
+          '<button type="button" class="wh-btn" id="whPtAdd">+ Вид цены</button>' +
+          "</div>" +
+          '<p class="wh-muted">Нажмите на строку вида цены, чтобы открыть список товаров и задать цены.</p>' +
+          '<div id="whPtListWrap"></div>' +
+          '<p class="wh-msg" id="whPtMsg"></p>';
+        renderPriceTypeList(root);
+        root.querySelector("#whPtAdd").addEventListener("click", function () {
+          meta.price_types.push({ name: "" });
+          renderPriceTypeList(root);
+          var inputs = root.querySelectorAll(".wh-cat-pt-name");
+          if (inputs.length) inputs[inputs.length - 1].focus();
+        });
+        root.querySelector("#whPtSave").addEventListener("click", function () {
+          savePriceTypeNames(root).catch(function (err) {
+            var msg = root.querySelector("#whPtMsg");
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent = err.message;
+          });
+        });
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
   function renderCatalog(tab, item) {
     preparePanel(tab, item);
     editingId = null;
@@ -812,5 +1086,6 @@
 
   global.WhProducts = {
     renderCatalog: renderCatalog,
+    renderPriceTypes: renderPriceTypes,
   };
 })(window);

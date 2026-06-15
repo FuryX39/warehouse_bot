@@ -204,8 +204,8 @@
       window.WhCrm.renderCounterparties(tab, item);
       return;
     }
-    if (tab.id === "products" && item.id === "price-types" && window.WhCrm) {
-      window.WhCrm.renderPriceTypes(tab, item);
+    if (tab.id === "products" && item.id === "price-types" && window.WhProducts) {
+      window.WhProducts.renderPriceTypes(tab, item);
       return;
     }
     if (tab.id === "warehouse" && item.id === "warehouses" && window.WhStorage) {

@@ -31,6 +31,7 @@ class StockBalanceCache(_Base):
     code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     group_id: Mapped[int] = mapped_column(Integer, nullable=True)
     group_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    image_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     full_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reserve: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     free_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -46,6 +47,7 @@ class StockBalanceRow:
     code: str
     group_id: int | None
     group_name: str
+    image_url: str
     full_stock: int
     reserve: int
     free_stock: int
@@ -71,10 +73,31 @@ class WarehouseStockRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        if self._migrate_cache_columns():
+            self.rebuild_all()
+            return
         with Session(self.engine) as session:
             count = int(session.scalar(select(func.count()).select_from(StockBalanceCache)) or 0)
         if count == 0:
             self.rebuild_all()
+
+    def _migrate_cache_columns(self) -> bool:
+        from sqlalchemy import inspect, text
+
+        if "stock_balance_cache" not in inspect(self.engine).get_table_names():
+            return False
+        cols = {c["name"] for c in inspect(self.engine).get_columns("stock_balance_cache")}
+        if "image_url" in cols:
+            return False
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE stock_balance_cache "
+                    "ADD COLUMN image_url VARCHAR(2048) NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
+        return True
 
     def notify_skus_changed(self, skus: Iterable[str]) -> None:
         normalized = {str(s or "").strip() for s in skus if str(s or "").strip()}
@@ -174,6 +197,7 @@ class WarehouseStockRepository:
                             "reserve": bal.reserve if bal else 0,
                             "free_stock": bal.free_stock if bal else int(st.stock),
                             "product_id": bal.product_id if bal else None,
+                            "image_url": bal.image_url if bal else "",
                         }
                     )
                 if filters.get("hide_empty") == "1" and not lines:
@@ -293,6 +317,7 @@ class WarehouseStockRepository:
             "code": row.code,
             "group_id": row.group_id,
             "group_name": row.group_name,
+            "image_url": row.image_url,
             "full_stock": row.full_stock,
             "reserve": row.reserve,
             "free_stock": row.free_stock,
@@ -308,6 +333,7 @@ class WarehouseStockRepository:
             code=row.code or "",
             group_id=int(row.group_id) if row.group_id is not None else None,
             group_name=row.group_name or "",
+            image_url=getattr(row, "image_url", "") or "",
             full_stock=int(row.full_stock),
             reserve=int(row.reserve),
             free_stock=int(row.free_stock),
@@ -499,6 +525,7 @@ class WarehouseStockRepository:
         row.code = (product.code if product else "")[:64]
         row.group_id = int(product.group_id) if product and product.group_id else None
         row.group_name = group_name[:128]
+        row.image_url = ((product.image_url if product else "") or "")[:2048]
         row.full_stock = int(full_stock)
         row.reserve = int(reserve)
         row.free_stock = int(free_stock)

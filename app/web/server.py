@@ -444,7 +444,7 @@ def create_dashboard_app(
     )
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
-    register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo)
+    register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo, crm_repo)
     register_warehouse_stock_routes(app, stock_repo, require_warehouse_user)
 
     @app.get("/fbs")

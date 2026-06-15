@@ -11,6 +11,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "id": "warehouse",
         "title": "Склад",
         "items": [
+            {"id": "receiving", "title": "Приемка"},
             {"id": "receipts", "title": "Оприходования"},
             {"id": "writeoffs", "title": "Списания"},
             {"id": "transfers", "title": "Перемещения"},

@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, delete, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+from app.crm_repository import CrmPriceType
 
 _DEFAULT_UNITS = ("шт", "л", "мл", "г", "кг")
 _DEFAULT_MARKING_TYPES = (
@@ -117,6 +120,20 @@ class CatalogKitComponent(_Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class CatalogProductPrice(_Base):
+    __tablename__ = "catalog_product_prices"
+    __table_args__ = (
+        UniqueConstraint("product_id", "price_type_id", name="uq_catalog_product_price"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
+    )
+    price_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 @dataclass
 class KitComponentRow:
     component_product_id: int
@@ -124,6 +141,13 @@ class KitComponentRow:
     component_sku: str
     component_is_kit: bool
     quantity: int
+
+
+@dataclass
+class ProductPriceRow:
+    price_type_id: int
+    price_type_name: str
+    price: Optional[str] = None
 
 
 @dataclass
@@ -147,6 +171,7 @@ class CatalogProductRow:
     marking_type_name: str
     barcodes: list[str] = field(default_factory=list)
     components: list[KitComponentRow] = field(default_factory=list)
+    prices: list[ProductPriceRow] = field(default_factory=list)
     barcode_count: int = 0
     created_at_ts: int = 0
     updated_at_ts: int = 0
@@ -290,6 +315,78 @@ class CatalogRepository:
                 }
                 for r in rows
             ]
+
+    def list_products_for_price_type(
+        self, price_type_id: int, filters: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            if session.get(CrmPriceType, int(price_type_id)) is None:
+                raise ValueError("Вид цены не найден")
+            q = select(CatalogProduct).order_by(CatalogProduct.name, CatalogProduct.sku)
+            conds = self._filter_conditions(session, filters)
+            if conds:
+                q = q.where(*conds)
+            products = session.scalars(q).all()
+            price_rows = session.scalars(
+                select(CatalogProductPrice).where(
+                    CatalogProductPrice.price_type_id == int(price_type_id)
+                )
+            ).all()
+            price_by_product = {int(r.product_id): r.price for r in price_rows}
+            return [
+                {
+                    "product_id": int(p.id),
+                    "sku": p.sku,
+                    "name": p.name,
+                    "image_url": p.image_url or "",
+                    "is_kit": bool(p.is_kit),
+                    "price": price_by_product.get(int(p.id)),
+                }
+                for p in products
+            ]
+
+    def save_prices_for_price_type(
+        self, price_type_id: int, items: list[dict[str, Any]]
+    ) -> int:
+        with Session(self.engine) as session:
+            if session.get(CrmPriceType, int(price_type_id)) is None:
+                raise ValueError("Вид цены не найден")
+            updated = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    product_id = int(item.get("product_id"))
+                except (TypeError, ValueError):
+                    continue
+                if session.get(CatalogProduct, product_id) is None:
+                    continue
+                price = _parse_price(item.get("price"))
+                row = session.scalar(
+                    select(CatalogProductPrice).where(
+                        CatalogProductPrice.product_id == product_id,
+                        CatalogProductPrice.price_type_id == int(price_type_id),
+                    )
+                )
+                if price is None:
+                    if row is not None:
+                        session.delete(row)
+                        updated += 1
+                    continue
+                if row is None:
+                    session.add(
+                        CatalogProductPrice(
+                            product_id=product_id,
+                            price_type_id=int(price_type_id),
+                            price=price,
+                        )
+                    )
+                    updated += 1
+                elif row.price != price:
+                    row.price = price
+                    updated += 1
+            session.commit()
+            return updated
 
     def list_products(self, filters: dict[str, str]) -> list[CatalogProductRow]:
         with Session(self.engine) as session:
@@ -522,6 +619,8 @@ class CatalogRepository:
                 session.execute(
                     delete(CatalogKitComponent).where(CatalogKitComponent.kit_product_id == row.id)
                 )
+            if "prices" in data:
+                self._save_product_prices(session, int(row.id), data.get("prices"))
             session.commit()
             session.refresh(row)
             return self._product_row(session, row, load_details=True)
@@ -677,6 +776,9 @@ class CatalogRepository:
                             quantity=int(c.quantity),
                         )
                     )
+        prices: list[ProductPriceRow] = []
+        if load_details:
+            prices = self._product_prices(session, int(row.id))
         return CatalogProductRow(
             id=int(row.id),
             is_kit=bool(row.is_kit),
@@ -697,6 +799,7 @@ class CatalogRepository:
             marking_type_name=marking_name,
             barcodes=barcodes,
             components=components,
+            prices=prices,
             barcode_count=barcode_count,
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
@@ -737,7 +840,72 @@ class CatalogRepository:
                 }
                 for c in row.components
             ]
+            d["prices"] = [
+                {
+                    "price_type_id": p.price_type_id,
+                    "price_type_name": p.price_type_name,
+                    "price": p.price,
+                }
+                for p in row.prices
+            ]
         return d
+
+    def _product_prices(self, session: Session, product_id: int) -> list[ProductPriceRow]:
+        types = session.scalars(
+            select(CrmPriceType).order_by(CrmPriceType.sort_order, CrmPriceType.name)
+        ).all()
+        existing = {
+            int(r.price_type_id): r.price
+            for r in session.scalars(
+                select(CatalogProductPrice).where(CatalogProductPrice.product_id == int(product_id))
+            ).all()
+        }
+        return [
+            ProductPriceRow(
+                price_type_id=int(t.id),
+                price_type_name=t.name,
+                price=existing.get(int(t.id)),
+            )
+            for t in types
+        ]
+
+    def _save_product_prices(
+        self, session: Session, product_id: int, prices_raw: Any
+    ) -> None:
+        if prices_raw is None:
+            return
+        if not isinstance(prices_raw, list):
+            raise ValueError("prices должен быть массивом")
+        for item in prices_raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                price_type_id = int(item.get("price_type_id"))
+            except (TypeError, ValueError):
+                continue
+            if session.get(CrmPriceType, price_type_id) is None:
+                continue
+            price = _parse_price(item.get("price"))
+            row = session.scalar(
+                select(CatalogProductPrice).where(
+                    CatalogProductPrice.product_id == int(product_id),
+                    CatalogProductPrice.price_type_id == price_type_id,
+                )
+            )
+            if price is None:
+                if row is not None:
+                    session.delete(row)
+                continue
+            if row is None:
+                session.add(
+                    CatalogProductPrice(
+                        product_id=int(product_id),
+                        price_type_id=price_type_id,
+                        price=price,
+                    )
+                )
+            else:
+                row.price = price
 
 
 def _opt_int(value: Any) -> Optional[int]:
@@ -747,3 +915,19 @@ def _opt_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_price(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip().replace("\u00a0", "").replace(" ", "")
+    if not raw:
+        return None
+    raw = raw.replace(",", ".")
+    try:
+        amount = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError(f"Некорректная цена: {value}") from exc
+    if amount < 0:
+        raise ValueError("Цена не может быть отрицательной")
+    return f"{amount:.2f}"
