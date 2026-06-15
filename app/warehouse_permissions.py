@@ -94,9 +94,8 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "title": "Сотрудники",
         "admin_only": True,
         "items": [
-            {"id": "employee-list", "title": "Список сотрудников"},
-            {"id": "employee-create", "title": "Добавить сотрудника"},
-            {"id": "employee-roles", "title": "Роли"},
+            {"id": "employees", "title": "Сотрудники"},
+            {"id": "roles", "title": "Роли"},
         ],
     },
 ]

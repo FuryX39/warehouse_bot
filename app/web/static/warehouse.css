@@ -632,6 +632,23 @@ body.wh-body {
   font-size: 0.9rem;
 }
 
+.wh-role-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.wh-role-checks label {
+  font-size: 0.9rem;
+}
+
+.wh-role-members {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+
 .wh-crm-dict-name {
   flex: 1;
   min-width: 140px;

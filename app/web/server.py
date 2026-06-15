@@ -81,11 +81,12 @@ from app.sheet_import import (
 from app.warehouse_permissions import (
     filter_nav_for_user,
     permissions_schema,
-    sanitize_permissions,
 )
+from app.warehouse_roles_repository import WarehouseRolesRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
+from app.web.warehouse_staff_routes import register_warehouse_staff_routes
 from app.web.warehouse_storage_routes import register_warehouse_storage_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
@@ -188,6 +189,12 @@ def create_dashboard_app(
     warehouse_users_repo = WarehouseUsersRepository(settings.db_url)
     warehouse_users_repo.init_schema()
 
+    warehouse_roles_repo = WarehouseRolesRepository(settings.db_url)
+    warehouse_roles_repo.init_schema()
+    warehouse_roles_repo.migrate_legacy_admin_users(
+        [user.id for user in warehouse_users_repo.list_users() if user.is_admin]
+    )
+
     crm_repo = CrmRepository(settings.db_url)
     crm_repo.init_schema()
 
@@ -224,13 +231,38 @@ def create_dashboard_app(
                 password,
                 display_name=settings.warehouse_admin_display_name,
             )
+            user = warehouse_users_repo.get_by_login(login)
+            if user is not None:
+                warehouse_roles_repo.sync_admin_role_for_user(user.id, is_admin=True)
             return
         if login and password:
-            warehouse_users_repo.sync_env_admin(
+            user = warehouse_users_repo.sync_env_admin(
                 login,
                 password,
                 display_name=settings.warehouse_admin_display_name,
             )
+            if user is not None:
+                warehouse_roles_repo.sync_admin_role_for_user(user.id, is_admin=True)
+
+    def _resolve_user_access(user: WarehouseUserRow) -> tuple[bool, dict[str, list[str]]]:
+        return warehouse_roles_repo.resolve_user_access(
+            user_id=user.id,
+            is_admin=user.is_admin,
+            legacy_permissions=user.permissions,
+        )
+
+    def _user_session_dict(user: WarehouseUserRow) -> dict:
+        roles = warehouse_roles_repo.get_user_roles(user.id)
+        role_items = [{"id": r.id, "name": r.name, "is_admin": r.is_admin} for r in roles]
+        is_admin, perms = _resolve_user_access(user)
+        data = warehouse_users_repo.user_to_public_dict(
+            user,
+            roles=role_items,
+            role_ids=[r.id for r in roles],
+        )
+        data["is_admin"] = is_admin
+        data["permissions"] = perms
+        return data
 
     def _resolve_warehouse_user_on_login(login_n: str, password_n: str) -> WarehouseUserRow | None:
         user = warehouse_users_repo.authenticate(login_n, password_n)
@@ -269,16 +301,18 @@ def create_dashboard_app(
     async def require_warehouse_admin(
         user: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> WarehouseUserRow:
-        if not user.is_admin:
+        is_admin, _ = _resolve_user_access(user)
+        if not is_admin:
             raise HTTPException(status_code=403, detail="Недостаточно прав")
         return user
 
     def _warehouse_session_payload(user: WarehouseUserRow) -> dict:
+        is_admin, perms = _resolve_user_access(user)
         payload: dict = {
-            "user": warehouse_users_repo.user_to_public_dict(user),
-            "nav": filter_nav_for_user(is_admin=user.is_admin, permissions=user.permissions),
+            "user": _user_session_dict(user),
+            "nav": filter_nav_for_user(is_admin=is_admin, permissions=perms),
         }
-        if user.is_admin:
+        if is_admin:
             payload["permissions_schema"] = permissions_schema()
         return payload
 
@@ -382,52 +416,12 @@ def create_dashboard_app(
         fresh = warehouse_users_repo.get_by_id(user.id) or user
         return _warehouse_session_payload(fresh)
 
-    @app.get("/api/warehouse/permissions-schema")
-    async def api_warehouse_permissions_schema(
-        _: WarehouseUserRow = Depends(require_warehouse_admin),
-    ) -> dict:
-        return {"schema": permissions_schema()}
-
-    @app.get("/api/warehouse/employees")
-    async def api_warehouse_employees_list(
-        _: WarehouseUserRow = Depends(require_warehouse_admin),
-    ) -> dict:
-        users = warehouse_users_repo.list_users()
-        return {"employees": [warehouse_users_repo.user_to_public_dict(u) for u in users]}
-
-    @app.put("/api/warehouse/employees/{user_id}")
-    async def api_warehouse_employee_update(
-        user_id: int,
-        body: dict,
-        _: WarehouseUserRow = Depends(require_warehouse_admin),
-    ) -> dict:
-        login = body.get("login")
-        display_name = body.get("display_name")
-        password = body.get("password")
-        is_admin = body.get("is_admin")
-        is_active = body.get("is_active")
-        permissions_raw = body.get("permissions")
-        permissions = None
-        if permissions_raw is not None:
-            if not isinstance(permissions_raw, dict):
-                raise HTTPException(status_code=400, detail="permissions должен быть объектом")
-            permissions = sanitize_permissions(permissions_raw)
-        try:
-            updated = warehouse_users_repo.update_user(
-                user_id,
-                login=str(login).strip() if login is not None else None,
-                password=str(password) if password is not None else None,
-                display_name=str(display_name) if display_name is not None else None,
-                is_admin=bool(is_admin) if is_admin is not None else None,
-                is_active=bool(is_active) if is_active is not None else None,
-                permissions=permissions,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Пользователь не найден")
-        return {"employee": warehouse_users_repo.user_to_public_dict(updated)}
-
+    register_warehouse_staff_routes(
+        app,
+        warehouse_users_repo,
+        warehouse_roles_repo,
+        require_warehouse_admin,
+    )
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
     register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user)

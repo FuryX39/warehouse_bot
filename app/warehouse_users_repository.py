@@ -6,8 +6,9 @@ import hashlib
 import secrets
 import time
 from dataclasses import dataclass
+from typing import Any, Optional
 
-from sqlalchemy import Boolean, Integer, String, func, select
+from sqlalchemy import Boolean, Integer, String, func, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.warehouse_permissions import (
@@ -23,6 +24,14 @@ class _Base(DeclarativeBase):
     pass
 
 
+class WarehouseEmployeeGroup(_Base):
+    __tablename__ = "warehouse_employee_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class WarehouseUser(_Base):
     __tablename__ = "warehouse_users"
 
@@ -30,6 +39,8 @@ class WarehouseUser(_Base):
     login: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    group_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    telegram_nick: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     permissions_json: Mapped[str] = mapped_column(String(8192), nullable=False, default="{}")
@@ -42,6 +53,9 @@ class WarehouseUserRow:
     id: int
     login: str
     display_name: str
+    group_id: Optional[int]
+    group_name: str
+    telegram_nick: str
     is_admin: bool
     is_active: bool
     permissions: dict[str, list[str]]
@@ -80,6 +94,13 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return secrets.compare_digest(digest.hex(), digest_hex)
 
 
+def _like(pattern: str) -> str:
+    p = pattern.strip()
+    if not p:
+        return ""
+    return f"%{p}%"
+
+
 class WarehouseUsersRepository:
     def __init__(self, db_url: str) -> None:
         from sqlalchemy import create_engine
@@ -88,6 +109,70 @@ class WarehouseUsersRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._ensure_user_columns()
+
+    def _ensure_user_columns(self) -> None:
+        with self.engine.begin() as conn:
+            cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(warehouse_users)")).all()
+            }
+            if "group_id" not in cols:
+                conn.execute(text("ALTER TABLE warehouse_users ADD COLUMN group_id INTEGER"))
+            if "telegram_nick" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE warehouse_users ADD COLUMN telegram_nick "
+                        "VARCHAR(128) NOT NULL DEFAULT ''"
+                    )
+                )
+
+    def get_employee_meta(self) -> dict[str, list[dict[str, Any]]]:
+        with Session(self.engine) as session:
+            groups = session.scalars(
+                select(WarehouseEmployeeGroup).order_by(
+                    WarehouseEmployeeGroup.sort_order, WarehouseEmployeeGroup.name
+                )
+            ).all()
+        return {
+            "groups": [{"id": g.id, "name": g.name, "sort_order": g.sort_order} for g in groups],
+        }
+
+    def save_employee_groups(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {
+                r.id: r for r in session.scalars(select(WarehouseEmployeeGroup)).all()
+            }
+            keep_ids: set[int] = set()
+            for i, item in enumerate(items):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                raw_id = item.get("id")
+                row = None
+                if raw_id is not None:
+                    try:
+                        row = existing.get(int(raw_id))
+                    except (TypeError, ValueError):
+                        row = None
+                if row is None:
+                    row = WarehouseEmployeeGroup(name=name, sort_order=i)
+                    session.add(row)
+                else:
+                    row.name = name
+                    row.sort_order = i
+                session.flush()
+                keep_ids.add(int(row.id))
+            for rid, row in existing.items():
+                if rid not in keep_ids:
+                    session.delete(row)
+            session.commit()
+            rows = session.scalars(
+                select(WarehouseEmployeeGroup).order_by(
+                    WarehouseEmployeeGroup.sort_order, WarehouseEmployeeGroup.name
+                )
+            ).all()
+            return [{"id": r.id, "name": r.name, "sort_order": r.sort_order} for r in rows]
 
     def count_users(self) -> int:
         with Session(self.engine) as session:
@@ -131,7 +216,17 @@ class WarehouseUsersRepository:
             row = session.scalar(select(WarehouseUser).where(WarehouseUser.login == login_n))
             if row is None:
                 return None
-            return self._row_from_model(row)
+            group_name = ""
+            if row.group_id is not None:
+                group_name = (
+                    session.scalar(
+                        select(WarehouseEmployeeGroup.name).where(
+                            WarehouseEmployeeGroup.id == int(row.group_id)
+                        )
+                    )
+                    or ""
+                )
+            return self._row_from_model(row, group_name=str(group_name))
 
     def upsert_env_admin(self, login: str, password: str, *, display_name: str = "Администратор") -> WarehouseUserRow:
         login_n = login.strip()
@@ -157,7 +252,7 @@ class WarehouseUsersRepository:
                 session.add(row)
                 session.commit()
                 session.refresh(row)
-                return self._row_from_model(row)
+                return self._user_row_after_flush(session, row)
             row.is_admin = True
             row.is_active = True
             row.password_hash = hash_password(password_n)
@@ -167,19 +262,66 @@ class WarehouseUsersRepository:
             row.updated_at_ts = now
             session.commit()
             session.refresh(row)
-            return self._row_from_model(row)
+            group_name = ""
+            if row.group_id is not None:
+                group_name = (
+                    session.scalar(
+                        select(WarehouseEmployeeGroup.name).where(
+                            WarehouseEmployeeGroup.id == int(row.group_id)
+                        )
+                    )
+                    or ""
+                )
+            return self._row_from_model(row, group_name=str(group_name))
 
-    def _row_from_model(self, row: WarehouseUser) -> WarehouseUserRow:
+    def _normalize_telegram_nick(self, raw: str) -> str:
+        return str(raw or "").strip().lstrip("@")[:128]
+
+    def _user_row_after_flush(self, session: Session, row: WarehouseUser) -> WarehouseUserRow:
+        group_name = ""
+        if row.group_id is not None:
+            group_name = (
+                session.scalar(
+                    select(WarehouseEmployeeGroup.name).where(
+                        WarehouseEmployeeGroup.id == int(row.group_id)
+                    )
+                )
+                or ""
+            )
+        return self._row_from_model(row, group_name=str(group_name))
+
+    def _row_from_model(self, row: WarehouseUser, *, group_name: str = "") -> WarehouseUserRow:
         return WarehouseUserRow(
             id=int(row.id),
             login=row.login,
             display_name=row.display_name or "",
+            group_id=int(row.group_id) if row.group_id is not None else None,
+            group_name=group_name,
+            telegram_nick=row.telegram_nick or "",
             is_admin=bool(row.is_admin),
             is_active=bool(row.is_active),
             permissions=permissions_from_json(row.permissions_json),
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
         )
+
+    def _group_name_map(self, session: Session) -> dict[int, str]:
+        rows = session.scalars(select(WarehouseEmployeeGroup)).all()
+        return {int(r.id): r.name for r in rows}
+
+    def _resolve_group_id(self, session: Session, raw: Any) -> int | None:
+        if raw is None or raw == "":
+            return None
+        try:
+            group_id = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("Некорректная группа")
+        exists = session.scalar(
+            select(WarehouseEmployeeGroup.id).where(WarehouseEmployeeGroup.id == group_id)
+        )
+        if exists is None:
+            raise ValueError("Группа не найдена")
+        return group_id
 
     def authenticate(self, login: str, password: str) -> WarehouseUserRow | None:
         login_n = login.strip()
@@ -191,19 +333,86 @@ class WarehouseUsersRepository:
                 return None
             if not verify_password(password, row.password_hash):
                 return None
-            return self._row_from_model(row)
+            return self._row_from_model(row, group_name=self._group_name_map(session).get(int(row.group_id or 0), ""))
 
     def get_by_id(self, user_id: int) -> WarehouseUserRow | None:
         with Session(self.engine) as session:
             row = session.get(WarehouseUser, int(user_id))
             if row is None:
                 return None
-            return self._row_from_model(row)
+            group_name = ""
+            if row.group_id is not None:
+                group_name = (
+                    session.scalar(
+                        select(WarehouseEmployeeGroup.name).where(
+                            WarehouseEmployeeGroup.id == int(row.group_id)
+                        )
+                    )
+                    or ""
+                )
+            return self._row_from_model(row, group_name=str(group_name))
 
-    def list_users(self) -> list[WarehouseUserRow]:
+    def list_users(self, filters: dict[str, str] | None = None) -> list[WarehouseUserRow]:
+        filters = filters or {}
         with Session(self.engine) as session:
-            rows = session.scalars(select(WarehouseUser).order_by(WarehouseUser.login)).all()
-            return [self._row_from_model(r) for r in rows]
+            q = select(WarehouseUser).order_by(WarehouseUser.display_name, WarehouseUser.login)
+            conds = self._filter_conditions(session, filters)
+            if conds:
+                q = q.where(*conds)
+            rows = session.scalars(q).all()
+            groups = self._group_name_map(session)
+            return [
+                self._row_from_model(
+                    r,
+                    group_name=groups.get(int(r.group_id), "") if r.group_id is not None else "",
+                )
+                for r in rows
+            ]
+
+    def _filter_conditions(self, session: Session, filters: dict[str, str]) -> list:
+        from app.warehouse_roles_repository import WarehouseUserRole
+
+        conds = []
+        quick = _like(filters.get("q", ""))
+        if quick:
+            conds.append(
+                or_(
+                    WarehouseUser.display_name.ilike(quick),
+                    WarehouseUser.login.ilike(quick),
+                    WarehouseUser.telegram_nick.ilike(quick),
+                )
+            )
+        for key, col in (
+            ("display_name", WarehouseUser.display_name),
+            ("login", WarehouseUser.login),
+            ("telegram_nick", WarehouseUser.telegram_nick),
+        ):
+            pat = _like(filters.get(key, ""))
+            if pat:
+                conds.append(col.ilike(pat))
+        raw_group = (filters.get("group_id") or "").strip()
+        if raw_group:
+            try:
+                conds.append(WarehouseUser.group_id == int(raw_group))
+            except ValueError:
+                pass
+        raw_role = (filters.get("role_id") or "").strip()
+        if raw_role:
+            try:
+                role_id = int(raw_role)
+            except ValueError:
+                role_id = None
+            if role_id is not None:
+                subq = select(WarehouseUserRole.user_id).where(
+                    WarehouseUserRole.role_id == role_id
+                )
+                conds.append(WarehouseUser.id.in_(subq))
+        status = (filters.get("is_active") or "").strip().lower()
+        if status in {"1", "true", "yes", "active"}:
+            conds.append(WarehouseUser.is_active.is_(True))
+        elif status in {"0", "false", "no", "inactive"}:
+            conds.append(WarehouseUser.is_active.is_(False))
+        return conds
 
     def create_user(
         self,
@@ -211,6 +420,8 @@ class WarehouseUsersRepository:
         login: str,
         password: str,
         display_name: str = "",
+        group_id: int | None = None,
+        telegram_nick: str = "",
         is_admin: bool = False,
         is_active: bool = True,
         permissions: dict[str, list[str]] | None = None,
@@ -230,6 +441,8 @@ class WarehouseUsersRepository:
                 login=login_n,
                 password_hash=hash_password(password),
                 display_name=name,
+                group_id=self._resolve_group_id(session, group_id),
+                telegram_nick=self._normalize_telegram_nick(telegram_nick),
                 is_admin=bool(is_admin),
                 is_active=bool(is_active),
                 permissions_json=perms_json,
@@ -239,7 +452,7 @@ class WarehouseUsersRepository:
             session.add(row)
             session.commit()
             session.refresh(row)
-            return self._row_from_model(row)
+            return self._user_row_after_flush(session, row)
 
     def update_user(
         self,
@@ -248,6 +461,8 @@ class WarehouseUsersRepository:
         login: str | None = None,
         password: str | None = None,
         display_name: str | None = None,
+        group_id: Any = ...,
+        telegram_nick: str | None = None,
         is_admin: bool | None = None,
         is_active: bool | None = None,
         permissions: dict[str, list[str]] | None = None,
@@ -273,6 +488,10 @@ class WarehouseUsersRepository:
                 row.password_hash = hash_password(password.strip())
             if display_name is not None:
                 row.display_name = display_name.strip()[:128]
+            if group_id is not ...:
+                row.group_id = self._resolve_group_id(session, group_id)
+            if telegram_nick is not None:
+                row.telegram_nick = self._normalize_telegram_nick(telegram_nick)
             if is_admin is not None:
                 if row.is_admin and not is_admin:
                     admins = session.scalars(
@@ -297,16 +516,29 @@ class WarehouseUsersRepository:
             row.updated_at_ts = int(time.time())
             session.commit()
             session.refresh(row)
-            return self._row_from_model(row)
+            return self._user_row_after_flush(session, row)
 
-    def user_to_public_dict(self, row: WarehouseUserRow) -> dict:
+    def user_to_public_dict(
+        self,
+        row: WarehouseUserRow,
+        *,
+        roles: list[dict] | None = None,
+        role_ids: list[int] | None = None,
+    ) -> dict:
+        role_items = roles or []
+        ids = role_ids if role_ids is not None else [int(r["id"]) for r in role_items]
         return {
             "id": row.id,
             "login": row.login,
             "display_name": row.display_name,
+            "group_id": row.group_id,
+            "group_name": row.group_name,
+            "telegram_nick": row.telegram_nick,
             "is_admin": bool(row.is_admin),
             "is_active": row.is_active,
             "permissions": row.permissions,
+            "role_ids": ids,
+            "roles": role_items,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
         }
