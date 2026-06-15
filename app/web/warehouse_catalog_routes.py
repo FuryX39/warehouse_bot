@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 
+from app.catalog_bulk_import import build_import_template, import_products_from_xlsx
 from app.catalog_repository import CatalogRepository
 from app.warehouse_users_repository import WarehouseUserRow
+
+_IMPORT_MAX_BYTES = 10 * 1024 * 1024
 
 
 def register_warehouse_catalog_routes(
@@ -76,6 +81,63 @@ def register_warehouse_catalog_routes(
             except ValueError:
                 exclude_id = None
         return {"products": catalog_repo.list_products_picker(q=q, exclude_id=exclude_id)}
+
+    @app.get("/api/warehouse/catalog/products/import/template")
+    async def api_catalog_import_template(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        try:
+            content = await asyncio.to_thread(
+                build_import_template, catalog_repo.get_meta()
+            )
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="catalog_products_template.xlsx"',
+            },
+        )
+
+    @app.post("/api/warehouse/catalog/products/import")
+    async def api_catalog_import_products(
+        file: UploadFile = File(...),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response | dict:
+        data = await file.read()
+        if len(data) > _IMPORT_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 10 МБ)")
+        if not data:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        filename = (file.filename or "").lower()
+        if not filename.endswith(".xlsx"):
+            raise HTTPException(status_code=400, detail="Нужен файл Excel в формате .xlsx")
+        try:
+            result = await asyncio.to_thread(import_products_from_xlsx, catalog_repo, data)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if result.error_report:
+            return Response(
+                content=result.error_report,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": 'attachment; filename="catalog_import_errors.xlsx"',
+                    "X-Import-Created": str(result.created),
+                    "X-Import-Failed": str(result.failed),
+                    "X-Import-Total": str(result.total_rows),
+                },
+            )
+        return {"ok": True, "created": result.created, "total_rows": result.total_rows}
 
     @app.get("/api/warehouse/catalog/products/next-code")
     async def api_catalog_next_product_code(

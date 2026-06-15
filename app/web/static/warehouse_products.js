@@ -288,6 +288,7 @@
           '<div class="wh-crm-toolbar">' +
           '<input type="search" id="whCatQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
           '<button type="button" class="wh-btn" id="whCatToggleFilter">Фильтр</button>' +
+          '<button type="button" class="wh-btn" id="whCatBulkImport">Массовая загрузка</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whCatCreate">+ Товар</button>' +
           '<button type="button" class="wh-btn" id="whCatCreateKit">+ Комплект</button>' +
           "</div>" +
@@ -299,6 +300,140 @@
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
       });
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  function openBulkImportModal() {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal wh-modal-wide" role="dialog">' +
+      '<div class="wh-modal-header"><h3>Массовая загрузка товаров</h3>' +
+      '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      "<p>Загрузите Excel-файл по шаблону. Комплекты через импорт добавить нельзя.</p>" +
+      '<div class="wh-import-actions">' +
+      '<a class="wh-btn" id="whCatImportTemplate" href="/api/warehouse/catalog/products/import/template">Скачать шаблон Excel</a>' +
+      "</div>" +
+      '<label class="wh-import-file-label">Файл для загрузки<input type="file" id="whCatImportFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
+      '<p class="wh-msg" id="whCatImportMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whCatImportSubmit">Загрузить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button>' +
+      "</div></div>";
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) close();
+    });
+
+    backdrop.querySelector("#whCatImportTemplate").addEventListener("click", function (e) {
+      e.preventDefault();
+      fetch("/api/warehouse/catalog/products/import/template", { credentials: "include" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("Не удалось скачать шаблон");
+          return r.blob();
+        })
+        .then(function (blob) {
+          downloadBlob(blob, "catalog_products_template.xlsx");
+        })
+        .catch(function (err) {
+          var msg = backdrop.querySelector("#whCatImportMsg");
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка скачивания шаблона";
+        });
+    });
+
+    backdrop.querySelector("#whCatImportSubmit").addEventListener("click", function () {
+      var fileInput = backdrop.querySelector("#whCatImportFile");
+      var msg = backdrop.querySelector("#whCatImportMsg");
+      var submitBtn = backdrop.querySelector("#whCatImportSubmit");
+      msg.textContent = "";
+      msg.className = "wh-msg";
+      if (!fileInput.files || !fileInput.files.length) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите файл Excel (.xlsx)";
+        return;
+      }
+      var formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      submitBtn.disabled = true;
+      msg.textContent = "Обработка файла…";
+      fetch("/api/warehouse/catalog/products/import", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      })
+        .then(function (r) {
+          var ct = (r.headers.get("content-type") || "").toLowerCase();
+          if (ct.indexOf("spreadsheetml") !== -1 || ct.indexOf("octet-stream") !== -1) {
+            var created = parseInt(r.headers.get("X-Import-Created") || "0", 10) || 0;
+            var failed = parseInt(r.headers.get("X-Import-Failed") || "0", 10) || 0;
+            return r.blob().then(function (blob) {
+              return { kind: "errors", blob: blob, created: created, failed: failed };
+            });
+          }
+          return r.text().then(function (text) {
+            var json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (e) {
+              json = null;
+            }
+            if (!r.ok) {
+              var detail = json && json.detail != null ? json.detail : text || "HTTP " + r.status;
+              if (typeof detail === "object" && detail.msg) detail = detail.msg;
+              throw new Error(typeof detail === "string" ? detail : "Ошибка загрузки");
+            }
+            return { kind: "ok", data: json || {} };
+          });
+        })
+        .then(function (result) {
+          if (result.kind === "errors") {
+            downloadBlob(result.blob, "catalog_import_errors.xlsx");
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent =
+              "Добавлено: " +
+              result.created +
+              ". Ошибок: " +
+              result.failed +
+              ". Скачан файл с описанием проблем по строкам.";
+            if (result.created > 0) renderList();
+            return;
+          }
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent =
+            "Успешно добавлено товаров: " + (result.data.created || 0) + ".";
+          renderList();
+          setTimeout(close, 1200);
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка загрузки";
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
   }
 
   function bindListEvents(root) {
@@ -314,6 +449,7 @@
       kitComponents = [];
       renderForm(null, true);
     });
+    root.querySelector("#whCatBulkImport").addEventListener("click", openBulkImportModal);
     root.querySelector("#whCatToggleFilter").addEventListener("click", function () {
       filterPanelOpen = !filterPanelOpen;
       var fp = root.querySelector("#whCatFilters");

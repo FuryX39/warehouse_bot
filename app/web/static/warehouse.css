@@ -616,6 +616,22 @@ body.wh-body {
   margin-bottom: 0.5rem;
 }
 
+.wh-import-actions {
+  margin: 1rem 0;
+}
+
+.wh-import-file-label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--wh-muted);
+}
+
+.wh-import-file-label input[type="file"] {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.9rem;
+}
+
 .wh-crm-dict-name {
   flex: 1;
   min-width: 140px;
