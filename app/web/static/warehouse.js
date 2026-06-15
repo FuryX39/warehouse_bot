@@ -169,6 +169,8 @@
     contentPanelEl.hidden = true;
     contentPanelEl.innerHTML = "";
     contentPlaceholderEl.hidden = false;
+    var card = document.querySelector(".wh-content-card");
+    if (card) card.classList.remove("wh-content-card--wide");
   }
 
   function showPlaceholder(tab, item, text) {
@@ -473,6 +475,14 @@
       );
       return;
     }
+    if (tab.id === "crm" && item.id === "counterparties" && window.WhCrm) {
+      window.WhCrm.renderCounterparties(tab, item);
+      return;
+    }
+    if (tab.id === "products" && item.id === "price-types" && window.WhCrm) {
+      window.WhCrm.renderPriceTypes(tab, item);
+      return;
+    }
     showPlaceholder(tab, item);
   }
 
@@ -562,4 +572,12 @@
   });
 
   boot();
+
+  window.WH_SHELL = {
+    fetchJson: fetchJson,
+    contentPanelEl: contentPanelEl,
+    contentTitleEl: contentTitleEl,
+    contentBreadcrumbEl: contentBreadcrumbEl,
+    contentPlaceholderEl: contentPlaceholderEl,
+  };
 })();

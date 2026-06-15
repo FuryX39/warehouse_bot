@@ -69,6 +69,7 @@ from app.yandex_fbs_labels import (
     order_ids_in_list_order,
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
+from app.crm_repository import CrmRepository
 from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.sheet_import import (
     import_nomenclature_from_google_sheet,
@@ -81,6 +82,7 @@ from app.warehouse_permissions import (
     sanitize_permissions,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
+from app.web.warehouse_crm_routes import register_warehouse_crm_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -181,6 +183,9 @@ def create_dashboard_app(
 
     warehouse_users_repo = WarehouseUsersRepository(settings.db_url)
     warehouse_users_repo.init_schema()
+
+    crm_repo = CrmRepository(settings.db_url)
+    crm_repo.init_schema()
 
     def _env_admin_credentials() -> tuple[str, str]:
         return resolve_warehouse_admin_credentials(settings)
@@ -412,6 +417,8 @@ def create_dashboard_app(
         if updated is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
         return {"employee": warehouse_users_repo.user_to_public_dict(updated)}
+
+    register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
 
     @app.get("/fbs")
     async def fbs_page(request: Request):
