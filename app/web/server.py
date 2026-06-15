@@ -87,6 +87,7 @@ from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepos
 from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
 from app.web.warehouse_staff_routes import register_warehouse_staff_routes
+from app.web.warehouse_storage_routes import register_warehouse_storage_routes
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.web.warehouse_stock_routes import register_warehouse_stock_routes
 

@@ -103,7 +103,7 @@ class WarehouseStockRepository:
             for sku, in session.execute(select(OrderItem.sku).distinct()).all():
                 if str(sku or "").strip():
                     skus.add(str(sku).strip())
-            for sku, in session.scalars(select(CatalogProduct.sku)).all():
+            for sku in session.scalars(select(CatalogProduct.sku)).all():
                 if str(sku or "").strip():
                     skus.add(str(sku).strip())
         self.recalculate_skus(skus)
