@@ -411,7 +411,9 @@
           '<div><label>Группа</label><select id="whPrGroup" data-prev="' + esc(p.group_id || "") + '">' + buildSelectOptions(meta.groups, p.group_id) + "</select></div>" +
           '<div><label>Страна</label><input type="text" id="whPrCountry" value="' + esc(p.country) + '" /></div>' +
           '<div><label>Артикул</label><input type="text" id="whPrSku" value="' + esc(p.sku) + '" /></div>' +
-          '<div><label>Код</label><input type="text" id="whPrCode" value="' + esc(p.code) + '" /></div>' +
+          '<div><label>Код</label><div class="wh-form-input-with-btn">' +
+          '<input type="text" id="whPrCode" value="' + esc(p.code) + '" />' +
+          '<button type="button" class="wh-btn wh-btn-sm" id="whPrGenCode" title="Сгенерировать уникальный код">↻</button></div></div>' +
           '<div><label>Внешний код</label><input type="text" id="whPrExtCode" value="' + esc(p.external_code) + '" /></div>' +
           '<div><label>Единица измерения</label><select id="whPrUnit" data-prev="' + esc(p.unit_id || "") + '">' + buildSelectOptions(meta.units, p.unit_id) + "</select></div>" +
           '<div><label>Вес</label><input type="text" id="whPrWeight" value="' + esc(p.weight) + '" /></div>' +
@@ -448,6 +450,19 @@
         root.querySelector("#whCatBackList").addEventListener("click", function () {
           editingId = null;
           renderList();
+        });
+        root.querySelector("#whPrGenCode").addEventListener("click", function () {
+          var msg = root.querySelector("#whCatFormMsg");
+          msg.textContent = "";
+          msg.className = "wh-msg";
+          fetchJson("/api/warehouse/catalog/products/next-code")
+            .then(function (data) {
+              root.querySelector("#whPrCode").value = data.code || "";
+            })
+            .catch(function (err) {
+              msg.className = "wh-msg wh-msg-error";
+              msg.textContent = err.message || "Не удалось сгенерировать код";
+            });
         });
         root.querySelector("#whPrAddBarcode").addEventListener("click", function () {
           root.querySelector("#whPrBarcodes").insertAdjacentHTML("beforeend", barcodeRow(""));

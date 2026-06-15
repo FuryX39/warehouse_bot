@@ -77,6 +77,12 @@ def register_warehouse_catalog_routes(
                 exclude_id = None
         return {"products": catalog_repo.list_products_picker(q=q, exclude_id=exclude_id)}
 
+    @app.get("/api/warehouse/catalog/products/next-code")
+    async def api_catalog_next_product_code(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        return {"code": catalog_repo.generate_next_product_code()}
+
     @app.get("/api/warehouse/catalog/products/{product_id}")
     async def api_catalog_get_product(
         product_id: int,

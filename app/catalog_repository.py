@@ -411,6 +411,26 @@ class CatalogRepository:
             session.commit()
             return True
 
+    def generate_next_product_code(self) -> str:
+        with Session(self.engine) as session:
+            codes = session.scalars(select(CatalogProduct.code)).all()
+            max_num = 0
+            found_numeric = False
+            for raw in codes:
+                code = str(raw or "").strip()
+                if not code.isdigit():
+                    continue
+                found_numeric = True
+                max_num = max(max_num, int(code))
+            next_num = 1 if not found_numeric else max_num + 1
+            return self._format_product_code(next_num)
+
+    @staticmethod
+    def _format_product_code(number: int) -> str:
+        if number <= 99_999:
+            return f"{number:05d}"
+        return str(number)
+
     def _kits_containing_component(
         self, session: Session, component_product_id: int
     ) -> list[tuple[int, str, str, str]]:

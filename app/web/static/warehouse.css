@@ -449,6 +449,17 @@ body.wh-body {
   background: #fff;
 }
 
+.wh-form-input-with-btn {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.wh-form-input-with-btn input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
 .wh-crm-section {
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
