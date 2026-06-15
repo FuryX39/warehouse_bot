@@ -45,19 +45,98 @@
     });
   }
 
+  function textOnBg(hex) {
+    var h = String(hex || "#9e9e9e").replace("#", "").trim();
+    if (h.length === 3) {
+      h = h
+        .split("")
+        .map(function (c) {
+          return c + c;
+        })
+        .join("");
+    }
+    if (h.length !== 6) return "#1c2434";
+    var r = parseInt(h.slice(0, 2), 16);
+    var g = parseInt(h.slice(2, 4), 16);
+    var b = parseInt(h.slice(4, 6), 16);
+    if (isNaN(r) || isNaN(g) || isNaN(b)) return "#1c2434";
+    var lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return lum > 0.58 ? "#1c2434" : "#ffffff";
+  }
+
   function statusBadge(name, color) {
     if (!name) return "—";
+    var bg = color || "#9e9e9e";
+    var fg = textOnBg(bg);
     return (
       '<span class="wh-crm-status" style="background:' +
-      esc(color || "#9e9e9e") +
-      '22;color:' +
-      esc(color || "#333") +
-      ';border-color:' +
-      esc(color || "#9e9e9e") +
+      esc(bg) +
+      ";color:" +
+      esc(fg) +
       '">' +
       esc(name) +
       "</span>"
     );
+  }
+
+  function buildStatusSelectOptions(items, selectedId) {
+    var html = '<option value="">—</option>';
+    items.forEach(function (it) {
+      var sel = String(selectedId || "") === String(it.id) ? " selected" : "";
+      var bg = it.color || "#9e9e9e";
+      var fg = textOnBg(bg);
+      html +=
+        '<option value="' +
+        esc(it.id) +
+        '" data-color="' +
+        esc(bg) +
+        '" style="background-color:' +
+        esc(bg) +
+        ";color:" +
+        esc(fg) +
+        '"' +
+        sel +
+        ">" +
+        esc(it.name) +
+        "</option>";
+    });
+    html +=
+      '<option value="' +
+      CONFIGURE_VALUE +
+      '" class="wh-crm-status-configure">Настроить…</option>';
+    return html;
+  }
+
+  function syncStatusSelectAppearance(selectEl) {
+    if (!selectEl) return;
+    var opt = selectEl.options[selectEl.selectedIndex];
+    var color = opt && opt.getAttribute("data-color");
+    if (!color || !selectEl.value || selectEl.value === CONFIGURE_VALUE) {
+      selectEl.style.backgroundColor = "";
+      selectEl.style.color = "";
+      selectEl.style.borderColor = "";
+      return;
+    }
+    selectEl.style.backgroundColor = color;
+    selectEl.style.color = textOnBg(color);
+    selectEl.style.borderColor = color;
+  }
+
+  function initStatusSelect(selectEl, onConfigure) {
+    if (!selectEl) return;
+    selectEl.classList.add("wh-crm-status-select");
+    syncStatusSelectAppearance(selectEl);
+    selectEl.addEventListener("change", function () {
+      if (selectEl.value === CONFIGURE_VALUE) {
+        var prev = selectEl.getAttribute("data-prev") || "";
+        selectEl.value = prev;
+        syncStatusSelectAppearance(selectEl);
+        onConfigure();
+        return;
+      }
+      selectEl.setAttribute("data-prev", selectEl.value);
+      syncStatusSelectAppearance(selectEl);
+    });
   }
 
   function buildSelectOptions(items, selectedId, labelKey) {
@@ -281,7 +360,7 @@
       '" id="whCrmFilters">' +
       '<h4 class="wh-crm-section-title">Фильтр по полям</h4>' +
       '<div class="wh-crm-filter-grid">' +
-      filterField("status_id", "Статус", "select", meta.statuses) +
+      filterField("status_id", "Статус", "status-select", meta.statuses) +
       filterField("group_id", "Группа", "select", meta.groups) +
       filterField("type_id", "Тип контрагента", "select", meta.types) +
       filterField("price_type_id", "Цена", "select", meta.price_types) +
@@ -307,6 +386,17 @@
 
   function filterField(key, label, type, items) {
     var val = esc(listFilters[key] || "");
+    if (type === "status-select") {
+      return (
+        '<div><label>' +
+        esc(label) +
+        '</label><select class="wh-crm-status-select" data-filter="' +
+        key +
+        '" data-status-select="1">' +
+        buildStatusSelectOptions(items || [], listFilters[key]) +
+        "</select></div>"
+      );
+    }
     if (type === "select") {
       var opts = '<option value="">—</option>';
       (items || []).forEach(function (it) {
@@ -433,6 +523,12 @@
         renderForm(editingId);
       });
     });
+    root.querySelectorAll("[data-status-select]").forEach(function (sel) {
+      syncStatusSelectAppearance(sel);
+      sel.addEventListener("change", function () {
+        syncStatusSelectAppearance(sel);
+      });
+    });
   }
 
   function contactPersonBlock(cp, index) {
@@ -501,10 +597,10 @@
           '<div class="wh-form-row">' +
           formField(
             "Статус",
-            '<select id="whCpStatus" data-prev="' +
+            '<select id="whCpStatus" class="wh-crm-status-select" data-prev="' +
               esc(cp.status_id || "") +
               '">' +
-              buildSelectOptions(meta.statuses, cp.status_id) +
+              buildStatusSelectOptions(meta.statuses, cp.status_id) +
               "</select>"
           ) +
           formField(
@@ -575,7 +671,7 @@
           ) +
           "</div></section>";
 
-        bindConfigureSelect(root.querySelector("#whCpStatus"), modalStatusesEditor);
+        initStatusSelect(root.querySelector("#whCpStatus"), modalStatusesEditor);
         bindConfigureSelect(root.querySelector("#whCpGroup"), function () {
           modalSimpleDict("Группы контрагентов", "/api/warehouse/crm/groups", "groups", function () {
             renderForm(editingId);

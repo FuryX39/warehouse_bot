@@ -477,11 +477,26 @@ body.wh-body {
 
 .wh-crm-status {
   display: inline-block;
-  padding: 0.15rem 0.5rem;
+  padding: 0.2rem 0.55rem;
   border-radius: 4px;
   font-size: 0.78rem;
   font-weight: 600;
-  border: 1px solid;
+}
+
+.wh-crm-status-select {
+  font-weight: 600;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.wh-crm-status-select option {
+  font-weight: 600;
+  padding: 0.35rem 0.5rem;
+}
+
+.wh-crm-status-select option.wh-crm-status-configure,
+.wh-crm-status-select option[value="__configure__"] {
+  background-color: #fff !important;
+  color: var(--wh-text) !important;
 }
 
 .wh-crm-table tbody tr:hover {
