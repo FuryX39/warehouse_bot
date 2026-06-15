@@ -165,14 +165,6 @@ body.wh-body {
   font-weight: 600;
 }
 
-.wh-subnav-code {
-  display: inline-block;
-  min-width: 2.2rem;
-  color: var(--wh-muted);
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-}
-
 .wh-content {
   flex: 1;
   padding: 1.25rem 1.5rem;
