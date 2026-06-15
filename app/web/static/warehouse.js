@@ -487,6 +487,10 @@
       window.WhStorage.renderWarehouses(tab, item);
       return;
     }
+    if (tab.id === "products" && item.id === "catalog" && window.WhProducts) {
+      window.WhProducts.renderCatalog(tab, item);
+      return;
+    }
     showPlaceholder(tab, item);
   }
 

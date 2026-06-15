@@ -550,6 +550,10 @@ body.wh-body {
   overflow: auto;
 }
 
+.wh-modal.wh-modal-wide {
+  max-width: 640px;
+}
+
 .wh-modal-header {
   display: flex;
   align-items: center;
@@ -611,6 +615,76 @@ body.wh-body {
 .wh-crm-dict-tag {
   font-size: 0.75rem;
   color: var(--wh-muted);
+}
+
+.wh-crm-barcode-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.wh-crm-barcode-input {
+  flex: 1;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.wh-crm-component-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  background: #fff;
+}
+
+.wh-crm-component-label {
+  flex: 1;
+  min-width: 160px;
+  font-size: 0.9rem;
+}
+
+.wh-crm-qty-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.wh-crm-component-qty {
+  width: 4.5rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+}
+
+.wh-picker-list {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 0.75rem;
+}
+
+.wh-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 0.35rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.wh-picker-item:hover {
+  background: #f0f4fa;
 }
 
 @media (max-width: 768px) {

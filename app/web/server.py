@@ -69,6 +69,7 @@ from app.yandex_fbs_labels import (
     order_ids_in_list_order,
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
+from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.dealer_analysis_repository import DealerAnalysisRepository
@@ -83,6 +84,7 @@ from app.warehouse_permissions import (
     sanitize_permissions,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
+from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
 from app.web.warehouse_storage_routes import register_warehouse_storage_routes
 
@@ -191,6 +193,9 @@ def create_dashboard_app(
 
     storage_repo = StorageWarehouseRepository(settings.db_url)
     storage_repo.init_schema()
+
+    catalog_repo = CatalogRepository(settings.db_url)
+    catalog_repo.init_schema()
 
     def _env_admin_credentials() -> tuple[str, str]:
         return resolve_warehouse_admin_credentials(settings)
@@ -425,6 +430,7 @@ def create_dashboard_app(
 
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
+    register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user)
 
     @app.get("/fbs")
     async def fbs_page(request: Request):
