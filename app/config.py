@@ -81,6 +81,10 @@ class Settings:
     web_dashboard_secret: str = ""
     web_host: str = "127.0.0.1"
     web_port: int = 8765
+    # Новая панель /warehouse: первый администратор создаётся при пустой таблице пользователей.
+    warehouse_admin_login: str = ""
+    warehouse_admin_password: str = ""
+    warehouse_admin_display_name: str = "Администратор"
     # JSON service account для записи листов в Google Таблицу (FBS список и т.п.).
     google_service_account_file: str = ""
     # Поворот PDF-этикеток Ozon (/ozon_labels): 90, -90, 0 = без поворота.
@@ -135,6 +139,11 @@ def load_settings() -> Settings:
         web_dashboard_secret=_web_dashboard_secret_from_env(),
         web_host=(os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"),
         web_port=_web_port(),
+        warehouse_admin_login=os.getenv("WAREHOUSE_ADMIN_LOGIN", "").strip(),
+        warehouse_admin_password=os.getenv("WAREHOUSE_ADMIN_PASSWORD", "").strip(),
+        warehouse_admin_display_name=(
+            os.getenv("WAREHOUSE_ADMIN_DISPLAY_NAME", "Администратор").strip() or "Администратор"
+        ),
         google_service_account_file=_google_service_account_file(),
         ozon_label_rotate_degrees=_ozon_label_rotate_degrees(),
         yandex_label_format=_yandex_label_format(),

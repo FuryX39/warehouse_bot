@@ -14,6 +14,9 @@ HTTP API и раздача веб-страницы панели.
   GET  /fbs           — FBS: списки и этикетки по маркетплейсам
   GET  /dealer-analysis — сравнение Excel заказов дилера (2 периода → отчёт)
   GET  /warehouse     — новая система складского учёта (навигация, разделы в разработке)
+  GET  /warehouse/login — вход в новую панель (отдельная авторизация)
+  POST /api/warehouse/login — логин сотрудника новой панели
+  GET  /api/warehouse/session — текущий пользователь и доступные разделы
   GET  /              — панель (редирект на /login без сессии)
   GET  /static/*      — CSS/JS (без данных; основная защита — API и /)
 """
@@ -72,10 +75,17 @@ from app.sheet_import import (
     import_stocks_from_google_sheet,
     import_tops_from_google_sheet,
 )
+from app.warehouse_permissions import (
+    filter_nav_for_user,
+    permissions_schema,
+    sanitize_permissions,
+)
+from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
 _SESSION_KEY_PREFIX = "warehouse_web_session_signing_v1:"
+_WH_SESSION_USER_KEY = "wh_user_id"
 _FBS_SHIP_SESSION_KEY = "fbs_ship_pending"
 _FBS_SHIP_CODE_TTL_SECONDS = 300
 
@@ -169,9 +179,66 @@ def create_dashboard_app(
         https_only=False,
     )
 
+    warehouse_users_repo = WarehouseUsersRepository(settings.db_url)
+    warehouse_users_repo.init_schema()
+
+    def _try_bootstrap_warehouse_admin() -> None:
+        if warehouse_users_repo.count_users() > 0:
+            return
+        login = (settings.warehouse_admin_login or "").strip()
+        password = (settings.warehouse_admin_password or "").strip()
+        if not login or not password:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "В БД нет пользователей новой панели. Задайте WAREHOUSE_ADMIN_LOGIN и "
+                    "WAREHOUSE_ADMIN_PASSWORD в .env и перезапустите веб."
+                ),
+            )
+        warehouse_users_repo.ensure_bootstrap_admin(
+            login,
+            password,
+            display_name=settings.warehouse_admin_display_name,
+        )
+
     async def require_login(request: Request) -> None:
         if not request.session.get("authenticated"):
             raise HTTPException(status_code=401, detail="Требуется вход")
+
+    def _warehouse_user_from_session(request: Request) -> WarehouseUserRow | None:
+        raw_id = request.session.get(_WH_SESSION_USER_KEY)
+        if raw_id is None:
+            return None
+        try:
+            user_id = int(raw_id)
+        except (TypeError, ValueError):
+            return None
+        user = warehouse_users_repo.get_by_id(user_id)
+        if user is None or not user.is_active:
+            return None
+        return user
+
+    async def require_warehouse_user(request: Request) -> WarehouseUserRow:
+        user = _warehouse_user_from_session(request)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Требуется вход в новую панель")
+        return user
+
+    async def require_warehouse_admin(
+        user: Annotated[WarehouseUserRow, Depends(require_warehouse_user)],
+    ) -> WarehouseUserRow:
+        if not user.is_admin:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        return user
+
+    def _warehouse_session_payload(user: WarehouseUserRow) -> dict:
+        payload: dict = {
+            "user": warehouse_users_repo.user_to_public_dict(user),
+            "nav": filter_nav_for_user(is_admin=user.is_admin, permissions=user.permissions),
+        }
+        if user.is_admin:
+            payload["permissions_schema"] = permissions_schema()
+        return payload
 
     @app.get("/login")
     async def login_page(request: Request):
@@ -218,12 +285,104 @@ def create_dashboard_app(
             },
         )
 
+    @app.get("/warehouse/login")
+    async def warehouse_login_page(request: Request):
+        _try_bootstrap_warehouse_admin()
+        if _warehouse_user_from_session(request) is not None:
+            return RedirectResponse(url="/warehouse", status_code=302)
+        path = _WEB_ROOT / "templates" / "warehouse_login.html"
+        if not path.is_file():
+            raise HTTPException(status_code=500, detail="Шаблон входа новой панели не найден")
+        return FileResponse(
+            path,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+
     @app.get("/warehouse")
     @app.get("/warehouse/")
     async def warehouse_page(request: Request):
-        if not request.session.get("authenticated"):
-            return RedirectResponse(url="/login", status_code=302)
+        _try_bootstrap_warehouse_admin()
+        if _warehouse_user_from_session(request) is None:
+            return RedirectResponse(url="/warehouse/login", status_code=302)
         return _warehouse_html_response()
+
+    @app.post("/api/warehouse/login")
+    async def api_warehouse_login(
+        login: Annotated[str, Form()],
+        password: Annotated[str, Form()],
+        request: Request,
+    ) -> dict[str, bool]:
+        _try_bootstrap_warehouse_admin()
+        login_n = login.strip()
+        password_n = password.strip()
+        if not login_n or not password_n:
+            raise HTTPException(status_code=400, detail="Введите логин и пароль")
+        user = warehouse_users_repo.authenticate(login_n, password_n)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+        request.session[_WH_SESSION_USER_KEY] = user.id
+        return {"ok": True}
+
+    @app.post("/api/warehouse/logout")
+    async def api_warehouse_logout(request: Request) -> dict[str, bool]:
+        request.session.pop(_WH_SESSION_USER_KEY, None)
+        return {"ok": True}
+
+    @app.get("/api/warehouse/session")
+    async def api_warehouse_session(
+        user: Annotated[WarehouseUserRow, Depends(require_warehouse_user)],
+    ) -> dict:
+        return _warehouse_session_payload(user)
+
+    @app.get("/api/warehouse/permissions-schema")
+    async def api_warehouse_permissions_schema(
+        _: Annotated[WarehouseUserRow, Depends(require_warehouse_admin)],
+    ) -> dict:
+        return {"schema": permissions_schema()}
+
+    @app.get("/api/warehouse/employees")
+    async def api_warehouse_employees_list(
+        _: Annotated[WarehouseUserRow, Depends(require_warehouse_admin)],
+    ) -> dict:
+        users = warehouse_users_repo.list_users()
+        return {"employees": [warehouse_users_repo.user_to_public_dict(u) for u in users]}
+
+    @app.put("/api/warehouse/employees/{user_id}")
+    async def api_warehouse_employee_update(
+        user_id: int,
+        body: dict,
+        _: Annotated[WarehouseUserRow, Depends(require_warehouse_admin)],
+    ) -> dict:
+        login = body.get("login")
+        display_name = body.get("display_name")
+        password = body.get("password")
+        is_admin = body.get("is_admin")
+        is_active = body.get("is_active")
+        permissions_raw = body.get("permissions")
+        permissions = None
+        if permissions_raw is not None:
+            if not isinstance(permissions_raw, dict):
+                raise HTTPException(status_code=400, detail="permissions должен быть объектом")
+            permissions = sanitize_permissions(permissions_raw)
+        try:
+            updated = warehouse_users_repo.update_user(
+                user_id,
+                login=str(login).strip() if login is not None else None,
+                password=str(password) if password is not None else None,
+                display_name=str(display_name) if display_name is not None else None,
+                is_admin=bool(is_admin) if is_admin is not None else None,
+                is_active=bool(is_active) if is_active is not None else None,
+                permissions=permissions,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        return {"employee": warehouse_users_repo.user_to_public_dict(updated)}
 
     @app.get("/fbs")
     async def fbs_page(request: Request):

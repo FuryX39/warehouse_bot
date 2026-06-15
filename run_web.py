@@ -67,7 +67,7 @@ def main() -> None:
         sys.exit(1)
     _exit_if_port_busy(settings.web_host, settings.web_port)
     logger.info(
-        "Веб-панель: http://%s:%s/ (анализ дилера: /dealer-analysis)",
+        "Веб-панель: http://%s:%s/ (новая панель: /warehouse, анализ дилера: /dealer-analysis)",
         settings.web_host,
         settings.web_port,
     )

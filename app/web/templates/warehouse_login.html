@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход — складской учёт</title>
+  <link rel="stylesheet" href="/static/warehouse.css" />
+  <style>
+    .wh-login-page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      background: var(--wh-bg);
+    }
+    .wh-login-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--wh-surface);
+      border: 1px solid var(--wh-border);
+      border-radius: 10px;
+      padding: 1.75rem;
+      box-shadow: var(--wh-shadow);
+    }
+    .wh-login-card h1 { margin: 0 0 0.5rem; font-size: 1.25rem; }
+    .wh-login-card p { margin: 0 0 1.25rem; color: var(--wh-muted); font-size: 0.9rem; line-height: 1.45; }
+    .wh-login-card label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
+    .wh-login-card input {
+      width: 100%;
+      padding: 0.55rem 0.75rem;
+      border: 1px solid var(--wh-border);
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      font-size: 1rem;
+    }
+    .wh-login-card .err { color: #c62828; font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+    .wh-login-card button { width: 100%; padding: 0.6rem; font-size: 1rem; }
+    .wh-login-card .wh-btn-primary {
+      background: var(--wh-tab-active);
+      border-color: var(--wh-tab-active);
+      color: #fff;
+    }
+    .wh-login-card .wh-btn-primary:hover { filter: brightness(1.05); }
+  </style>
+</head>
+<body class="wh-body">
+  <div class="wh-login-page">
+    <div class="wh-login-card">
+      <h1>Складской учёт</h1>
+      <p>Вход в новую панель. Учётные записи сотрудников управляются администратором в разделе «Сотрудники».</p>
+      <form id="whLoginForm">
+        <label for="whLogin">Логин</label>
+        <input id="whLogin" name="login" type="text" autocomplete="username" required />
+        <label for="whPassword">Пароль</label>
+        <input id="whPassword" name="password" type="password" autocomplete="current-password" required />
+        <button type="submit" class="wh-btn wh-btn-primary">Войти</button>
+        <p id="whLoginErr" class="err"></p>
+      </form>
+    </div>
+  </div>
+  <script>
+    function detailToText(detail) {
+      if (detail == null || detail === "") return "";
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) {
+        return detail
+          .map(function (item) {
+            if (typeof item === "string") return item;
+            if (item && typeof item.msg === "string") return item.msg;
+            return "";
+          })
+          .filter(Boolean)
+          .join("; ");
+      }
+      if (typeof detail === "object" && typeof detail.msg === "string") return detail.msg;
+      return String(detail);
+    }
+
+    document.getElementById("whLoginForm").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var err = document.getElementById("whLoginErr");
+      err.textContent = "";
+      var login = document.getElementById("whLogin").value.trim();
+      var password = document.getElementById("whPassword").value;
+      fetch("/api/warehouse/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        credentials: "include",
+        body: new URLSearchParams({ login: login, password: password }).toString(),
+      })
+        .then(function (r) {
+          return r.text().then(function (text) {
+            var json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (parseErr) {
+              json = null;
+            }
+            if (!r.ok) {
+              err.textContent =
+                (json && json.detail != null ? detailToText(json.detail) : "") ||
+                text ||
+                "HTTP " + r.status;
+              return false;
+            }
+            return json && json.ok === true;
+          });
+        })
+        .then(function (ok) {
+          if (ok) window.location.href = "/warehouse";
+        })
+        .catch(function () {
+          err.textContent = "Сеть недоступна или запрос прерван.";
+        });
+    });
+  </script>
+</body>
+</html>
