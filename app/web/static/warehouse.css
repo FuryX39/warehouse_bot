@@ -665,6 +665,38 @@ body.wh-body {
   border-radius: 6px;
 }
 
+.wh-crm-dict-cost {
+  width: 110px;
+  flex: 0 0 110px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+}
+
+.wh-task-custom-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.wh-task-custom-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wh-task-custom-field input {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+}
+
+.wh-task-field-hint {
+  display: block;
+  font-size: 0.8rem;
+  margin-top: 0.1rem;
+}
+
 .wh-task-assignees {
   display: flex;
   flex-wrap: wrap;

@@ -149,7 +149,9 @@
     return backdrop;
   }
 
-  function modalDictEditor(title, apiPath, key, keepDefault, onDone, withComment) {
+  function modalDictEditor(title, apiPath, key, keepDefault, onDone, extras) {
+    if (extras === true) extras = { comment: true };
+    extras = extras || {};
     var rows = (meta[key] || []).map(function (item) {
       return (
         '<div class="wh-modal-row wh-crm-dict-row" data-id="' +
@@ -157,10 +159,15 @@
         '"><input type="text" class="wh-crm-dict-name" value="' +
         esc(item.name) +
         '" placeholder="Название" />' +
-        (withComment
+        (extras.comment
           ? '<input type="text" class="wh-crm-dict-comment" value="' +
             esc(item.comment || "") +
             '" placeholder="Комментарий" />'
+          : "") +
+        (extras.cost
+          ? '<input type="number" step="any" class="wh-crm-dict-cost" value="' +
+            esc(item.cost != null ? item.cost : "") +
+            '" placeholder="Стоимость" />'
           : "") +
         (keepDefault && item.is_default
           ? '<span class="wh-crm-dict-tag">по умолчанию</span>'
@@ -176,18 +183,34 @@
         '<button type="button" class="wh-btn wh-btn-sm" id="' + addId + '">+ Добавить</button>',
       function (backdrop, close) {
         var items = [];
-        backdrop.querySelectorAll(".wh-crm-dict-row").forEach(function (row) {
+        var rows = backdrop.querySelectorAll(".wh-crm-dict-row");
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
           var name = row.querySelector(".wh-crm-dict-name").value.trim();
-          if (!name) return;
+          if (!name) continue;
           var item = { name: name };
           var id = row.getAttribute("data-id");
           if (id) item.id = parseInt(id, 10);
-          if (withComment) {
+          if (extras.comment) {
             var commentEl = row.querySelector(".wh-crm-dict-comment");
             item.comment = commentEl ? commentEl.value.trim() : "";
           }
+          if (extras.cost) {
+            var costEl = row.querySelector(".wh-crm-dict-cost");
+            var costRaw = costEl ? costEl.value.trim() : "";
+            if (costRaw) {
+              var costNum = parseFloat(costRaw.replace(",", "."));
+              if (Number.isNaN(costNum)) {
+                alert("Стоимость должна быть числом");
+                return;
+              }
+              item.cost = costNum;
+            } else {
+              item.cost = null;
+            }
+          }
           items.push(item);
-        });
+        }
         fetchJson(apiPath, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -210,7 +233,10 @@
       row.className = "wh-modal-row wh-crm-dict-row";
       row.innerHTML =
         '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
-        (withComment ? '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' : "") +
+        (extras.comment ? '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' : "") +
+        (extras.cost
+          ? '<input type="number" step="any" class="wh-crm-dict-cost" placeholder="Стоимость" />'
+          : "") +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
       backdrop.querySelector("#" + rowsId).appendChild(row);
     });
@@ -628,7 +654,7 @@
         bindConfigureSelect(root.querySelector("#whPrGroup"), function () {
           modalDictEditor("Группы товаров", "/api/warehouse/catalog/groups", "groups", false, function () {
             renderForm(editingId, formIsKit);
-          }, true);
+          }, { comment: true, cost: true });
         });
         bindConfigureSelect(root.querySelector("#whPrUnit"), function () {
           modalDictEditor("Единицы измерения", "/api/warehouse/catalog/units", "units", true, function () {

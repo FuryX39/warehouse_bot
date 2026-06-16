@@ -41,7 +41,11 @@ def register_warehouse_catalog_routes(
         items = body.get("items")
         if not isinstance(items, list):
             raise HTTPException(status_code=400, detail="items должен быть массивом")
-        return {"groups": catalog_repo.save_groups(items)}
+        try:
+            groups = catalog_repo.save_groups(items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"groups": groups}
 
     @app.put("/api/warehouse/catalog/units")
     async def api_catalog_save_units(

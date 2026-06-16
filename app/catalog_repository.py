@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, delete, func, or_, select
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, UniqueConstraint, delete, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.crm_repository import CrmPriceType
@@ -49,6 +49,7 @@ class CatalogProductGroup(_Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -205,7 +206,22 @@ class CatalogRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._migrate_product_group_comment()
+        self._migrate_product_group_cost()
         self._seed_defaults()
+
+    def _migrate_product_group_cost(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_product_groups" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_product_groups")}
+        if "cost" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text("ALTER TABLE catalog_product_groups ADD COLUMN cost REAL")
+            )
+            session.commit()
 
     def _migrate_product_group_comment(self) -> None:
         from sqlalchemy import inspect, text
@@ -257,7 +273,13 @@ class CatalogRepository:
             ).all()
         return {
             "groups": [
-                {"id": g.id, "name": g.name, "comment": g.comment or "", "sort_order": g.sort_order}
+                {
+                    "id": g.id,
+                    "name": g.name,
+                    "comment": g.comment or "",
+                    "cost": g.cost,
+                    "sort_order": g.sort_order,
+                }
                 for g in groups
             ],
             "units": [
@@ -282,6 +304,17 @@ class CatalogRepository:
 
     def save_groups(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self._save_dict(CatalogProductGroup, items, "groups")
+
+    @staticmethod
+    def _parse_group_cost(raw: Any) -> float | None:
+        if raw is None:
+            return None
+        if isinstance(raw, str) and not raw.strip():
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Стоимость должна быть числом") from exc
 
     def save_units(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self._save_dict(CatalogUnit, items, "units", keep_default=True)
@@ -315,6 +348,7 @@ class CatalogRepository:
                     create_kwargs: dict[str, Any] = {"name": name, "sort_order": i}
                     if key == "groups":
                         create_kwargs["comment"] = str(item.get("comment") or "").strip()[:512]
+                        create_kwargs["cost"] = self._parse_group_cost(item.get("cost"))
                     row = model(**create_kwargs)
                     session.add(row)
                 else:
@@ -322,6 +356,7 @@ class CatalogRepository:
                     row.sort_order = i
                     if key == "groups":
                         row.comment = str(item.get("comment") or "").strip()[:512]
+                        row.cost = self._parse_group_cost(item.get("cost"))
                 session.flush()
                 keep_ids.add(int(row.id))
             for rid, row in existing.items():
@@ -337,6 +372,7 @@ class CatalogRepository:
                         "id": r.id,
                         "name": r.name,
                         "comment": r.comment or "",
+                        "cost": r.cost,
                         "sort_order": r.sort_order,
                     }
                     for r in rows
@@ -474,6 +510,35 @@ class CatalogRepository:
                 }
                 for r in rows
             ]
+
+    def build_product_import_index(
+        self,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        with Session(self.engine) as session:
+            products = session.scalars(select(CatalogProduct)).all()
+            by_sku: dict[str, dict[str, Any]] = {}
+            by_code: dict[str, dict[str, Any]] = {}
+            picker_by_id: dict[int, dict[str, Any]] = {}
+            for row in products:
+                item = {
+                    "id": int(row.id),
+                    "name": row.name,
+                    "sku": row.sku,
+                    "code": row.code,
+                    "is_kit": bool(row.is_kit),
+                    "image_url": row.image_url or "",
+                }
+                picker_by_id[int(row.id)] = item
+                by_sku[str(row.sku or "").strip().casefold()] = item
+                by_code[str(row.code or "").strip().casefold()] = item
+            by_barcode: dict[str, dict[str, Any]] = {}
+            bc_rows = session.scalars(select(CatalogProductBarcode)).all()
+            for bc in bc_rows:
+                product = picker_by_id.get(int(bc.product_id))
+                if product is None:
+                    continue
+                by_barcode[str(bc.barcode or "").strip().casefold()] = product
+        return by_sku, by_code, by_barcode
 
     def get_prices_for_products(
         self, product_ids: list[int], price_type_id: int

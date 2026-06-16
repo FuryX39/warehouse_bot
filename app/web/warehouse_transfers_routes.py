@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.storage_warehouse_repository import StorageWarehouseRepository
+from app.warehouse_transfer_items_import import (
+    build_transfer_items_template,
+    import_transfer_items_from_xlsx,
+)
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_users_repository import WarehouseUserRow
+
+_IMPORT_MAX_BYTES = 10 * 1024 * 1024
 
 
 def register_warehouse_transfers_routes(
@@ -79,6 +88,61 @@ def register_warehouse_transfers_routes(
             raise HTTPException(status_code=400, detail="Некорректные product_ids") from exc
         prices = catalog_repo.get_prices_for_products(product_ids, price_type_id)
         return {"prices": {str(k): v for k, v in prices.items()}}
+
+    @app.get("/api/warehouse/transfers/items/import/template")
+    async def api_transfers_items_import_template(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        try:
+            data = await asyncio.to_thread(build_transfer_items_template)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="transfer_items_template.xlsx"',
+            },
+        )
+
+    @app.post("/api/warehouse/transfers/items/import", response_model=None)
+    async def api_transfers_items_import(
+        file: UploadFile = File(...),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ):
+        data = await file.read()
+        if len(data) > _IMPORT_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 10 МБ)")
+        if not data:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        filename = (file.filename or "").lower()
+        if not filename.endswith(".xlsx"):
+            raise HTTPException(status_code=400, detail="Нужен файл Excel в формате .xlsx")
+        try:
+            result = await asyncio.to_thread(import_transfer_items_from_xlsx, catalog_repo, data)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "ok": result.failed == 0,
+            "added": result.added,
+            "failed": result.failed,
+            "items": result.items,
+            "total_rows": result.total_rows,
+            "error_report_b64": (
+                base64.b64encode(result.error_report).decode("ascii")
+                if result.error_report
+                else None
+            ),
+        }
 
     @app.get("/api/warehouse/transfers")
     async def api_transfers_list(

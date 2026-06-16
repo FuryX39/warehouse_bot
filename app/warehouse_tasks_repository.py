@@ -75,6 +75,35 @@ class WarehouseTaskDocument(_Base):
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class WarehouseTaskCustomField(_Base):
+    __tablename__ = "warehouse_task_custom_fields"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class WarehouseTaskCustomFieldValue(_Base):
+    __tablename__ = "warehouse_task_custom_field_values"
+
+    task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("warehouse_tasks.id", ondelete="CASCADE"), primary_key=True
+    )
+    field_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("warehouse_task_custom_fields.id", ondelete="CASCADE"), primary_key=True
+    )
+    value: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+
+
+@dataclass
+class TaskCustomFieldValueRow:
+    field_id: int
+    name: str
+    comment: str
+    value: str
+
+
 @dataclass
 class TaskAssigneeRow:
     user_id: int
@@ -103,6 +132,7 @@ class TaskRow:
     updated_at_ts: int
     assignees: list[TaskAssigneeRow] = field(default_factory=list)
     documents: list[TaskDocumentRow] = field(default_factory=list)
+    custom_fields: list[TaskCustomFieldValueRow] = field(default_factory=list)
 
 
 def _like(pattern: str) -> str:
@@ -169,7 +199,10 @@ class WarehouseTasksRepository:
         _Base.metadata.create_all(self.engine)
 
     def get_meta(self) -> dict[str, Any]:
-        return {"task_types": self.list_task_types()}
+        return {
+            "task_types": self.list_task_types(),
+            "custom_fields": self.list_custom_fields(),
+        }
 
     def list_task_types(self) -> list[dict[str, Any]]:
         with Session(self.engine) as session:
@@ -306,6 +339,129 @@ class WarehouseTasksRepository:
             "sort_order": int(row.sort_order),
         }
 
+    def list_custom_fields(self) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(WarehouseTaskCustomField).order_by(
+                    WarehouseTaskCustomField.sort_order, WarehouseTaskCustomField.name
+                )
+            ).all()
+            return [self._custom_field_dict(r) for r in rows]
+
+    def save_custom_fields(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {
+                r.id: r for r in session.scalars(select(WarehouseTaskCustomField)).all()
+            }
+            keep_ids: set[int] = set()
+            for i, item in enumerate(items):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                row = None
+                raw_id = item.get("id")
+                if raw_id is not None:
+                    try:
+                        row = existing.get(int(raw_id))
+                    except (TypeError, ValueError):
+                        row = None
+                if row is None:
+                    row = WarehouseTaskCustomField(
+                        name=name[:128],
+                        comment=str(item.get("comment") or "").strip()[:512],
+                        sort_order=i,
+                    )
+                    session.add(row)
+                else:
+                    row.name = name[:128]
+                    row.comment = str(item.get("comment") or "").strip()[:512]
+                    row.sort_order = i
+                session.flush()
+                keep_ids.add(int(row.id))
+            for rid, row in existing.items():
+                if rid not in keep_ids:
+                    session.delete(row)
+            session.commit()
+        return self.list_custom_fields()
+
+    def get_custom_field(self, field_id: int) -> dict[str, Any] | None:
+        with Session(self.engine) as session:
+            row = session.get(WarehouseTaskCustomField, int(field_id))
+            if row is None:
+                return None
+            return self._custom_field_dict(row)
+
+    def create_custom_field(self, data: dict[str, Any]) -> dict[str, Any]:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise ValueError("Название дополнительного поля обязательно")
+        comment = str(data.get("comment") or "").strip()[:512]
+        with Session(self.engine) as session:
+            if session.scalar(
+                select(func.count())
+                .select_from(WarehouseTaskCustomField)
+                .where(WarehouseTaskCustomField.name == name)
+            ):
+                raise ValueError("Поле с таким названием уже существует")
+            max_order = session.scalar(select(func.max(WarehouseTaskCustomField.sort_order))) or 0
+            row = WarehouseTaskCustomField(
+                name=name[:128],
+                comment=comment,
+                sort_order=int(max_order) + 1,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._custom_field_dict(row)
+
+    def update_custom_field(self, field_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        with Session(self.engine) as session:
+            row = session.get(WarehouseTaskCustomField, int(field_id))
+            if row is None:
+                return None
+            if "name" in data:
+                name = str(data.get("name") or "").strip()
+                if not name:
+                    raise ValueError("Название дополнительного поля обязательно")
+                exists = session.scalar(
+                    select(func.count())
+                    .select_from(WarehouseTaskCustomField)
+                    .where(
+                        WarehouseTaskCustomField.name == name,
+                        WarehouseTaskCustomField.id != int(field_id),
+                    )
+                )
+                if exists:
+                    raise ValueError("Поле с таким названием уже существует")
+                row.name = name[:128]
+            if "comment" in data:
+                row.comment = str(data.get("comment") or "").strip()[:512]
+            if "sort_order" in data:
+                try:
+                    row.sort_order = int(data.get("sort_order"))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Некорректный sort_order") from exc
+            session.commit()
+            session.refresh(row)
+            return self._custom_field_dict(row)
+
+    def delete_custom_field(self, field_id: int) -> bool:
+        with Session(self.engine) as session:
+            row = session.get(WarehouseTaskCustomField, int(field_id))
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+        return True
+
+    def _custom_field_dict(self, row: WarehouseTaskCustomField) -> dict[str, Any]:
+        return {
+            "id": int(row.id),
+            "name": str(row.name),
+            "comment": str(row.comment or ""),
+            "sort_order": int(row.sort_order),
+        }
+
     def list_tasks(
         self, filters: dict[str, str], *, limit: int = 500, offset: int = 0
     ) -> list[TaskRow]:
@@ -360,6 +516,9 @@ class WarehouseTasksRepository:
             "documents": [
                 {"entity_type": d.entity_type, "entity_id": d.entity_id} for d in current.documents
             ],
+            "custom_fields": [
+                {"field_id": f.field_id, "value": f.value} for f in current.custom_fields
+            ],
         }
         for key in (
             "task_type_id",
@@ -368,6 +527,7 @@ class WarehouseTasksRepository:
             "end_date",
             "assignee_ids",
             "documents",
+            "custom_fields",
         ):
             if key in data:
                 merged[key] = data[key]
@@ -550,6 +710,7 @@ class WarehouseTasksRepository:
                 "end_date": "YYYY-MM-DD",
                 "assignee_ids": "[int]",
                 "documents": '[{"entity_type":"transfer|receipt|writeoff","entity_id":int}]',
+                "custom_fields": '[{"field_id":int,"value":"string"}]',
                 "created_by_user_id": "int, только при вызове по API-токену без сессии",
             },
             "list_filters": [
@@ -629,6 +790,19 @@ class WarehouseTasksRepository:
                 for d in row.documents
             ],
             "documents_short": ", ".join(d.label for d in row.documents) or "—",
+            "custom_fields": [
+                {
+                    "field_id": f.field_id,
+                    "name": f.name,
+                    "comment": f.comment,
+                    "value": f.value,
+                }
+                for f in row.custom_fields
+            ],
+            "custom_fields_short": ", ".join(
+                f"{f.name}: {f.value}" for f in row.custom_fields if str(f.value or "").strip()
+            )
+            or "—",
         }
 
     def _document_search_item(
@@ -661,6 +835,7 @@ class WarehouseTasksRepository:
 
         assignee_ids = self._normalize_assignee_ids(data.get("assignee_ids"))
         documents = self._normalize_documents(data.get("documents"))
+        custom_fields = self._normalize_custom_fields(data.get("custom_fields"))
         now = int(time.time())
 
         with Session(self.engine) as session:
@@ -670,6 +845,9 @@ class WarehouseTasksRepository:
                 if session.get(WarehouseUser, uid) is None:
                     raise ValueError(f"Сотрудник id={uid} не найден")
             self._validate_documents(documents)
+            for field_id in custom_fields:
+                if session.get(WarehouseTaskCustomField, field_id) is None:
+                    raise ValueError(f"Дополнительное поле id={field_id} не найдено")
 
             if task_id is None:
                 task = WarehouseTask(
@@ -699,6 +877,11 @@ class WarehouseTasksRepository:
                         WarehouseTaskDocument.task_id == int(task_id)
                     )
                 )
+                session.execute(
+                    delete(WarehouseTaskCustomFieldValue).where(
+                        WarehouseTaskCustomFieldValue.task_id == int(task_id)
+                    )
+                )
 
             session.flush()
             for uid in assignee_ids:
@@ -709,6 +892,16 @@ class WarehouseTasksRepository:
                         task_id=int(task.id),
                         entity_type=doc["entity_type"],
                         entity_id=int(doc["entity_id"]),
+                    )
+                )
+            for field_id, value in custom_fields.items():
+                if not value:
+                    continue
+                session.add(
+                    WarehouseTaskCustomFieldValue(
+                        task_id=int(task.id),
+                        field_id=int(field_id),
+                        value=value,
                     )
                 )
             task.updated_at_ts = now
@@ -752,6 +945,20 @@ class WarehouseTasksRepository:
                 continue
             seen.add(key)
             out.append({"entity_type": entity_type, "entity_id": entity_id})
+        return out
+
+    def _normalize_custom_fields(self, raw: Any) -> dict[int, str]:
+        if not isinstance(raw, list):
+            return {}
+        out: dict[int, str] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                field_id = int(item.get("field_id"))
+            except (TypeError, ValueError):
+                continue
+            out[field_id] = str(item.get("value") or "").strip()[:2048]
         return out
 
     def _validate_documents(self, documents: list[dict[str, Any]]) -> None:
@@ -825,6 +1032,28 @@ class WarehouseTasksRepository:
                 )
             )
 
+        value_rows = session.scalars(
+            select(WarehouseTaskCustomFieldValue).where(
+                WarehouseTaskCustomFieldValue.task_id == int(row.id)
+            )
+        ).all()
+        values_by_field = {int(v.field_id): str(v.value or "") for v in value_rows}
+        field_defs = session.scalars(
+            select(WarehouseTaskCustomField).order_by(
+                WarehouseTaskCustomField.sort_order, WarehouseTaskCustomField.name
+            )
+        ).all()
+        custom_fields: list[TaskCustomFieldValueRow] = []
+        for field_def in field_defs:
+            custom_fields.append(
+                TaskCustomFieldValueRow(
+                    field_id=int(field_def.id),
+                    name=str(field_def.name),
+                    comment=str(field_def.comment or ""),
+                    value=values_by_field.get(int(field_def.id), ""),
+                )
+            )
+
         return TaskRow(
             id=int(row.id),
             task_type_id=int(row.task_type_id),
@@ -838,6 +1067,7 @@ class WarehouseTasksRepository:
             updated_at_ts=int(row.updated_at_ts),
             assignees=assignees,
             documents=documents,
+            custom_fields=custom_fields,
         )
 
     def _list_filter_conditions(self, session: Session, filters: dict[str, str]) -> list:

@@ -317,6 +317,186 @@
     refreshItemsDom(root);
   }
 
+  function mergeImportedItems(root, items) {
+    var merged = 0;
+    (items || []).forEach(function (line) {
+      var exists = -1;
+      for (var i = 0; i < formItems.length; i++) {
+        if (formItems[i].product_id === line.product_id) {
+          exists = i;
+          break;
+        }
+      }
+      if (exists >= 0) {
+        formItems[exists].quantity =
+          (parseInt(formItems[exists].quantity, 10) || 0) + (parseInt(line.quantity, 10) || 1);
+        if (line.unit_price) {
+          formItems[exists].unit_price = line.unit_price;
+        }
+        if (line.line_sum && !line.unit_price) {
+          formItems[exists].line_sum = line.line_sum;
+        }
+        var mergedPrice = parseNum(formItems[exists].unit_price);
+        if (mergedPrice !== null) {
+          formItems[exists].line_sum = formatMoney(
+            mergedPrice * (parseInt(formItems[exists].quantity, 10) || 1)
+          );
+        }
+      } else {
+        formItems.push({
+          product_id: line.product_id,
+          name: line.name,
+          sku: line.sku,
+          code: line.code || "",
+          image_url: line.image_url,
+          is_kit: line.is_kit,
+          quantity: line.quantity || 1,
+          unit_price: line.unit_price || "",
+          line_sum: line.line_sum || "",
+        });
+      }
+      merged++;
+    });
+    if (merged) refreshItemsDom(root);
+    return merged;
+  }
+
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadBase64Xlsx(b64, filename) {
+    var binary = atob(b64);
+    var len = binary.length;
+    var bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    downloadBlob(
+      new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      filename
+    );
+  }
+
+  function openItemsImportModal(root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal wh-modal-wide" role="dialog">' +
+      '<div class="wh-modal-header"><h3>Загрузка товаров из Excel</h3>' +
+      '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      "<p>Загрузите Excel по шаблону. Укажите артикул, код или штрихкод и количество.</p>" +
+      '<div class="wh-import-actions">' +
+      '<button type="button" class="wh-btn" id="whTrImportTemplate">Скачать шаблон Excel</button>' +
+      "</div>" +
+      '<label class="wh-import-file-label">Файл для загрузки<input type="file" id="whTrImportFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
+      '<p class="wh-msg" id="whTrImportMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whTrImportSubmit">Загрузить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button>' +
+      "</div></div>";
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) close();
+    });
+
+    backdrop.querySelector("#whTrImportTemplate").addEventListener("click", function () {
+      fetch("/api/warehouse/transfers/items/import/template", { credentials: "include" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("Не удалось скачать шаблон");
+          return r.blob();
+        })
+        .then(function (blob) {
+          downloadBlob(blob, "transfer_items_template.xlsx");
+        })
+        .catch(function (err) {
+          var msg = backdrop.querySelector("#whTrImportMsg");
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка скачивания шаблона";
+        });
+    });
+
+    backdrop.querySelector("#whTrImportSubmit").addEventListener("click", function () {
+      var fileInput = backdrop.querySelector("#whTrImportFile");
+      var msg = backdrop.querySelector("#whTrImportMsg");
+      var submitBtn = backdrop.querySelector("#whTrImportSubmit");
+      msg.textContent = "";
+      msg.className = "wh-msg";
+      if (!fileInput.files || !fileInput.files.length) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите файл Excel (.xlsx)";
+        return;
+      }
+      var formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      submitBtn.disabled = true;
+      msg.textContent = "Обработка файла…";
+      fetch("/api/warehouse/transfers/items/import", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      })
+        .then(function (r) {
+          return r.text().then(function (text) {
+            var json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (e) {
+              json = null;
+            }
+            if (!r.ok) {
+              var detail = json && json.detail != null ? json.detail : text || "HTTP " + r.status;
+              if (typeof detail === "object" && detail.msg) detail = detail.msg;
+              throw new Error(typeof detail === "string" ? detail : "Ошибка загрузки");
+            }
+            return json || {};
+          });
+        })
+        .then(function (data) {
+          mergeImportedItems(root, data.items || []);
+          if (data.error_report_b64) {
+            downloadBase64Xlsx(data.error_report_b64, "transfer_items_import_errors.xlsx");
+          }
+          if (data.failed > 0) {
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent =
+              "Добавлено товаров: " +
+              (data.items || []).length +
+              ". Ошибок в строках: " +
+              data.failed +
+              ". Скачан файл с описанием проблем.";
+            return;
+          }
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent = "Добавлено товаров: " + (data.items || []).length + ".";
+          setTimeout(close, 1200);
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка загрузки";
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
+  }
+
   function runProductSearch(root) {
     var name = root.querySelector("#whTrSearchName").value.trim();
     var sku = root.querySelector("#whTrSearchSku").value.trim();
@@ -512,6 +692,9 @@
           "</div>" +
           '<p class="wh-muted">Отображается как: <strong>Перемещение {название}</strong></p></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Добавление товаров</h4>' +
+          '<div class="wh-import-actions">' +
+          '<button type="button" class="wh-btn" id="whTrBulkImport">Загрузить из Excel</button>' +
+          "</div>" +
           '<div class="wh-rc-search-grid">' +
           '<div><label>Название</label><input type="text" id="whTrSearchName" /></div>' +
           '<div><label>Артикул</label><input type="text" id="whTrSearchSku" /></div>' +
@@ -536,6 +719,9 @@
         });
         root.querySelector("#whTrSearchBtn").addEventListener("click", function () {
           runProductSearch(root);
+        });
+        root.querySelector("#whTrBulkImport").addEventListener("click", function () {
+          openItemsImportModal(root);
         });
         ["whTrSearchName", "whTrSearchSku", "whTrSearchCode"].forEach(function (id) {
           root.querySelector("#" + id).addEventListener("keydown", function (e) {

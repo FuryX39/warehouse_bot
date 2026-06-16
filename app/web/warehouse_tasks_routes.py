@@ -119,6 +119,66 @@ def _register_on_prefix(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
+    @app.get(f"{prefix}/custom-fields")
+    async def api_tasks_custom_fields_list(
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        return {"custom_fields": tasks_repo.list_custom_fields()}
+
+    @app.get(f"{prefix}/custom-fields/{{field_id}}")
+    async def api_tasks_custom_field_get(
+        field_id: int,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        row = tasks_repo.get_custom_field(field_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Дополнительное поле не найдено")
+        return {"custom_field": row}
+
+    @app.post(f"{prefix}/custom-fields")
+    async def api_tasks_custom_field_create(
+        body: dict,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        try:
+            row = tasks_repo.create_custom_field(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"custom_field": row}
+
+    @app.put(f"{prefix}/custom-fields")
+    async def api_tasks_custom_fields_bulk_save(
+        body: dict,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        items = body.get("items")
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="items должен быть массивом")
+        return {"custom_fields": tasks_repo.save_custom_fields(items)}
+
+    @app.put(f"{prefix}/custom-fields/{{field_id}}")
+    async def api_tasks_custom_field_update(
+        field_id: int,
+        body: dict,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        try:
+            row = tasks_repo.update_custom_field(field_id, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if row is None:
+            raise HTTPException(status_code=404, detail="Дополнительное поле не найдено")
+        return {"custom_field": row}
+
+    @app.delete(f"{prefix}/custom-fields/{{field_id}}")
+    async def api_tasks_custom_field_delete(
+        field_id: int,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        if not tasks_repo.delete_custom_field(field_id):
+            raise HTTPException(status_code=404, detail="Дополнительное поле не найдено")
+        return {"ok": True}
+
     @app.get(f"{prefix}/documents/search")
     async def api_tasks_search_documents(
         request: Request,
@@ -413,6 +473,12 @@ def _api_endpoints_catalog() -> list[dict[str, str]]:
         ("PUT", "/types", "Массовое сохранение типов (как в панели)"),
         ("PUT", "/types/{id}", "Обновить тип задачи"),
         ("DELETE", "/types/{id}", "Удалить тип задачи"),
+        ("GET", "/custom-fields", "Список дополнительных полей"),
+        ("GET", "/custom-fields/{id}", "Дополнительное поле"),
+        ("POST", "/custom-fields", "Создать дополнительное поле"),
+        ("PUT", "/custom-fields", "Массовое сохранение дополнительных полей"),
+        ("PUT", "/custom-fields/{id}", "Обновить дополнительное поле"),
+        ("DELETE", "/custom-fields/{id}", "Удалить дополнительное поле"),
         ("GET", "/documents/search", "Поиск документов для привязки"),
         ("GET", "/documents/{entity_type}/{entity_id}/tasks", "Задачи по документу"),
         ("GET", "/planning/summary", "Сводка для планирования (group_by=day|task_type|assignee)"),

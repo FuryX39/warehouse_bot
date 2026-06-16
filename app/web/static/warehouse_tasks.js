@@ -1,5 +1,5 @@
 (function (global) {
-  var meta = { task_types: [], assignees: [], document_types: [], current_user_id: null };
+  var meta = { task_types: [], custom_fields: [], assignees: [], document_types: [], current_user_id: null };
   var listFilters = {};
   var filterPanelOpen = false;
   var editingId = null;
@@ -46,6 +46,7 @@
   function loadMeta() {
     return fetchJson("/api/warehouse/tasks/meta").then(function (data) {
       meta.task_types = data.task_types || [];
+      meta.custom_fields = data.custom_fields || [];
       meta.assignees = data.assignees || [];
       meta.document_types = data.document_types || [];
       meta.current_user_id = data.current_user_id != null ? data.current_user_id : null;
@@ -158,6 +159,105 @@
       onSave(backdrop, close);
     });
     return backdrop;
+  }
+
+  function modalCustomFieldsEditor(onDone) {
+    var rows = (meta.custom_fields || []).map(function (item) {
+      return (
+        '<div class="wh-modal-row wh-crm-dict-row" data-id="' + esc(item.id) + '">' +
+        '<input type="text" class="wh-crm-dict-name" value="' + esc(item.name) + '" placeholder="Название" />' +
+        '<input type="text" class="wh-crm-dict-comment" value="' + esc(item.comment || "") + '" placeholder="Комментарий" />' +
+        '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button></div>'
+      );
+    });
+    openModal(
+      "Дополнительные поля",
+      '<div id="whTkFieldRows">' + rows.join("") + "</div>" +
+        '<button type="button" class="wh-btn wh-btn-sm" id="whTkFieldAdd">+ Добавить</button>',
+      function (backdrop, close) {
+        var items = [];
+        backdrop.querySelectorAll(".wh-crm-dict-row").forEach(function (row) {
+          var name = row.querySelector(".wh-crm-dict-name").value.trim();
+          if (!name) return;
+          var item = {
+            name: name,
+            comment: row.querySelector(".wh-crm-dict-comment").value.trim(),
+          };
+          var id = row.getAttribute("data-id");
+          if (id) item.id = parseInt(id, 10);
+          items.push(item);
+        });
+        fetchJson("/api/warehouse/tasks/custom-fields", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: items }),
+        })
+          .then(function (data) {
+            meta.custom_fields = data.custom_fields || [];
+            close();
+            if (onDone) onDone();
+          })
+          .catch(function (err) {
+            alert(err.message || "Ошибка сохранения");
+          });
+      }
+    );
+    var backdrop = document.querySelector(".wh-modal-backdrop:last-of-type");
+    if (!backdrop) return;
+    backdrop.querySelector("#whTkFieldAdd").addEventListener("click", function () {
+      var row = document.createElement("div");
+      row.className = "wh-modal-row wh-crm-dict-row";
+      row.innerHTML =
+        '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
+        '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' +
+        '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
+      backdrop.querySelector("#whTkFieldRows").appendChild(row);
+    });
+    backdrop.addEventListener("click", function (e) {
+      if (e.target.classList.contains("wh-crm-dict-remove")) {
+        e.target.closest(".wh-crm-dict-row").remove();
+      }
+    });
+  }
+
+  function renderCustomFieldsBlock(task) {
+    var values = {};
+    (task.custom_fields || []).forEach(function (f) {
+      values[f.field_id] = f.value || "";
+    });
+    if (!meta.custom_fields.length) {
+      return (
+        '<p class="wh-msg">Дополнительные поля не настроены. ' +
+        '<button type="button" class="wh-btn wh-btn-sm" id="whTkConfigureFields">Настроить поля</button></p>'
+      );
+    }
+    return (
+      '<div class="wh-task-custom-fields">' +
+      meta.custom_fields
+        .map(function (field) {
+          var hint = field.comment
+            ? '<span class="wh-muted wh-task-field-hint">' + esc(field.comment) + "</span>"
+            : "";
+          return (
+            '<label class="wh-task-custom-field">' +
+            "<span>" + esc(field.name) + hint + "</span>" +
+            '<input type="text" class="wh-task-custom-field-value" data-field-id="' + esc(field.id) + '" value="' +
+            esc(values[field.id] || "") + '" /></label>'
+          );
+        })
+        .join("") +
+      '<div class="wh-form-actions"><button type="button" class="wh-btn wh-btn-sm" id="whTkConfigureFields">Настроить поля</button></div></div>'
+    );
+  }
+
+  function collectCustomFieldsFromDom(root) {
+    var items = [];
+    root.querySelectorAll(".wh-task-custom-field-value").forEach(function (inp) {
+      var fieldId = parseInt(inp.getAttribute("data-field-id"), 10);
+      if (!fieldId) return;
+      items.push({ field_id: fieldId, value: inp.value.trim() });
+    });
+    return items;
   }
 
   function modalTaskTypesEditor(onDone) {
@@ -472,6 +572,8 @@
           '<div class="wh-rc-search-btn-wrap"><button type="button" class="wh-btn" id="whTkDocSearchBtn">Найти</button></div></div>' +
           '<div id="whTkDocSearchResults" class="wh-rc-search-results"></div>' +
           '<div id="whTkDocuments" class="wh-task-docs">' + renderDocumentsBlock() + "</div></section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Дополнительные поля</h4>' +
+          '<div id="whTkCustomFields">' + renderCustomFieldsBlock(t) + "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Комментарий</h4>' +
           '<textarea id="whTkComment" class="wh-rc-comment" rows="4" placeholder="Необязательно">' + esc(t.comment) + "</textarea></section>";
 
@@ -482,6 +584,14 @@
             renderForm(taskId);
           });
         });
+        var cfgFieldsBtn = root.querySelector("#whTkConfigureFields");
+        if (cfgFieldsBtn) {
+          cfgFieldsBtn.addEventListener("click", function () {
+            modalCustomFieldsEditor(function () {
+              renderForm(taskId);
+            });
+          });
+        }
         root.querySelector("#whTkBack").addEventListener("click", function () {
           editingId = null;
           formAssigneeIds = [];
@@ -533,6 +643,7 @@
       documents: formDocuments.map(function (d) {
         return { entity_type: d.entity_type, entity_id: d.entity_id };
       }),
+      custom_fields: collectCustomFieldsFromDom(root),
     };
     var req = taskId
       ? fetchJson("/api/warehouse/tasks/" + taskId, {
