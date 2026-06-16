@@ -217,6 +217,21 @@ class WarehouseTasksRepository:
 
     def _ensure_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_counterparty_id_column()
+
+    def _migrate_counterparty_id_column(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "warehouse_tasks" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_tasks")}
+        if "counterparty_id" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text("ALTER TABLE warehouse_tasks ADD COLUMN counterparty_id INTEGER")
+            )
+            session.commit()
 
     def get_meta(self) -> dict[str, Any]:
         return {
