@@ -13,7 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from app.catalog_repository import CatalogRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
-from app.warehouse_users_repository import WarehouseUsersRepository
+from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 
 
@@ -207,6 +207,9 @@ class WarehouseTasksRepository:
         self.catalog_repo = catalog_repo
 
     def init_schema(self) -> None:
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
 
     def get_meta(self) -> dict[str, Any]:
@@ -360,6 +363,7 @@ class WarehouseTasksRepository:
             return [self._custom_field_dict(r) for r in rows]
 
     def save_custom_fields(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        self._ensure_schema()
         with Session(self.engine) as session:
             existing = {
                 r.id: r for r in session.scalars(select(WarehouseTaskCustomField)).all()
@@ -957,6 +961,7 @@ class WarehouseTasksRepository:
         documents = self._normalize_documents(data.get("documents"))
         custom_fields = self._normalize_custom_fields(data.get("custom_fields"))
         now = int(time.time())
+        self._ensure_schema()
 
         with Session(self.engine) as session:
             if session.get(WarehouseTaskType, task_type_id) is None:
@@ -965,7 +970,9 @@ class WarehouseTasksRepository:
                 if self.users_repo.get_by_id(uid) is None:
                     raise ValueError(f"Сотрудник id={uid} не найден")
             self._validate_documents(documents)
-            for field_id in custom_fields:
+            for field_id, value in custom_fields.items():
+                if not value:
+                    continue
                 if session.get(WarehouseTaskCustomField, field_id) is None:
                     raise ValueError(f"Дополнительное поле id={field_id} не найдено")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request
@@ -9,6 +10,8 @@ from fastapi import Depends, HTTPException, Request
 from app.web.warehouse_tasks_api_auth import TasksApiActor, resolve_created_by
 from app.warehouse_tasks_repository import ENTITY_LABELS, WarehouseTasksRepository
 from app.warehouse_users_repository import WarehouseUsersRepository
+
+logger = logging.getLogger(__name__)
 
 
 def register_warehouse_tasks_routes(
@@ -310,6 +313,9 @@ def _register_on_prefix(
             row = tasks_repo.create_task(body, created_by_user_id=created_by)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Ошибка создания задачи")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"task": tasks_repo.task_to_dict(row)}
 
     @app.put(f"{prefix}/{{task_id}}")

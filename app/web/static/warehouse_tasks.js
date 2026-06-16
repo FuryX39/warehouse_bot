@@ -380,14 +380,83 @@
     );
   }
 
-  function collectCustomFieldsFromDom(root) {
-    var items = [];
-    root.querySelectorAll(".wh-task-custom-field-value").forEach(function (inp) {
-      var fieldId = parseInt(inp.getAttribute("data-field-id"), 10);
-      if (!fieldId) return;
-      items.push({ field_id: fieldId, value: inp.value.trim() });
+  function emptyTaskDraft() {
+    return {
+      task_type_id: "",
+      comment: "",
+      start_date: "",
+      end_date: "",
+      assignee_ids: [],
+      documents: [],
+      custom_fields: [],
+    };
+  }
+
+  function captureFormDraft(root) {
+    if (!root || !root.querySelector("#whTkType")) return emptyTaskDraft();
+    return {
+      task_type_id: root.querySelector("#whTkType").value,
+      comment: root.querySelector("#whTkComment").value.trim(),
+      start_date: root.querySelector("#whTkStart").value,
+      end_date: root.querySelector("#whTkEnd").value,
+      assignee_ids: collectAssigneesFromDom(root),
+      documents: formDocuments.map(function (d) {
+        return {
+          entity_type: d.entity_type,
+          entity_type_label: d.entity_type_label,
+          entity_id: d.entity_id,
+          label: d.label,
+        };
+      }),
+      custom_fields: collectCustomFieldsFromDom(root),
+    };
+  }
+
+  function applyTaskDraft(draft) {
+    var base = emptyTaskDraft();
+    if (!draft) return base;
+    formAssigneeIds = (draft.assignee_ids || []).slice();
+    formDocuments = (draft.documents || []).map(function (d) {
+      return {
+        entity_type: d.entity_type,
+        entity_type_label: d.entity_type_label,
+        entity_id: d.entity_id,
+        label: d.label,
+      };
     });
-    return items;
+    return {
+      task_type_id: draft.task_type_id != null ? draft.task_type_id : "",
+      comment: draft.comment || "",
+      start_date: draft.start_date || "",
+      end_date: draft.end_date || "",
+      assignee_ids: formAssigneeIds.slice(),
+      documents: formDocuments.slice(),
+      custom_fields: draft.custom_fields || [],
+    };
+  }
+
+  function collectCustomFieldsFromDom(root) {
+    var valuesById = {};
+    if (root) {
+      root.querySelectorAll(".wh-task-custom-field-value").forEach(function (inp) {
+        var fieldId = parseInt(inp.getAttribute("data-field-id"), 10);
+        if (!fieldId) return;
+        valuesById[fieldId] = inp.value.trim();
+      });
+    }
+    if (!meta.custom_fields || !meta.custom_fields.length) return [];
+    return meta.custom_fields
+      .map(function (field) {
+        var fieldId = parseInt(field.id, 10);
+        if (!fieldId) return null;
+        return {
+          field_id: fieldId,
+          value: valuesById[fieldId] != null ? valuesById[fieldId] : "",
+        };
+      })
+      .filter(function (item) {
+        return item != null;
+      });
   }
 
   function modalTaskTypesEditor(onDone) {
@@ -619,7 +688,13 @@
       editingId = null;
       formAssigneeIds = [];
       formDocuments = [];
-      renderForm(null);
+      loadMeta()
+        .then(function () {
+          renderForm(null);
+        })
+        .catch(function (err) {
+          panelEl().innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+        });
     });
     root.querySelector("#whTkToggleFilter").addEventListener("click", function () {
       filterPanelOpen = !filterPanelOpen;
@@ -650,21 +725,16 @@
     });
   }
 
-  function renderForm(taskId) {
+  function renderForm(taskId, draft) {
     var root = panelEl();
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     var load = taskId
       ? fetchJson("/api/warehouse/tasks/" + taskId).then(function (d) {
-          return d.task;
+          if (!draft) return d.task;
+          var merged = applyTaskDraft(draft);
+          return Object.assign({}, d.task, merged);
         })
-      : Promise.resolve({
-          task_type_id: "",
-          comment: "",
-          start_date: "",
-          end_date: "",
-          assignee_ids: [],
-          documents: [],
-        });
+      : Promise.resolve(applyTaskDraft(draft));
     load
       .then(function (t) {
         formAssigneeIds = (t.assignee_ids || []).slice();
@@ -710,15 +780,17 @@
         bindAssigneeEvents(root);
         bindDocumentEvents(root);
         bindConfigureSelect(root.querySelector("#whTkType"), function () {
+          var formDraft = captureFormDraft(root);
           modalTaskTypesEditor(function () {
-            renderForm(taskId);
+            renderForm(taskId, formDraft);
           });
         });
         var cfgFieldsBtn = root.querySelector("#whTkConfigureFields");
         if (cfgFieldsBtn) {
           cfgFieldsBtn.addEventListener("click", function () {
+            var formDraft = captureFormDraft(root);
             modalCustomFieldsEditor(function () {
-              renderForm(taskId);
+              renderForm(taskId, formDraft);
             });
           });
         }
@@ -764,8 +836,14 @@
     var msg = root.querySelector("#whTkFormMsg");
     msg.textContent = "";
     msg.className = "wh-msg";
+    var typeVal = root.querySelector("#whTkType").value;
+    if (!typeVal || typeVal === CONFIGURE_VALUE) {
+      msg.className = "wh-msg wh-msg-error";
+      msg.textContent = "Выберите тип задачи";
+      return;
+    }
     var body = {
-      task_type_id: root.querySelector("#whTkType").value,
+      task_type_id: typeVal,
       comment: root.querySelector("#whTkComment").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
