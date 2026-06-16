@@ -73,6 +73,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "title": "Задачи",
         "items": [
             {"id": "task-list", "title": "Список задач"},
+            {"id": "tasks-summary", "title": "Сводная по задачам"},
             {"id": "task-create", "title": "Создать задачу"},
             {"id": "assigned-to-me", "title": "Назначенные мне"},
             {"id": "created-by-me", "title": "Поставленные мной"},

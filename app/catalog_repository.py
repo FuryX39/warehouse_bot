@@ -1069,6 +1069,21 @@ class CatalogRepository:
             else:
                 row.price = price
 
+    def get_product_group_unit_costs(self, product_ids: list[int]) -> dict[int, float]:
+        ids = sorted({int(x) for x in product_ids if int(x) > 0})
+        if not ids:
+            return {}
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(CatalogProduct.id, CatalogProductGroup.cost)
+                .outerjoin(CatalogProductGroup, CatalogProduct.group_id == CatalogProductGroup.id)
+                .where(CatalogProduct.id.in_(ids))
+            ).all()
+        out: dict[int, float] = {}
+        for product_id, cost_raw in rows:
+            out[int(product_id)] = _group_cost_api_value(str(cost_raw or "")) or 0.0
+        return out
+
 
 def _opt_int(value: Any) -> Optional[int]:
     if value is None or value == "":

@@ -233,6 +233,7 @@ def create_dashboard_app(
         receipts_repo,
         writeoffs_repo,
         transfers_repo,
+        catalog_repo,
     )
     tasks_repo.init_schema()
 

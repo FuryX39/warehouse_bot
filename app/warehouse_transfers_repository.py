@@ -475,6 +475,23 @@ class WarehouseTransfersRepository:
             )
         return conds
 
+    def map_product_quantities_by_ids(
+        self, transfer_ids: list[int]
+    ) -> dict[int, list[tuple[int, int]]]:
+        ids = sorted({int(x) for x in transfer_ids if int(x) > 0})
+        if not ids:
+            return {}
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(WarehouseTransferItem).where(WarehouseTransferItem.transfer_id.in_(ids))
+            ).all()
+        out: dict[int, list[tuple[int, int]]] = {}
+        for row in rows:
+            out.setdefault(int(row.transfer_id), []).append(
+                (int(row.product_id), int(row.quantity))
+            )
+        return out
+
 
 def _calc_lines_total_sum(line_sums: list[str]) -> str:
     from decimal import Decimal, InvalidOperation

@@ -206,6 +206,26 @@ def _register_on_prefix(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"tasks": [tasks_repo.task_to_dict(r) for r in rows]}
 
+    @app.get(f"{prefix}/summary/calendar")
+    async def api_tasks_summary_calendar(
+        request: Request,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        from datetime import date as date_cls
+
+        params = request.query_params
+        today = date_cls.today()
+        try:
+            year = int(params.get("year") or today.year)
+            month = int(params.get("month") or today.month)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Некорректные year или month") from exc
+        filters = _filters_from_query(params, skip_pagination=True)
+        try:
+            return tasks_repo.cost_summary_calendar(year=year, month=month, filters=filters)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get(f"{prefix}/planning/summary")
     async def api_tasks_planning_summary(
         request: Request,
@@ -481,6 +501,7 @@ def _api_endpoints_catalog() -> list[dict[str, str]]:
         ("DELETE", "/custom-fields/{id}", "Удалить дополнительное поле"),
         ("GET", "/documents/search", "Поиск документов для привязки"),
         ("GET", "/documents/{entity_type}/{entity_id}/tasks", "Задачи по документу"),
+        ("GET", "/summary/calendar", "Сводная по задачам: сумма стоимостей групп по дате начала"),
         ("GET", "/planning/summary", "Сводка для планирования (group_by=day|task_type|assignee)"),
         ("GET", "/planning/calendar", "Календарь задач по дате окончания"),
         ("GET", "", "Список задач с фильтрами и пагинацией"),

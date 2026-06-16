@@ -10,6 +10,7 @@ from typing import Any, Optional
 from sqlalchemy import ForeignKey, Integer, String, delete, func, nulls_last, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from app.catalog_repository import CatalogRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
@@ -169,6 +170,14 @@ def _day_to_ts(d: date | None) -> int | None:
     return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
 
 
+def _day_end_ts(d: date | None) -> int | None:
+    if d is None:
+        return None
+    return int(
+        datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=timezone.utc).timestamp()
+    )
+
+
 def _ts_to_day_str(ts: int | None) -> str:
     if not ts:
         return ""
@@ -186,6 +195,7 @@ class WarehouseTasksRepository:
         receipts_repo: WarehouseReceiptsRepository,
         writeoffs_repo: WarehouseWriteoffsRepository,
         transfers_repo: WarehouseTransfersRepository,
+        catalog_repo: CatalogRepository,
     ) -> None:
         from sqlalchemy import create_engine
 
@@ -194,6 +204,7 @@ class WarehouseTasksRepository:
         self.receipts_repo = receipts_repo
         self.writeoffs_repo = writeoffs_repo
         self.transfers_repo = transfers_repo
+        self.catalog_repo = catalog_repo
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
@@ -600,6 +611,115 @@ class WarehouseTasksRepository:
             if not (d.entity_type == entity_type and d.entity_id == int(entity_id))
         ]
         return self.patch_task(task_id, {"documents": docs})
+
+    def cost_summary_calendar(
+        self, *, year: int, month: int, filters: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        from calendar import monthrange
+        from decimal import Decimal
+
+        year = int(year)
+        month = int(month)
+        if month < 1 or month > 12:
+            raise ValueError("Некорректный месяц")
+
+        date_from = date(year, month, 1)
+        date_to = date(year, month, monthrange(year, month)[1])
+        merged = dict(filters or {})
+        for key in ("start_date_from", "start_date_to", "end_date_from", "end_date_to"):
+            merged.pop(key, None)
+
+        with Session(self.engine) as session:
+            q = select(WarehouseTask).order_by(
+                WarehouseTask.start_date_ts.asc(), WarehouseTask.id.asc()
+            )
+            conds = [
+                WarehouseTask.start_date_ts.is_not(None),
+                WarehouseTask.start_date_ts >= _day_to_ts(date_from),
+                WarehouseTask.start_date_ts <= _day_end_ts(date_to),
+            ]
+            extra = self._list_filter_conditions(session, merged)
+            if extra:
+                conds.extend(extra)
+            q = q.where(*conds).limit(5000)
+            task_rows = session.scalars(q).all()
+            rows = [self._task_row(session, r) for r in task_rows]
+
+        day_docs: dict[str, set[tuple[str, int]]] = {}
+        day_task_count: dict[str, int] = {}
+
+        for row in rows:
+            day = _ts_to_day_str(row.start_date_ts)
+            if not day:
+                continue
+            day_task_count[day] = day_task_count.get(day, 0) + 1
+            bucket = day_docs.setdefault(day, set())
+            for doc in row.documents:
+                bucket.add((doc.entity_type, int(doc.entity_id)))
+
+        receipt_ids: set[int] = set()
+        writeoff_ids: set[int] = set()
+        transfer_ids: set[int] = set()
+        for docs in day_docs.values():
+            for entity_type, entity_id in docs:
+                if entity_type == ENTITY_RECEIPT:
+                    receipt_ids.add(entity_id)
+                elif entity_type == ENTITY_WRITEOFF:
+                    writeoff_ids.add(entity_id)
+                elif entity_type == ENTITY_TRANSFER:
+                    transfer_ids.add(entity_id)
+
+        receipt_items = self.receipts_repo.map_product_quantities_by_ids(list(receipt_ids))
+        writeoff_items = self.writeoffs_repo.map_product_quantities_by_ids(list(writeoff_ids))
+        transfer_items = self.transfers_repo.map_product_quantities_by_ids(list(transfer_ids))
+
+        day_product_qty: dict[str, dict[int, int]] = {}
+        all_product_ids: set[int] = set()
+
+        def add_doc_items(day_key: str, entity_type: str, entity_id: int) -> None:
+            if entity_type == ENTITY_RECEIPT:
+                lines = receipt_items.get(entity_id, [])
+            elif entity_type == ENTITY_WRITEOFF:
+                lines = writeoff_items.get(entity_id, [])
+            elif entity_type == ENTITY_TRANSFER:
+                lines = transfer_items.get(entity_id, [])
+            else:
+                return
+            bucket = day_product_qty.setdefault(day_key, {})
+            for product_id, quantity in lines:
+                pid = int(product_id)
+                bucket[pid] = bucket.get(pid, 0) + int(quantity)
+                all_product_ids.add(pid)
+
+        for day_key, docs in day_docs.items():
+            for entity_type, entity_id in docs:
+                add_doc_items(day_key, entity_type, entity_id)
+
+        unit_costs = self.catalog_repo.get_product_group_unit_costs(list(all_product_ids))
+
+        days_out: dict[str, dict[str, Any]] = {}
+        for day_key, product_qty in day_product_qty.items():
+            total = Decimal("0")
+            for product_id, quantity in product_qty.items():
+                unit = Decimal(str(unit_costs.get(product_id, 0) or 0))
+                total += unit * Decimal(int(quantity))
+            days_out[day_key] = {
+                "total_cost": _decimal_to_cost_float(total),
+                "task_count": day_task_count.get(day_key, 0),
+            }
+
+        for day_key, count in day_task_count.items():
+            if day_key not in days_out:
+                days_out[day_key] = {"total_cost": 0.0, "task_count": count}
+
+        return {
+            "year": year,
+            "month": month,
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "days": days_out,
+            "total_tasks": len(rows),
+        }
 
     def planning_calendar(
         self, *, date_from: str, date_to: str, filters: dict[str, str] | None = None
@@ -1144,3 +1264,14 @@ class WarehouseTasksRepository:
             or_conds.append(WarehouseTask.id.in_(assignee_subq))
             conds.append(or_(*or_conds))
         return conds
+
+
+def _decimal_to_cost_float(value) -> float:
+    from decimal import Decimal
+
+    if not value:
+        return 0.0
+    amount = Decimal(value)
+    if amount == 0:
+        return 0.0
+    return float(amount)

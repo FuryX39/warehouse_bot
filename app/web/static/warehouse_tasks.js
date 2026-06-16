@@ -5,7 +5,15 @@
   var editingId = null;
   var formAssigneeIds = [];
   var formDocuments = [];
+  var summaryYear = null;
+  var summaryMonth = null;
   var CONFIGURE_VALUE = "__configure__";
+
+  var MONTH_NAMES = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+  ];
+  var WEEKDAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
   function esc(s) {
     return String(s || "")
@@ -134,6 +142,128 @@
         selectEl.setAttribute("data-prev", selectEl.value);
       }
     });
+  }
+
+  function pad2(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+
+  function dayKey(year, month, day) {
+    return year + "-" + pad2(month) + "-" + pad2(day);
+  }
+
+  function formatCost(val) {
+    if (val === null || val === undefined || val === 0) return "";
+    var n = Number(val);
+    if (isNaN(n) || n === 0) return "";
+    var s = n.toFixed(3).replace(/\.?0+$/, "");
+    return s.replace(".", ",");
+  }
+
+  function buildCalendarCells(year, month) {
+    var first = new Date(year, month - 1, 1);
+    var startDow = (first.getDay() + 6) % 7;
+    var daysInMonth = new Date(year, month, 0).getDate();
+    var cells = [];
+    var i;
+    for (i = 0; i < startDow; i++) cells.push(null);
+    for (i = 1; i <= daysInMonth; i++) cells.push(i);
+    while (cells.length % 7 !== 0) cells.push(null);
+    return cells;
+  }
+
+  function shiftSummaryMonth(delta) {
+    if (!summaryYear || !summaryMonth) {
+      var now = new Date();
+      summaryYear = now.getFullYear();
+      summaryMonth = now.getMonth() + 1;
+    }
+    summaryMonth += delta;
+    while (summaryMonth < 1) {
+      summaryMonth += 12;
+      summaryYear -= 1;
+    }
+    while (summaryMonth > 12) {
+      summaryMonth -= 12;
+      summaryYear += 1;
+    }
+  }
+
+  function renderSummaryCalendar(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    var now = new Date();
+    if (!summaryYear) summaryYear = now.getFullYear();
+    if (!summaryMonth) summaryMonth = now.getMonth() + 1;
+    root.innerHTML = "<p class=\"wh-msg\">Загрузка календаря…</p>";
+
+    fetchJson(
+      "/api/warehouse/tasks/summary/calendar?year=" +
+        encodeURIComponent(summaryYear) +
+        "&month=" +
+        encodeURIComponent(summaryMonth)
+    )
+      .then(function (data) {
+        var days = data.days || {};
+        var cells = buildCalendarCells(summaryYear, summaryMonth);
+        var weekdayHead = WEEKDAY_NAMES.map(function (name) {
+          return "<div class=\"wh-task-cal-weekday\">" + esc(name) + "</div>";
+        }).join("");
+        var cellHtml = cells
+          .map(function (dayNum) {
+            if (!dayNum) {
+              return '<div class="wh-task-cal-cell wh-task-cal-cell--empty"></div>';
+            }
+            var key = dayKey(summaryYear, summaryMonth, dayNum);
+            var info = days[key] || {};
+            var cost = formatCost(info.total_cost);
+            var costHtml = cost
+              ? '<span class="wh-task-cal-cost" title="Сумма стоимостей групп товаров">' + esc(cost) + "</span>"
+              : "";
+            var tasksHint =
+              info.task_count > 0
+                ? ' title="Задач: ' + esc(info.task_count) + '"'
+                : "";
+            return (
+              '<div class="wh-task-cal-cell"' + tasksHint + ">" +
+              '<span class="wh-task-cal-day">' + esc(dayNum) + "</span>" +
+              costHtml +
+              "</div>"
+            );
+          })
+          .join("");
+
+        root.innerHTML =
+          '<div class="wh-task-summary">' +
+          '<p class="wh-muted wh-task-summary-hint">Сумма по стоимостям групп товаров из документов задач. Учитывается только <strong>дата начала</strong> задачи.</p>' +
+          '<div class="wh-task-cal-toolbar">' +
+          '<button type="button" class="wh-btn" id="whTkCalPrev">&larr;</button>' +
+          "<h3>" + esc(MONTH_NAMES[summaryMonth - 1]) + " " + esc(summaryYear) + "</h3>" +
+          '<button type="button" class="wh-btn" id="whTkCalNext">&rarr;</button>' +
+          '<button type="button" class="wh-btn" id="whTkCalToday">Сегодня</button>' +
+          "</div>" +
+          '<div class="wh-task-cal-grid">' + weekdayHead + cellHtml + "</div>" +
+          '<p class="wh-muted">Задач с датой начала в месяце: ' + esc(data.total_tasks || 0) + "</p>" +
+          "</div>";
+
+        root.querySelector("#whTkCalPrev").addEventListener("click", function () {
+          shiftSummaryMonth(-1);
+          renderSummaryCalendar(tab, item);
+        });
+        root.querySelector("#whTkCalNext").addEventListener("click", function () {
+          shiftSummaryMonth(1);
+          renderSummaryCalendar(tab, item);
+        });
+        root.querySelector("#whTkCalToday").addEventListener("click", function () {
+          var t = new Date();
+          summaryYear = t.getFullYear();
+          summaryMonth = t.getMonth() + 1;
+          renderSummaryCalendar(tab, item);
+        });
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
   }
 
   function openModal(title, bodyHtml, onSave) {
@@ -691,6 +821,10 @@
     applyNavPreset(item.id);
     loadMeta()
       .then(function () {
+        if (item.id === "tasks-summary") {
+          renderSummaryCalendar(tab, item);
+          return;
+        }
         if (item.id === "task-create") {
           renderForm(null);
           return;
