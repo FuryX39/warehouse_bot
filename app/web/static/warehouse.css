@@ -657,6 +657,47 @@ body.wh-body {
   border-radius: 6px;
 }
 
+.wh-crm-dict-comment {
+  flex: 1;
+  min-width: 120px;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+}
+
+.wh-task-assignees {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.25rem;
+}
+
+.wh-task-assignee {
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.wh-task-docs {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.wh-task-doc-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: var(--wh-surface-2, #fafafa);
+}
+
+.wh-task-doc-row .wh-task-doc-remove {
+  margin-left: auto;
+}
+
 .wh-crm-dict-color {
   width: 2.5rem;
   height: 2.1rem;

@@ -48,6 +48,7 @@ class CatalogProductGroup(_Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -203,7 +204,25 @@ class CatalogRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_product_group_comment()
         self._seed_defaults()
+
+    def _migrate_product_group_comment(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_product_groups" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_product_groups")}
+        if "comment" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE catalog_product_groups "
+                    "ADD COLUMN comment VARCHAR(512) NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
 
     def _seed_defaults(self) -> None:
         with Session(self.engine) as session:
@@ -237,7 +256,10 @@ class CatalogRepository:
                 )
             ).all()
         return {
-            "groups": [{"id": g.id, "name": g.name, "sort_order": g.sort_order} for g in groups],
+            "groups": [
+                {"id": g.id, "name": g.name, "comment": g.comment or "", "sort_order": g.sort_order}
+                for g in groups
+            ],
             "units": [
                 {
                     "id": u.id,
@@ -290,11 +312,16 @@ class CatalogRepository:
                     except (TypeError, ValueError):
                         row = None
                 if row is None:
-                    row = model(name=name, sort_order=i)
+                    create_kwargs: dict[str, Any] = {"name": name, "sort_order": i}
+                    if key == "groups":
+                        create_kwargs["comment"] = str(item.get("comment") or "").strip()[:512]
+                    row = model(**create_kwargs)
                     session.add(row)
                 else:
                     row.name = name
                     row.sort_order = i
+                    if key == "groups":
+                        row.comment = str(item.get("comment") or "").strip()[:512]
                 session.flush()
                 keep_ids.add(int(row.id))
             for rid, row in existing.items():
@@ -305,7 +332,15 @@ class CatalogRepository:
             session.commit()
             rows = session.scalars(select(model).order_by(model.sort_order, model.name)).all()
             if key == "groups":
-                return [{"id": r.id, "name": r.name, "sort_order": r.sort_order} for r in rows]
+                return [
+                    {
+                        "id": r.id,
+                        "name": r.name,
+                        "comment": r.comment or "",
+                        "sort_order": r.sort_order,
+                    }
+                    for r in rows
+                ]
             return [
                 {
                     "id": r.id,

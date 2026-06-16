@@ -1,4 +1,4 @@
-"""Оприходования товаров на склад (новая панель /warehouse)."""
+"""Перемещения товаров между складами (новая панель /warehouse)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, func, or_, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogProduct, _parse_price
@@ -17,12 +17,13 @@ class _Base(DeclarativeBase):
     pass
 
 
-class WarehouseReceipt(_Base):
-    __tablename__ = "warehouse_receipts"
+class WarehouseTransfer(_Base):
+    __tablename__ = "warehouse_transfers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
-    warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    to_warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     total_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_sum: Mapped[str] = mapped_column(String(32), nullable=False, default="0.00")
@@ -30,12 +31,12 @@ class WarehouseReceipt(_Base):
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-class WarehouseReceiptItem(_Base):
-    __tablename__ = "warehouse_receipt_items"
+class WarehouseTransferItem(_Base):
+    __tablename__ = "warehouse_transfer_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    receipt_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("warehouse_receipts.id", ondelete="CASCADE"), nullable=False
+    transfer_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("warehouse_transfers.id", ondelete="CASCADE"), nullable=False
     )
     product_id: Mapped[int] = mapped_column(Integer, nullable=False)
     sku: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -49,7 +50,7 @@ class WarehouseReceiptItem(_Base):
 
 
 @dataclass
-class ReceiptItemRow:
+class TransferItemRow:
     id: Optional[int]
     product_id: int
     sku: str
@@ -64,18 +65,20 @@ class ReceiptItemRow:
 
 
 @dataclass
-class ReceiptRow:
+class TransferRow:
     id: int
     title: str
     display_name: str
-    warehouse_id: int
-    warehouse_name: str
+    from_warehouse_id: int
+    from_warehouse_name: str
+    to_warehouse_id: int
+    to_warehouse_name: str
     comment: str
     total_quantity: int
     total_sum: str
     created_at_ts: int
     updated_at_ts: int
-    items: list[ReceiptItemRow] = field(default_factory=list)
+    items: list[TransferItemRow] = field(default_factory=list)
 
 
 def _like(pattern: str) -> str:
@@ -88,8 +91,8 @@ def _like(pattern: str) -> str:
 def _display_name(title: str) -> str:
     t = str(title or "").strip()
     if not t:
-        return "Оприходование"
-    return f"Оприходование {t}"
+        return "Перемещение"
+    return f"Перемещение {t}"
 
 
 def _truncate_comment(comment: str, limit: int = 120) -> str:
@@ -99,7 +102,7 @@ def _truncate_comment(comment: str, limit: int = 120) -> str:
     return c[: max(0, limit - 3)].rstrip() + "..."
 
 
-class WarehouseReceiptsRepository:
+class WarehouseTransfersRepository:
     def __init__(self, db_url: str, storage_repo: StorageWarehouseRepository) -> None:
         from sqlalchemy import create_engine
 
@@ -108,91 +111,61 @@ class WarehouseReceiptsRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
-        self._migrate_total_sum_column()
-        self._backfill_total_sums()
 
-    def _migrate_total_sum_column(self) -> None:
-        from sqlalchemy import inspect, text
-
-        if "warehouse_receipts" not in inspect(self.engine).get_table_names():
-            return
-        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_receipts")}
-        if "total_sum" in cols:
-            return
+    def list_transfers(self, filters: dict[str, str]) -> list[TransferRow]:
         with Session(self.engine) as session:
-            session.execute(
-                text(
-                    "ALTER TABLE warehouse_receipts "
-                    "ADD COLUMN total_sum VARCHAR(32) NOT NULL DEFAULT '0.00'"
-                )
-            )
-            session.commit()
-
-    def _backfill_total_sums(self) -> None:
-        with Session(self.engine) as session:
-            receipts = session.scalars(select(WarehouseReceipt)).all()
-            for receipt in receipts:
-                if str(receipt.total_sum or "").strip() not in ("", "0", "0.00"):
-                    continue
-                items = session.scalars(
-                    select(WarehouseReceiptItem).where(
-                        WarehouseReceiptItem.receipt_id == int(receipt.id)
-                    )
-                ).all()
-                receipt.total_sum = _calc_lines_total_sum(
-                    [str(it.line_sum or "") for it in items]
-                )
-            session.commit()
-
-    def list_receipts(self, filters: dict[str, str]) -> list[ReceiptRow]:
-        with Session(self.engine) as session:
-            q = select(WarehouseReceipt).order_by(
-                WarehouseReceipt.created_at_ts.desc(), WarehouseReceipt.id.desc()
+            q = select(WarehouseTransfer).order_by(
+                WarehouseTransfer.created_at_ts.desc(), WarehouseTransfer.id.desc()
             )
             conds = self._list_filter_conditions(filters)
             if conds:
                 q = q.where(*conds)
             rows = session.scalars(q).all()
-            return [self._receipt_row(session, r, load_items=False) for r in rows]
+            return [self._transfer_row(session, r, load_items=False) for r in rows]
 
-    def get_receipt(self, receipt_id: int) -> ReceiptRow | None:
+    def get_transfer(self, transfer_id: int) -> TransferRow | None:
         with Session(self.engine) as session:
-            row = session.get(WarehouseReceipt, int(receipt_id))
+            row = session.get(WarehouseTransfer, int(transfer_id))
             if row is None:
                 return None
-            return self._receipt_row(session, row, load_items=True)
+            return self._transfer_row(session, row, load_items=True)
 
-    def create_receipt(self, data: dict[str, Any]) -> ReceiptRow:
-        return self._save_receipt(None, data)
+    def create_transfer(self, data: dict[str, Any]) -> TransferRow:
+        return self._save_transfer(None, data)
 
-    def update_receipt(self, receipt_id: int, data: dict[str, Any]) -> ReceiptRow | None:
+    def update_transfer(self, transfer_id: int, data: dict[str, Any]) -> TransferRow | None:
         with Session(self.engine) as session:
-            if session.get(WarehouseReceipt, int(receipt_id)) is None:
+            if session.get(WarehouseTransfer, int(transfer_id)) is None:
                 return None
-        return self._save_receipt(int(receipt_id), data)
+        return self._save_transfer(int(transfer_id), data)
 
-    def delete_receipt(self, receipt_id: int) -> bool:
+    def delete_transfer(self, transfer_id: int) -> bool:
         with Session(self.engine) as session:
-            row = session.get(WarehouseReceipt, int(receipt_id))
+            row = session.get(WarehouseTransfer, int(transfer_id))
             if row is None:
                 return False
             old_items = session.scalars(
-                select(WarehouseReceiptItem).where(WarehouseReceiptItem.receipt_id == int(receipt_id))
+                select(WarehouseTransferItem).where(
+                    WarehouseTransferItem.transfer_id == int(transfer_id)
+                )
             ).all()
             deltas = self._items_to_stock_deltas(old_items)
-            wh_id = int(row.warehouse_id)
+            from_id = int(row.from_warehouse_id)
+            to_id = int(row.to_warehouse_id)
             session.delete(row)
             session.commit()
-        self._apply_stock_deltas(wh_id, deltas, multiplier=-1)
+        self._revert_transfer(from_id, to_id, deltas)
         return True
 
-    def receipt_to_dict(self, row: ReceiptRow, *, include_items: bool = True) -> dict[str, Any]:
+    def transfer_to_dict(self, row: TransferRow, *, include_items: bool = True) -> dict[str, Any]:
         d: dict[str, Any] = {
             "id": row.id,
             "title": row.title,
             "display_name": row.display_name,
-            "warehouse_id": row.warehouse_id,
-            "warehouse_name": row.warehouse_name,
+            "from_warehouse_id": row.from_warehouse_id,
+            "from_warehouse_name": row.from_warehouse_name,
+            "to_warehouse_id": row.to_warehouse_id,
+            "to_warehouse_name": row.to_warehouse_name,
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
             "total_quantity": row.total_quantity,
@@ -204,7 +177,7 @@ class WarehouseReceiptsRepository:
             d["items"] = [self._item_to_dict(i) for i in row.items]
         return d
 
-    def _item_to_dict(self, item: ReceiptItemRow) -> dict[str, Any]:
+    def _item_to_dict(self, item: TransferItemRow) -> dict[str, Any]:
         return {
             "id": item.id,
             "product_id": item.product_id,
@@ -219,14 +192,17 @@ class WarehouseReceiptsRepository:
             "sort_order": item.sort_order,
         }
 
-    def _save_receipt(self, receipt_id: int | None, data: dict[str, Any]) -> ReceiptRow:
+    def _save_transfer(self, transfer_id: int | None, data: dict[str, Any]) -> TransferRow:
         title = str(data.get("title") or "").strip()
         if not title:
-            raise ValueError("Название оприходования обязательно")
+            raise ValueError("Название перемещения обязательно")
         try:
-            warehouse_id = int(data.get("warehouse_id"))
+            from_warehouse_id = int(data.get("from_warehouse_id"))
+            to_warehouse_id = int(data.get("to_warehouse_id"))
         except (TypeError, ValueError) as exc:
-            raise ValueError("Выберите склад") from exc
+            raise ValueError("Выберите склады отправителя и получателя") from exc
+        if from_warehouse_id == to_warehouse_id:
+            raise ValueError("Склад отправителя и склад получателя должны отличаться")
         comment = str(data.get("comment") or "").strip()[:2048]
         items_raw = data.get("items")
         if not isinstance(items_raw, list) or not items_raw:
@@ -235,41 +211,47 @@ class WarehouseReceiptsRepository:
         now = int(time.time())
 
         with Session(self.engine) as session:
-            if session.get(StorageWarehouse, warehouse_id) is None:
-                raise ValueError("Склад не найден")
+            if session.get(StorageWarehouse, from_warehouse_id) is None:
+                raise ValueError("Склад отправителя не найден")
+            if session.get(StorageWarehouse, to_warehouse_id) is None:
+                raise ValueError("Склад получателя не найден")
 
-            old_wh_id: int | None = None
+            old_from_id: int | None = None
+            old_to_id: int | None = None
             old_deltas: dict[str, int] = {}
-            if receipt_id is not None:
-                old = session.get(WarehouseReceipt, int(receipt_id))
+            if transfer_id is not None:
+                old = session.get(WarehouseTransfer, int(transfer_id))
                 if old is None:
-                    raise ValueError("Оприходование не найдено")
-                old_wh_id = int(old.warehouse_id)
+                    raise ValueError("Перемещение не найдено")
+                old_from_id = int(old.from_warehouse_id)
+                old_to_id = int(old.to_warehouse_id)
                 old_rows = session.scalars(
-                    select(WarehouseReceiptItem).where(
-                        WarehouseReceiptItem.receipt_id == int(receipt_id)
+                    select(WarehouseTransferItem).where(
+                        WarehouseTransferItem.transfer_id == int(transfer_id)
                     )
                 ).all()
                 old_deltas = self._items_to_stock_deltas(old_rows)
 
-            if receipt_id is None:
-                receipt = WarehouseReceipt(
+            if transfer_id is None:
+                transfer = WarehouseTransfer(
                     title=title[:256],
-                    warehouse_id=warehouse_id,
+                    from_warehouse_id=from_warehouse_id,
+                    to_warehouse_id=to_warehouse_id,
                     comment=comment,
                     created_at_ts=now,
                 )
-                session.add(receipt)
+                session.add(transfer)
             else:
-                receipt = session.get(WarehouseReceipt, int(receipt_id))
-                if receipt is None:
-                    raise ValueError("Оприходование не найдено")
-                receipt.title = title[:256]
-                receipt.warehouse_id = warehouse_id
-                receipt.comment = comment
+                transfer = session.get(WarehouseTransfer, int(transfer_id))
+                if transfer is None:
+                    raise ValueError("Перемещение не найдено")
+                transfer.title = title[:256]
+                transfer.from_warehouse_id = from_warehouse_id
+                transfer.to_warehouse_id = to_warehouse_id
+                transfer.comment = comment
                 session.execute(
-                    delete(WarehouseReceiptItem).where(
-                        WarehouseReceiptItem.receipt_id == int(receipt_id)
+                    delete(WarehouseTransferItem).where(
+                        WarehouseTransferItem.transfer_id == int(transfer_id)
                     )
                 )
 
@@ -282,8 +264,8 @@ class WarehouseReceiptsRepository:
                 qty = int(item["quantity"])
                 total_qty += qty
                 session.add(
-                    WarehouseReceiptItem(
-                        receipt_id=int(receipt.id),
+                    WarehouseTransferItem(
+                        transfer_id=int(transfer.id),
                         product_id=int(product.id),
                         sku=str(product.sku),
                         name=str(product.name)[:512],
@@ -295,27 +277,27 @@ class WarehouseReceiptsRepository:
                         sort_order=i,
                     )
                 )
-            receipt.total_quantity = total_qty
-            receipt.total_sum = _calc_items_total_sum(items_norm)
-            receipt.updated_at_ts = now
+            transfer.total_quantity = total_qty
+            transfer.total_sum = _calc_items_total_sum(items_norm)
+            transfer.updated_at_ts = now
             session.commit()
-            session.refresh(receipt)
-            result = self._receipt_row(session, receipt, load_items=True)
+            session.refresh(transfer)
+            result = self._transfer_row(session, transfer, load_items=True)
 
         new_deltas = self._items_to_stock_deltas_from_rows(items_norm)
-        if receipt_id is None:
-            self._apply_stock_deltas(warehouse_id, new_deltas, multiplier=1)
-        elif old_wh_id == warehouse_id:
+        if transfer_id is None:
+            self._apply_transfer(from_warehouse_id, to_warehouse_id, new_deltas)
+        elif old_from_id == from_warehouse_id and old_to_id == to_warehouse_id:
             net: dict[str, int] = {}
             for sku in set(old_deltas) | set(new_deltas):
                 delta = new_deltas.get(sku, 0) - old_deltas.get(sku, 0)
                 if delta:
                     net[sku] = delta
-            self._apply_stock_deltas(warehouse_id, net, multiplier=1)
+            self._apply_transfer(from_warehouse_id, to_warehouse_id, net)
         else:
-            if old_wh_id is not None:
-                self._apply_stock_deltas(old_wh_id, old_deltas, multiplier=-1)
-            self._apply_stock_deltas(warehouse_id, new_deltas, multiplier=1)
+            if old_from_id is not None and old_to_id is not None:
+                self._revert_transfer(old_from_id, old_to_id, old_deltas)
+            self._apply_transfer(from_warehouse_id, to_warehouse_id, new_deltas)
         return result
 
     def _normalize_items(self, items_raw: list) -> list[dict[str, Any]]:
@@ -355,7 +337,7 @@ class WarehouseReceiptsRepository:
             raise ValueError("Добавьте хотя бы один товар")
         return out
 
-    def _items_to_stock_deltas(self, rows: list[WarehouseReceiptItem]) -> dict[str, int]:
+    def _items_to_stock_deltas(self, rows: list[WarehouseTransferItem]) -> dict[str, int]:
         deltas: dict[str, int] = {}
         for row in rows:
             sku = str(row.sku or "").strip()
@@ -392,25 +374,37 @@ class WarehouseReceiptsRepository:
         if applied:
             self.storage_repo.adjust_stocks(int(warehouse_id), applied)
 
-    def _receipt_row(
-        self, session: Session, row: WarehouseReceipt, *, load_items: bool
-    ) -> ReceiptRow:
-        wh_name = ""
-        wh = session.get(StorageWarehouse, int(row.warehouse_id))
-        if wh:
-            wh_name = wh.name
-        items: list[ReceiptItemRow] = []
+    def _apply_transfer(self, from_id: int, to_id: int, deltas: dict[str, int]) -> None:
+        self._apply_stock_deltas(from_id, deltas, multiplier=-1)
+        self._apply_stock_deltas(to_id, deltas, multiplier=1)
+
+    def _revert_transfer(self, from_id: int, to_id: int, deltas: dict[str, int]) -> None:
+        self._apply_stock_deltas(from_id, deltas, multiplier=1)
+        self._apply_stock_deltas(to_id, deltas, multiplier=-1)
+
+    def _transfer_row(
+        self, session: Session, row: WarehouseTransfer, *, load_items: bool
+    ) -> TransferRow:
+        from_name = ""
+        from_wh = session.get(StorageWarehouse, int(row.from_warehouse_id))
+        if from_wh:
+            from_name = from_wh.name
+        to_name = ""
+        to_wh = session.get(StorageWarehouse, int(row.to_warehouse_id))
+        if to_wh:
+            to_name = to_wh.name
+        items: list[TransferItemRow] = []
         if load_items:
             item_rows = session.scalars(
-                select(WarehouseReceiptItem)
-                .where(WarehouseReceiptItem.receipt_id == int(row.id))
-                .order_by(WarehouseReceiptItem.sort_order, WarehouseReceiptItem.id)
+                select(WarehouseTransferItem)
+                .where(WarehouseTransferItem.transfer_id == int(row.id))
+                .order_by(WarehouseTransferItem.sort_order, WarehouseTransferItem.id)
             ).all()
             for it in item_rows:
                 product = session.get(CatalogProduct, int(it.product_id))
                 code = str(product.code) if product else ""
                 items.append(
-                    ReceiptItemRow(
+                    TransferItemRow(
                         id=int(it.id),
                         product_id=int(it.product_id),
                         sku=str(it.sku),
@@ -424,12 +418,14 @@ class WarehouseReceiptsRepository:
                         sort_order=int(it.sort_order),
                     )
                 )
-        return ReceiptRow(
+        return TransferRow(
             id=int(row.id),
             title=str(row.title),
             display_name=_display_name(row.title),
-            warehouse_id=int(row.warehouse_id),
-            warehouse_name=wh_name,
+            from_warehouse_id=int(row.from_warehouse_id),
+            from_warehouse_name=from_name,
+            to_warehouse_id=int(row.to_warehouse_id),
+            to_warehouse_name=to_name,
             comment=str(row.comment or ""),
             total_quantity=int(row.total_quantity),
             total_sum=str(row.total_sum or "0.00"),
@@ -441,24 +437,40 @@ class WarehouseReceiptsRepository:
     def _list_filter_conditions(self, filters: dict[str, str]) -> list:
         conds = []
         for key, col in (
-            ("title", WarehouseReceipt.title),
-            ("comment", WarehouseReceipt.comment),
+            ("title", WarehouseTransfer.title),
+            ("comment", WarehouseTransfer.comment),
         ):
             pat = _like(filters.get(key, ""))
             if pat:
                 conds.append(col.ilike(pat))
+        for key, col in (
+            ("from_warehouse_id", WarehouseTransfer.from_warehouse_id),
+            ("to_warehouse_id", WarehouseTransfer.to_warehouse_id),
+        ):
+            raw = (filters.get(key) or "").strip()
+            if raw:
+                try:
+                    conds.append(col == int(raw))
+                except ValueError:
+                    pass
         raw_wh = (filters.get("warehouse_id") or "").strip()
         if raw_wh:
             try:
-                conds.append(WarehouseReceipt.warehouse_id == int(raw_wh))
+                wh_id = int(raw_wh)
+                conds.append(
+                    or_(
+                        WarehouseTransfer.from_warehouse_id == wh_id,
+                        WarehouseTransfer.to_warehouse_id == wh_id,
+                    )
+                )
             except ValueError:
                 pass
         q_text = _like(filters.get("q", ""))
         if q_text:
             conds.append(
                 or_(
-                    WarehouseReceipt.title.ilike(q_text),
-                    WarehouseReceipt.comment.ilike(q_text),
+                    WarehouseTransfer.title.ilike(q_text),
+                    WarehouseTransfer.comment.ilike(q_text),
                 )
             )
         return conds

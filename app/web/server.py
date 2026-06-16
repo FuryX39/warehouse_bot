@@ -92,6 +92,11 @@ from app.web.warehouse_receipts_routes import register_warehouse_receipts_routes
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.web.warehouse_writeoffs_routes import register_warehouse_writeoffs_routes
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
+from app.web.warehouse_transfers_routes import register_warehouse_transfers_routes
+from app.warehouse_transfers_repository import WarehouseTransfersRepository
+from app.web.warehouse_tasks_routes import register_warehouse_tasks_routes
+from app.web.warehouse_tasks_api_auth import make_require_tasks_access
+from app.warehouse_tasks_repository import WarehouseTasksRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.web.warehouse_stock_routes import register_warehouse_stock_routes
 
@@ -218,6 +223,18 @@ def create_dashboard_app(
 
     writeoffs_repo = WarehouseWriteoffsRepository(settings.db_url, storage_repo)
     writeoffs_repo.init_schema()
+
+    transfers_repo = WarehouseTransfersRepository(settings.db_url, storage_repo)
+    transfers_repo.init_schema()
+
+    tasks_repo = WarehouseTasksRepository(
+        settings.db_url,
+        warehouse_users_repo,
+        receipts_repo,
+        writeoffs_repo,
+        transfers_repo,
+    )
+    tasks_repo.init_schema()
 
     def _sync_legacy_stock_to_storage(sku: str, stock: int) -> None:
         wh_id = storage_repo.get_default_warehouse_id()
@@ -471,6 +488,24 @@ def create_dashboard_app(
         storage_repo,
         crm_repo,
         require_warehouse_user,
+    )
+    register_warehouse_transfers_routes(
+        app,
+        transfers_repo,
+        catalog_repo,
+        storage_repo,
+        crm_repo,
+        require_warehouse_user,
+    )
+    require_tasks_access = make_require_tasks_access(
+        settings.warehouse_tasks_api_token,
+        _warehouse_user_from_session,
+    )
+    register_warehouse_tasks_routes(
+        app,
+        tasks_repo,
+        warehouse_users_repo,
+        require_tasks_access,
     )
 
     @app.get("/fbs")

@@ -220,10 +220,12 @@
         var idx = parseInt(btn.getAttribute("data-index"), 10);
         var item = formItems[idx];
         if (!item) return;
+        var rowEl = btn.closest(".wh-rc-item-row");
+        var qty = parseInt(rowEl.querySelector(".wh-rc-qty").value, 10) || 1;
         fetchJson("/api/warehouse/receipts/expand-kit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ product_id: item.product_id, quantity: item.quantity || 1 }),
+          body: JSON.stringify({ product_id: item.product_id, quantity: qty }),
         })
           .then(function (data) {
             var lines = (data.items || []).map(function (line) {
@@ -375,6 +377,12 @@
       });
   }
 
+  function formatDocSum(val) {
+    var v = String(val || "").trim();
+    if (!v || v === "0" || v === "0.00") return "—";
+    return v;
+  }
+
   function renderList() {
     var root = panelEl();
     root.innerHTML = "<p class=\"wh-msg\">Загрузка…</p>";
@@ -386,6 +394,7 @@
               '<tr data-id="' + esc(r.id) + '">' +
               "<td>" + esc(r.display_name) + "</td>" +
               "<td>" + esc(r.total_quantity) + "</td>" +
+              "<td>" + esc(formatDocSum(r.total_sum)) + "</td>" +
               "<td>" + esc(r.warehouse_name || "—") + "</td>" +
               "<td>" + esc(r.comment_short || "—") + "</td>" +
               "<td>" + esc(formatTs(r.created_at_ts)) + "</td></tr>"
@@ -402,7 +411,7 @@
           '<div id="whRcListWrap">' +
           (rows
             ? '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-              "<th>Название</th><th>Кол-во</th><th>Склад</th><th>Комментарий</th><th>Дата</th>" +
+              "<th>Название</th><th>Кол-во</th><th>Сумма</th><th>Склад</th><th>Комментарий</th><th>Дата</th>" +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Оприходования не найдены.</p>') +
           "</div>";

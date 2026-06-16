@@ -149,7 +149,7 @@
     return backdrop;
   }
 
-  function modalDictEditor(title, apiPath, key, keepDefault, onDone) {
+  function modalDictEditor(title, apiPath, key, keepDefault, onDone, withComment) {
     var rows = (meta[key] || []).map(function (item) {
       return (
         '<div class="wh-modal-row wh-crm-dict-row" data-id="' +
@@ -157,6 +157,11 @@
         '"><input type="text" class="wh-crm-dict-name" value="' +
         esc(item.name) +
         '" placeholder="Название" />' +
+        (withComment
+          ? '<input type="text" class="wh-crm-dict-comment" value="' +
+            esc(item.comment || "") +
+            '" placeholder="Комментарий" />'
+          : "") +
         (keepDefault && item.is_default
           ? '<span class="wh-crm-dict-tag">по умолчанию</span>'
           : '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>') +
@@ -177,6 +182,10 @@
           var item = { name: name };
           var id = row.getAttribute("data-id");
           if (id) item.id = parseInt(id, 10);
+          if (withComment) {
+            var commentEl = row.querySelector(".wh-crm-dict-comment");
+            item.comment = commentEl ? commentEl.value.trim() : "";
+          }
           items.push(item);
         });
         fetchJson(apiPath, {
@@ -201,6 +210,7 @@
       row.className = "wh-modal-row wh-crm-dict-row";
       row.innerHTML =
         '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
+        (withComment ? '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' : "") +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
       backdrop.querySelector("#" + rowsId).appendChild(row);
     });
@@ -618,7 +628,7 @@
         bindConfigureSelect(root.querySelector("#whPrGroup"), function () {
           modalDictEditor("Группы товаров", "/api/warehouse/catalog/groups", "groups", false, function () {
             renderForm(editingId, formIsKit);
-          });
+          }, true);
         });
         bindConfigureSelect(root.querySelector("#whPrUnit"), function () {
           modalDictEditor("Единицы измерения", "/api/warehouse/catalog/units", "units", true, function () {

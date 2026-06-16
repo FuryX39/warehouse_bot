@@ -224,6 +224,14 @@
       window.WhWriteoffs.renderWriteoffs(tab, item);
       return;
     }
+    if (tab.id === "warehouse" && item.id === "transfers" && window.WhTransfers) {
+      window.WhTransfers.renderTransfers(tab, item);
+      return;
+    }
+    if (tab.id === "tasks" && window.WhTasks) {
+      window.WhTasks.renderTasks(tab, item);
+      return;
+    }
     if (tab.id === "products" && item.id === "catalog" && window.WhProducts) {
       window.WhProducts.renderCatalog(tab, item);
       return;

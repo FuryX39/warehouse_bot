@@ -96,6 +96,8 @@ class Settings:
     # Анализ заказов дилера (/dealer-analysis): отдельная БД и каталог файлов.
     dealer_analysis_db_url: str = ""
     dealer_analysis_data_dir: str = ""
+    # Bearer-токен для внешнего API задач (/api/v1/tasks). Пустой = только сессия панели.
+    warehouse_tasks_api_token: str = ""
 
 
 def dealer_analysis_db_url_default() -> str:
@@ -165,6 +167,7 @@ def load_settings() -> Settings:
         yandex_label_rotate_degrees=_yandex_label_rotate_degrees(),
         dealer_analysis_db_url=dealer_analysis_db_url_default(),
         dealer_analysis_data_dir=str(dealer_analysis_data_dir_default()),
+        warehouse_tasks_api_token=os.getenv("WAREHOUSE_TASKS_API_TOKEN", "").strip(),
     )
 
 

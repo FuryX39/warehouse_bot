@@ -25,6 +25,7 @@ class WarehouseWriteoff(_Base):
     warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     total_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_sum: Mapped[str] = mapped_column(String(32), nullable=False, default="0.00")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -71,6 +72,7 @@ class WriteoffRow:
     warehouse_name: str
     comment: str
     total_quantity: int
+    total_sum: str
     created_at_ts: int
     updated_at_ts: int
     items: list[WriteoffItemRow] = field(default_factory=list)
@@ -106,6 +108,41 @@ class WarehouseWriteoffsRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_total_sum_column()
+        self._backfill_total_sums()
+
+    def _migrate_total_sum_column(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "warehouse_writeoffs" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_writeoffs")}
+        if "total_sum" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE warehouse_writeoffs "
+                    "ADD COLUMN total_sum VARCHAR(32) NOT NULL DEFAULT '0.00'"
+                )
+            )
+            session.commit()
+
+    def _backfill_total_sums(self) -> None:
+        with Session(self.engine) as session:
+            writeoffs = session.scalars(select(WarehouseWriteoff)).all()
+            for writeoff in writeoffs:
+                if str(writeoff.total_sum or "").strip() not in ("", "0", "0.00"):
+                    continue
+                items = session.scalars(
+                    select(WarehouseWriteoffItem).where(
+                        WarehouseWriteoffItem.writeoff_id == int(writeoff.id)
+                    )
+                ).all()
+                writeoff.total_sum = _calc_lines_total_sum(
+                    [str(it.line_sum or "") for it in items]
+                )
+            session.commit()
 
     def list_writeoffs(self, filters: dict[str, str]) -> list[WriteoffRow]:
         with Session(self.engine) as session:
@@ -159,6 +196,7 @@ class WarehouseWriteoffsRepository:
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
             "total_quantity": row.total_quantity,
+            "total_sum": row.total_sum,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
         }
@@ -258,6 +296,7 @@ class WarehouseWriteoffsRepository:
                     )
                 )
             writeoff.total_quantity = total_qty
+            writeoff.total_sum = _calc_items_total_sum(items_norm)
             writeoff.updated_at_ts = now
             session.commit()
             session.refresh(writeoff)
@@ -393,6 +432,7 @@ class WarehouseWriteoffsRepository:
             warehouse_name=wh_name,
             comment=str(row.comment or ""),
             total_quantity=int(row.total_quantity),
+            total_sum=str(row.total_sum or "0.00"),
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
             items=items,
@@ -422,6 +462,25 @@ class WarehouseWriteoffsRepository:
                 )
             )
         return conds
+
+
+def _calc_lines_total_sum(line_sums: list[str]) -> str:
+    from decimal import Decimal, InvalidOperation
+
+    total = Decimal("0")
+    for raw in line_sums:
+        val = str(raw or "").strip().replace(",", ".")
+        if not val:
+            continue
+        try:
+            total += Decimal(val)
+        except InvalidOperation:
+            continue
+    return f"{total:.2f}"
+
+
+def _calc_items_total_sum(items: list[dict[str, Any]]) -> str:
+    return _calc_lines_total_sum([str(item.get("line_sum") or "") for item in items])
 
 
 def _parse_price_optional(value: Any) -> Optional[str]:

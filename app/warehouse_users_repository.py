@@ -542,3 +542,18 @@ class WarehouseUsersRepository:
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
         }
+
+    def list_assignee_picker(self) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(WarehouseUser)
+                .where(WarehouseUser.is_active.is_(True))
+                .order_by(WarehouseUser.display_name, WarehouseUser.login)
+            ).all()
+            return [
+                {
+                    "id": int(r.id),
+                    "display_name": str(r.display_name or r.login),
+                }
+                for r in rows
+            ]
