@@ -49,9 +49,9 @@ class WarehouseTask(_Base):
         Integer, ForeignKey("warehouse_task_types.id"), nullable=False
     )
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
-    start_date_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    end_date_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    start_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
+    end_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
+    created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=True)
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
