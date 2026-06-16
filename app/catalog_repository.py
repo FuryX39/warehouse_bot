@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, UniqueConstraint, delete, func, or_, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, delete, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.crm_repository import CrmPriceType
@@ -49,7 +49,7 @@ class CatalogProductGroup(_Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    cost: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cost: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -219,7 +219,10 @@ class CatalogRepository:
             return
         with Session(self.engine) as session:
             session.execute(
-                text("ALTER TABLE catalog_product_groups ADD COLUMN cost REAL")
+                text(
+                    "ALTER TABLE catalog_product_groups "
+                    "ADD COLUMN cost VARCHAR(32) NOT NULL DEFAULT ''"
+                )
             )
             session.commit()
 
@@ -277,7 +280,7 @@ class CatalogRepository:
                     "id": g.id,
                     "name": g.name,
                     "comment": g.comment or "",
-                    "cost": g.cost,
+                    "cost": _group_cost_api_value(g.cost),
                     "sort_order": g.sort_order,
                 }
                 for g in groups
@@ -306,15 +309,12 @@ class CatalogRepository:
         return self._save_dict(CatalogProductGroup, items, "groups")
 
     @staticmethod
-    def _parse_group_cost(raw: Any) -> float | None:
+    def _parse_group_cost(raw: Any) -> str:
         if raw is None:
-            return None
+            return ""
         if isinstance(raw, str) and not raw.strip():
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Стоимость должна быть числом") from exc
+            return ""
+        return _parse_price(raw) or ""
 
     def save_units(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self._save_dict(CatalogUnit, items, "units", keep_default=True)
@@ -372,7 +372,7 @@ class CatalogRepository:
                         "id": r.id,
                         "name": r.name,
                         "comment": r.comment or "",
-                        "cost": r.cost,
+                        "cost": _group_cost_api_value(r.cost),
                         "sort_order": r.sort_order,
                     }
                     for r in rows
@@ -1076,6 +1076,16 @@ def _opt_int(value: Any) -> Optional[int]:
     try:
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _group_cost_api_value(raw: str) -> float | None:
+    text = str(raw or "").strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
         return None
 
 
