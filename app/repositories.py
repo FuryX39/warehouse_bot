@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 import zlib
-from typing import Callable, Iterable
+from typing import Callable, Iterable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.storage_warehouse_repository import StorageWarehouseRepository
 
 from sqlalchemy import (
     Boolean,
@@ -128,6 +131,27 @@ class InventoryRepository:
         self.engine = create_engine(db_url, future=True)
         self._on_skus_affected: Callable[[set[str]], None] | None = None
         self._after_stock_write: Callable[[str, int], None] | None = None
+        self._storage_repo: StorageWarehouseRepository | None = None
+
+    def attach_storage_repo(self, storage_repo: StorageWarehouseRepository) -> None:
+        self._storage_repo = storage_repo
+
+    def _legacy_warehouse_id(self) -> int | None:
+        if self._storage_repo is None:
+            return None
+        return self._storage_repo.get_legacy_warehouse_id()
+
+    def _read_stocks_map(self, session: Session) -> dict[str, int]:
+        legacy_id = self._legacy_warehouse_id()
+        if legacy_id is not None and self._storage_repo is not None:
+            return dict(self._storage_repo.list_stocks_for_warehouse(legacy_id))
+        return {row.sku: int(row.stock) for row in session.scalars(select(ProductStock)).all()}
+
+    def _sync_stock_to_legacy_warehouse(self, sku: str, stock: int) -> None:
+        legacy_id = self._legacy_warehouse_id()
+        if legacy_id is None or self._storage_repo is None:
+            return
+        self._storage_repo.set_stock(int(legacy_id), sku, max(int(stock), 0), skip_recalc=True)
 
     def set_stock_balance_hook(
         self,
@@ -349,6 +373,7 @@ class InventoryRepository:
             else:
                 row.stock = qty
             session.commit()
+        self._sync_stock_to_legacy_warehouse(sku_n, qty)
         if self._after_stock_write:
             self._after_stock_write(sku_n, qty)
         self._notify_skus({sku_n})
@@ -364,6 +389,7 @@ class InventoryRepository:
                 return False
             session.delete(row)
             session.commit()
+        self._sync_stock_to_legacy_warehouse(sku, 0)
         if self._after_stock_write:
             self._after_stock_write(sku, 0)
         self._notify_skus({sku})
@@ -381,6 +407,9 @@ class InventoryRepository:
                 else:
                     row.stock = normalized_stock
             session.commit()
+        if self._storage_repo is not None:
+            for sku, stock in stocks_by_sku.items():
+                self._sync_stock_to_legacy_warehouse(str(sku).strip(), max(int(stock), 0))
         if self._after_stock_write:
             for sku, stock in stocks_by_sku.items():
                 self._after_stock_write(str(sku).strip(), max(int(stock), 0))
@@ -512,6 +541,7 @@ class InventoryRepository:
                 for sku in touched_skus:
                     row = session.get(ProductStock, sku)
                     qty = int(row.stock) if row is not None else 0
+                    self._sync_stock_to_legacy_warehouse(sku, max(qty, 0))
                     self._after_stock_write(sku, max(qty, 0))
         if touched_skus:
             self._notify_skus(touched_skus)
@@ -719,7 +749,7 @@ class InventoryRepository:
         Нет строки на складе → stock=0; резерв только по order_items в состоянии added.
         """
         with Session(self.engine) as session:
-            stocks = {row.sku: int(row.stock) for row in session.scalars(select(ProductStock)).all()}
+            stocks = self._read_stocks_map(session)
             reserve_by_sku: dict[str, int] = {}
             for oi in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all():
                 reserve_by_sku[oi.sku] = reserve_by_sku.get(oi.sku, 0) + int(oi.quantity)
@@ -732,9 +762,7 @@ class InventoryRepository:
 
     def get_available_stock_map(self) -> dict[str, int]:
         with Session(self.engine) as session:
-            stocks = {
-                row.sku: row.stock for row in session.scalars(select(ProductStock)).all()
-            }
+            stocks = self._read_stocks_map(session)
             reserves_by_sku: dict[str, int] = {}
             active_order_items = session.scalars(
                 select(OrderItem).where(OrderItem.state == "added")
@@ -752,9 +780,14 @@ class InventoryRepository:
 
     def get_inventory_snapshot(self) -> list[InventorySnapshot]:
         with Session(self.engine) as session:
-            stock_rows = session.scalars(select(ProductStock)).all()
-            stocks = {row.sku: int(row.stock) for row in stock_rows}
-            top_flags = {row.sku: bool(getattr(row, "is_top", False)) for row in stock_rows}
+            stocks = self._read_stocks_map(session)
+            top_flags: dict[str, bool] = {}
+            if self._legacy_warehouse_id() is None:
+                stock_rows = session.scalars(select(ProductStock)).all()
+                top_flags = {row.sku: bool(getattr(row, "is_top", False)) for row in stock_rows}
+            else:
+                top_rows = session.scalars(select(ProductStock).where(ProductStock.is_top.is_(True))).all()
+                top_flags = {row.sku: True for row in top_rows}
             reserves_by_sku: dict[str, int] = {}
             active_order_items = session.scalars(
                 select(OrderItem).where(OrderItem.state == "added")
@@ -880,6 +913,24 @@ class InventoryRepository:
             session.commit()
         return updated
 
+    def _deduct_reserved_stock(self, session: Session, sku: str, qty: int) -> bool:
+        if qty <= 0:
+            return False
+        legacy_id = self._legacy_warehouse_id()
+        stock_row = session.get(ProductStock, sku)
+        current = int(stock_row.stock) if stock_row is not None else 0
+        if legacy_id is not None and self._storage_repo is not None:
+            current = max(current, self._storage_repo.get_stock(legacy_id, sku))
+        if current <= 0 and stock_row is None:
+            return False
+        new_qty = max(current - int(qty), 0)
+        if stock_row is None:
+            session.add(ProductStock(sku=sku, stock=new_qty))
+        else:
+            stock_row.stock = new_qty
+        self._sync_stock_to_legacy_warehouse(sku, new_qty)
+        return True
+
     def ship_added_orders_before_cutoff(
         self, sources: set[str] | None, cutoff_ts: int
     ) -> dict[str, object]:
@@ -912,13 +963,8 @@ class InventoryRepository:
 
             reserved_units = 0
             for sku, qty in reserved_by_sku.items():
-                if qty <= 0:
-                    continue
-                stock_row = session.get(ProductStock, sku)
-                if stock_row is None:
-                    continue
-                reserved_units += qty
-                stock_row.stock = max(int(stock_row.stock) - qty, 0)
+                if self._deduct_reserved_stock(session, sku, qty):
+                    reserved_units += int(qty)
 
             for r in rows:
                 r.state = "shipped"
@@ -975,14 +1021,9 @@ class InventoryRepository:
             stocks_updated = 0
             reserved_units = 0
             for sku, qty in reserved_by_sku.items():
-                if qty <= 0:
-                    continue
-                stock_row = session.get(ProductStock, sku)
-                if stock_row is None:
-                    continue
-                reserved_units += qty
-                stock_row.stock = max(int(stock_row.stock) - qty, 0)
-                stocks_updated += 1
+                if self._deduct_reserved_stock(session, sku, qty):
+                    reserved_units += int(qty)
+                    stocks_updated += 1
 
             for r in rows:
                 r.state = "shipped"

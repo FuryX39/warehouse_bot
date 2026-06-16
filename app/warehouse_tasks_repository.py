@@ -13,7 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from app.catalog_repository import CatalogRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
-from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
+from app.warehouse_users_repository import WarehouseUsersRepository
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 
 
@@ -962,7 +962,7 @@ class WarehouseTasksRepository:
             if session.get(WarehouseTaskType, task_type_id) is None:
                 raise ValueError("Тип задачи не найден")
             for uid in assignee_ids:
-                if session.get(WarehouseUser, uid) is None:
+                if self.users_repo.get_by_id(uid) is None:
                     raise ValueError(f"Сотрудник id={uid} не найден")
             self._validate_documents(documents)
             for field_id in custom_fields:
@@ -1114,7 +1114,7 @@ class WarehouseTasksRepository:
             task_type_name = str(tt.name)
         created_by_name = ""
         if row.created_by_user_id:
-            creator = session.get(WarehouseUser, int(row.created_by_user_id))
+            creator = self.users_repo.get_by_id(int(row.created_by_user_id))
             if creator:
                 created_by_name = str(creator.display_name or creator.login)
 
@@ -1123,7 +1123,7 @@ class WarehouseTasksRepository:
         ).all()
         assignees: list[TaskAssigneeRow] = []
         for ar in assignee_rows:
-            user = session.get(WarehouseUser, int(ar.user_id))
+            user = self.users_repo.get_by_id(int(ar.user_id))
             if user is None:
                 continue
             assignees.append(

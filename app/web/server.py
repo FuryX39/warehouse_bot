@@ -212,6 +212,8 @@ def create_dashboard_app(
     storage_repo = StorageWarehouseRepository(settings.db_url)
     storage_repo.init_schema()
 
+    inventory_repo.attach_storage_repo(storage_repo)
+
     catalog_repo = CatalogRepository(settings.db_url)
     catalog_repo.init_schema()
 
@@ -238,7 +240,7 @@ def create_dashboard_app(
     tasks_repo.init_schema()
 
     def _sync_legacy_stock_to_storage(sku: str, stock: int) -> None:
-        wh_id = storage_repo.get_default_warehouse_id()
+        wh_id = storage_repo.get_legacy_warehouse_id()
         if wh_id is None:
             return
         storage_repo.set_stock(int(wh_id), sku, int(stock), skip_recalc=True)

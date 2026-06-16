@@ -11,6 +11,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 _DEFAULT_WAREHOUSE_NAME = "Основной склад"
 _DEFAULT_WAREHOUSE_CODE = "MAIN"
+_LEGACY_WAREHOUSE_NAME = "Старый склад"
+_LEGACY_WAREHOUSE_CODE = "LEGACY"
+_LEGACY_STOCK_MIGRATION_KEY = "legacy_warehouse_stock_v1"
 
 
 class _Base(DeclarativeBase):
@@ -97,10 +100,19 @@ class StorageWarehouseRepository:
                 row = session.scalar(select(StorageWarehouse).order_by(StorageWarehouse.id).limit(1))
             return int(row.id) if row is not None else None
 
+    def get_legacy_warehouse_id(self) -> int | None:
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(StorageWarehouse)
+                .where(StorageWarehouse.code == _LEGACY_WAREHOUSE_CODE)
+                .limit(1)
+            )
+            return int(row.id) if row is not None else None
+
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._ensure_default_warehouse()
-        self._migrate_legacy_product_stocks()
+        self._migrate_legacy_warehouse_stocks()
 
     def _ensure_default_warehouse(self) -> None:
         now = int(time.time())
@@ -118,34 +130,121 @@ class StorageWarehouseRepository:
             session.add(row)
             session.commit()
 
-    def _migrate_legacy_product_stocks(self) -> None:
-        """Переносит остатки из product_stocks (старая панель) на склад по умолчанию."""
+            session.commit()
+
+    def _legacy_migration_done(self, session: Session) -> bool:
+        if "sync_state" not in inspect(self.engine).get_table_names():
+            return False
+        row = session.execute(
+            text("SELECT value_int FROM sync_state WHERE key = :key"),
+            {"key": _LEGACY_STOCK_MIGRATION_KEY},
+        ).fetchone()
+        return bool(row and int(row[0]) == 1)
+
+    def _mark_legacy_migration_done(self, session: Session) -> None:
+        if "sync_state" not in inspect(self.engine).get_table_names():
+            return
+        existing = session.execute(
+            text("SELECT key FROM sync_state WHERE key = :key"),
+            {"key": _LEGACY_STOCK_MIGRATION_KEY},
+        ).fetchone()
+        if existing:
+            session.execute(
+                text("UPDATE sync_state SET value_int = 1 WHERE key = :key"),
+                {"key": _LEGACY_STOCK_MIGRATION_KEY},
+            )
+        else:
+            session.execute(
+                text("INSERT INTO sync_state (key, value_int) VALUES (:key, 1)"),
+                {"key": _LEGACY_STOCK_MIGRATION_KEY},
+            )
+
+    def _ensure_legacy_warehouse(self, session: Session) -> StorageWarehouse:
+        row = session.scalar(
+            select(StorageWarehouse).where(StorageWarehouse.code == _LEGACY_WAREHOUSE_CODE).limit(1)
+        )
+        if row is not None:
+            if row.name != _LEGACY_WAREHOUSE_NAME:
+                row.name = _LEGACY_WAREHOUSE_NAME
+            return row
+        now = int(time.time())
+        row = StorageWarehouse(
+            name=_LEGACY_WAREHOUSE_NAME,
+            code=_LEGACY_WAREHOUSE_CODE,
+            is_default=False,
+            created_at_ts=now,
+            updated_at_ts=now,
+        )
+        session.add(row)
+        session.flush()
+        return row
+
+    def _migrate_legacy_warehouse_stocks(self) -> None:
+        """Переносит остатки старой панели (product_stocks) на склад «Старый склад»."""
         with Session(self.engine) as session:
+            if self._legacy_migration_done(session):
+                return
+            legacy_wh = self._ensure_legacy_warehouse(session)
+            legacy_id = int(legacy_wh.id)
+
+            stocks_by_sku: dict[str, int] = {}
+            if "product_stocks" in inspect(self.engine).get_table_names():
+                for sku, stock in session.execute(
+                    text("SELECT sku, stock FROM product_stocks WHERE stock != 0")
+                ).all():
+                    sku_s = str(sku or "").strip()
+                    if not sku_s:
+                        continue
+                    qty = max(0, int(stock or 0))
+                    if qty:
+                        stocks_by_sku[sku_s] = qty
+
+            if not stocks_by_sku:
+                default_wh = session.scalar(
+                    select(StorageWarehouse).where(StorageWarehouse.is_default.is_(True)).limit(1)
+                )
+                if default_wh is not None and int(default_wh.id) != legacy_id:
+                    rows = session.scalars(
+                        select(StorageStock).where(
+                            StorageStock.warehouse_id == int(default_wh.id),
+                            StorageStock.stock != 0,
+                        )
+                    ).all()
+                    for row in rows:
+                        sku_s = str(row.sku or "").strip()
+                        qty = max(0, int(row.stock or 0))
+                        if sku_s and qty:
+                            stocks_by_sku[sku_s] = qty
+
+            now = int(time.time())
+            for sku_s, qty in stocks_by_sku.items():
+                existing = session.scalar(
+                    select(StorageStock).where(
+                        StorageStock.warehouse_id == legacy_id,
+                        StorageStock.sku == sku_s,
+                    )
+                )
+                if existing is None:
+                    session.add(StorageStock(warehouse_id=legacy_id, sku=sku_s, stock=qty))
+                else:
+                    existing.stock = qty
+
             default_wh = session.scalar(
                 select(StorageWarehouse).where(StorageWarehouse.is_default.is_(True)).limit(1)
             )
-            if default_wh is None:
-                default_wh = session.scalar(select(StorageWarehouse).order_by(StorageWarehouse.id).limit(1))
-            if default_wh is None:
-                return
-            has_storage = int(session.scalar(select(func.count()).select_from(StorageStock)) or 0)
-            if has_storage > 0:
-                return
-            if "product_stocks" not in inspect(self.engine).get_table_names():
-                return
-            rows = session.execute(text("SELECT sku, stock FROM product_stocks WHERE stock != 0")).all()
-            now = int(time.time())
-            for sku, stock in rows:
-                sku_s = str(sku or "").strip()
-                if not sku_s:
-                    continue
-                qty = max(0, int(stock or 0))
-                if qty == 0:
-                    continue
-                session.add(
-                    StorageStock(warehouse_id=int(default_wh.id), sku=sku_s, stock=qty)
-                )
-            default_wh.updated_at_ts = now
+            if default_wh is not None and int(default_wh.id) != legacy_id and stocks_by_sku:
+                for sku_s in stocks_by_sku:
+                    row = session.scalar(
+                        select(StorageStock).where(
+                            StorageStock.warehouse_id == int(default_wh.id),
+                            StorageStock.sku == sku_s,
+                        )
+                    )
+                    if row is not None:
+                        session.delete(row)
+
+            legacy_wh.updated_at_ts = now
+            self._mark_legacy_migration_done(session)
             session.commit()
 
     def get_meta(self) -> dict[str, list[dict[str, Any]]]:

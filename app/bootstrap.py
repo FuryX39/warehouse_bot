@@ -25,6 +25,7 @@ from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
+from app.storage_warehouse_repository import StorageWarehouseRepository
 
 
 def create_inventory_stack() -> tuple[
@@ -37,6 +38,9 @@ def create_inventory_stack() -> tuple[
     settings = load_settings()
     inventory_repo = InventoryRepository(settings.db_url)
     inventory_repo.init_schema()
+    storage_repo = StorageWarehouseRepository(settings.db_url)
+    storage_repo.init_schema()
+    inventory_repo.attach_storage_repo(storage_repo)
     movement_repo = MovementRepository(settings.movement_db_url)
     movement_repo.init_schema()
     dealer_data_dir = dealer_analysis_data_dir_default()
