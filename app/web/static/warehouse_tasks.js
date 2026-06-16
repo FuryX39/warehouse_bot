@@ -23,6 +23,22 @@
       .replace(/>/g, "&gt;");
   }
 
+  function linkifyText(text) {
+    var safe = esc(text);
+    return safe.replace(
+      /(https?:\/\/[^\s<&]+[^\s<&.,;:!?)\]}'"])/gi,
+      function (url) {
+        return (
+          '<a class="wh-link" href="' +
+          url +
+          '" target="_blank" rel="noopener noreferrer">' +
+          url +
+          "</a>"
+        );
+      }
+    );
+  }
+
   function shell() {
     return global.WH_SHELL || {};
   }
@@ -365,14 +381,17 @@
       '<div class="wh-task-custom-fields">' +
       meta.custom_fields
         .map(function (field) {
-          var hint = field.comment
-            ? '<span class="wh-muted wh-task-field-hint">' + esc(field.comment) + "</span>"
+          var commentHtml = field.comment
+            ? '<div class="wh-task-custom-field-comment">' + linkifyText(field.comment) + "</div>"
             : "";
           return (
-            '<label class="wh-task-custom-field">' +
-            "<span>" + esc(field.name) + hint + "</span>" +
+            '<div class="wh-task-custom-field">' +
+            '<div class="wh-task-custom-field-meta">' +
+            '<div class="wh-task-custom-field-name">' + esc(field.name) + "</div>" +
+            commentHtml +
+            "</div>" +
             '<input type="text" class="wh-task-custom-field-value" data-field-id="' + esc(field.id) + '" value="' +
-            esc(values[field.id] || "") + '" /></label>'
+            esc(values[field.id] || "") + '" placeholder="Значение" /></div>'
           );
         })
         .join("") +
