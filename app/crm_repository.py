@@ -406,6 +406,15 @@ class CrmRepository:
             rows = session.scalars(q).all()
             return [self._counterparty_row(session, r, load_contacts=False) for r in rows]
 
+    def list_counterparty_picker(self) -> list[dict[str, Any]]:
+        rows = self.list_counterparties({})
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            name = str(row.full_name or "").strip() or f"Контрагент #{row.id}"
+            out.append({"id": int(row.id), "name": name})
+        out.sort(key=lambda item: str(item.get("name") or "").lower())
+        return out
+
     def _filter_conditions(self, filters: dict[str, str]) -> list:
         conds = []
         mapping = {

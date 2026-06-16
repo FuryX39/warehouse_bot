@@ -731,6 +731,16 @@ body.wh-body {
   background: var(--wh-surface);
 }
 
+.wh-input-readonly {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: var(--wh-subnav-bg);
+  color: var(--wh-muted);
+  min-height: 2.15rem;
+  line-height: 1.35;
+}
+
 .wh-task-summary-hint {
   margin: 0 0 1rem;
 }

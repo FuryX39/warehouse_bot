@@ -11,6 +11,7 @@ from sqlalchemy import ForeignKey, Integer, String, delete, func, nulls_last, or
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
+from app.crm_repository import CrmRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
@@ -52,6 +53,7 @@ class WarehouseTask(_Base):
     start_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
     end_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    counterparty_id: Mapped[int] = mapped_column(Integer, nullable=True)
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -129,6 +131,8 @@ class TaskRow:
     end_date_ts: int | None
     created_by_user_id: int | None
     created_by_name: str
+    counterparty_id: int | None
+    counterparty_name: str
     created_at_ts: int
     updated_at_ts: int
     assignees: list[TaskAssigneeRow] = field(default_factory=list)
@@ -196,6 +200,7 @@ class WarehouseTasksRepository:
         writeoffs_repo: WarehouseWriteoffsRepository,
         transfers_repo: WarehouseTransfersRepository,
         catalog_repo: CatalogRepository,
+        crm_repo: CrmRepository,
     ) -> None:
         from sqlalchemy import create_engine
 
@@ -205,6 +210,7 @@ class WarehouseTasksRepository:
         self.writeoffs_repo = writeoffs_repo
         self.transfers_repo = transfers_repo
         self.catalog_repo = catalog_repo
+        self.crm_repo = crm_repo
 
     def init_schema(self) -> None:
         self._ensure_schema()
@@ -527,6 +533,7 @@ class WarehouseTasksRepository:
             "comment": current.comment,
             "start_date": _ts_to_day_str(current.start_date_ts) or None,
             "end_date": _ts_to_day_str(current.end_date_ts) or None,
+            "counterparty_id": current.counterparty_id,
             "assignee_ids": [a.user_id for a in current.assignees],
             "documents": [
                 {"entity_type": d.entity_type, "entity_id": d.entity_id} for d in current.documents
@@ -540,6 +547,7 @@ class WarehouseTasksRepository:
             "comment",
             "start_date",
             "end_date",
+            "counterparty_id",
             "assignee_ids",
             "documents",
             "custom_fields",
@@ -832,6 +840,7 @@ class WarehouseTasksRepository:
                 "comment": "string",
                 "start_date": "YYYY-MM-DD",
                 "end_date": "YYYY-MM-DD",
+                "counterparty_id": "int, id контрагента из CRM",
                 "assignee_ids": "[int]",
                 "documents": '[{"entity_type":"transfer|receipt|writeoff","entity_id":int}]',
                 "custom_fields": '[{"field_id":int,"value":"string"}]',
@@ -843,6 +852,7 @@ class WarehouseTasksRepository:
                 "task_type_id",
                 "assignee_id",
                 "created_by_user_id",
+                "counterparty_id",
                 "entity_type",
                 "entity_id",
                 "start_date_from",
@@ -897,6 +907,9 @@ class WarehouseTasksRepository:
             "end_date_ts": row.end_date_ts,
             "created_by_user_id": row.created_by_user_id,
             "created_by_name": row.created_by_name,
+            "author_name": row.created_by_name,
+            "counterparty_id": row.counterparty_id,
+            "counterparty_name": row.counterparty_name,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
             "assignee_ids": [a.user_id for a in row.assignees],
@@ -960,6 +973,7 @@ class WarehouseTasksRepository:
         assignee_ids = self._normalize_assignee_ids(data.get("assignee_ids"))
         documents = self._normalize_documents(data.get("documents"))
         custom_fields = self._normalize_custom_fields(data.get("custom_fields"))
+        counterparty_id = self._normalize_counterparty_id(data.get("counterparty_id"))
         now = int(time.time())
         self._ensure_schema()
 
@@ -983,6 +997,7 @@ class WarehouseTasksRepository:
                     start_date_ts=start_date_ts,
                     end_date_ts=end_date_ts,
                     created_by_user_id=int(created_by_user_id) if created_by_user_id else None,
+                    counterparty_id=counterparty_id,
                     created_at_ts=now,
                 )
                 session.add(task)
@@ -994,6 +1009,7 @@ class WarehouseTasksRepository:
                 task.comment = comment
                 task.start_date_ts = start_date_ts
                 task.end_date_ts = end_date_ts
+                task.counterparty_id = counterparty_id
                 session.execute(
                     delete(WarehouseTaskAssignee).where(
                         WarehouseTaskAssignee.task_id == int(task_id)
@@ -1088,6 +1104,19 @@ class WarehouseTasksRepository:
             out[field_id] = str(item.get("value") or "").strip()[:2048]
         return out
 
+    def _normalize_counterparty_id(self, raw: Any) -> int | None:
+        if raw is None or raw == "":
+            return None
+        try:
+            counterparty_id = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Некорректный контрагент") from exc
+        if counterparty_id <= 0:
+            return None
+        if self.crm_repo.get_counterparty(counterparty_id) is None:
+            raise ValueError(f"Контрагент id={counterparty_id} не найден")
+        return counterparty_id
+
     def _validate_documents(self, documents: list[dict[str, Any]]) -> None:
         for doc in documents:
             entity_type = doc["entity_type"]
@@ -1124,6 +1153,12 @@ class WarehouseTasksRepository:
             creator = self.users_repo.get_by_id(int(row.created_by_user_id))
             if creator:
                 created_by_name = str(creator.display_name or creator.login)
+
+        counterparty_name = ""
+        if row.counterparty_id:
+            cp = self.crm_repo.get_counterparty(int(row.counterparty_id))
+            if cp:
+                counterparty_name = str(cp.full_name or "").strip() or f"Контрагент #{cp.id}"
 
         assignee_rows = session.scalars(
             select(WarehouseTaskAssignee).where(WarehouseTaskAssignee.task_id == int(row.id))
@@ -1190,6 +1225,8 @@ class WarehouseTasksRepository:
             end_date_ts=int(row.end_date_ts) if row.end_date_ts is not None else None,
             created_by_user_id=int(row.created_by_user_id) if row.created_by_user_id else None,
             created_by_name=created_by_name,
+            counterparty_id=int(row.counterparty_id) if row.counterparty_id else None,
+            counterparty_name=counterparty_name,
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
             assignees=assignees,
@@ -1209,6 +1246,12 @@ class WarehouseTasksRepository:
         if raw_creator:
             try:
                 conds.append(WarehouseTask.created_by_user_id == int(raw_creator))
+            except ValueError:
+                pass
+        raw_counterparty = (filters.get("counterparty_id") or "").strip()
+        if raw_counterparty:
+            try:
+                conds.append(WarehouseTask.counterparty_id == int(raw_counterparty))
             except ValueError:
                 pass
         raw_assignee = (filters.get("assignee_id") or "").strip()

@@ -1,5 +1,13 @@
 (function (global) {
-  var meta = { task_types: [], custom_fields: [], assignees: [], document_types: [], current_user_id: null };
+  var meta = {
+    task_types: [],
+    custom_fields: [],
+    assignees: [],
+    counterparties: [],
+    document_types: [],
+    current_user_id: null,
+    current_user_name: "",
+  };
   var listFilters = {};
   var filterPanelOpen = false;
   var editingId = null;
@@ -72,8 +80,10 @@
       meta.task_types = data.task_types || [];
       meta.custom_fields = data.custom_fields || [];
       meta.assignees = data.assignees || [];
+      meta.counterparties = data.counterparties || [];
       meta.document_types = data.document_types || [];
       meta.current_user_id = data.current_user_id != null ? data.current_user_id : null;
+      meta.current_user_name = data.current_user_name || "";
       return meta;
     });
   }
@@ -123,6 +133,8 @@
       filterField("comment", "Комментарий", "text") +
       filterField("task_type_id", "Тип задачи", "select", meta.task_types) +
       filterField("assignee_id", "Ответственный", "select", meta.assignees) +
+      filterField("created_by_user_id", "Автор", "select", meta.assignees) +
+      filterField("counterparty_id", "Контрагент", "select", meta.counterparties) +
       filterField("start_date_from", "Дата начала с", "date") +
       filterField("start_date_to", "Дата начала по", "date") +
       filterField("end_date_from", "Дата окончания с", "date") +
@@ -135,6 +147,31 @@
       '<button type="button" class="wh-btn" id="whTkResetFilter">Сбросить</button>' +
       "</div></div>"
     );
+  }
+
+  function buildCounterpartyOptions(items, selectedId) {
+    var html = '<option value="">— не выбран —</option>';
+    (items || []).forEach(function (it) {
+      var sel = String(selectedId || "") === String(it.id) ? " selected" : "";
+      html += '<option value="' + esc(it.id) + '"' + sel + ">" + esc(it.name) + "</option>";
+    });
+    return html;
+  }
+
+  function resolveAuthorName(task, taskId) {
+    if (task.created_by_name) return task.created_by_name;
+    if (task.author_name) return task.author_name;
+    if (!taskId) {
+      if (meta.current_user_name) return meta.current_user_name;
+      if (meta.current_user_id != null) {
+        for (var i = 0; i < meta.assignees.length; i++) {
+          if (meta.assignees[i].id === meta.current_user_id) {
+            return meta.assignees[i].display_name;
+          }
+        }
+      }
+    }
+    return "—";
   }
 
   function buildSelectOptions(items, selectedId) {
@@ -405,6 +442,7 @@
       comment: "",
       start_date: "",
       end_date: "",
+      counterparty_id: "",
       assignee_ids: [],
       documents: [],
       custom_fields: [],
@@ -413,11 +451,13 @@
 
   function captureFormDraft(root) {
     if (!root || !root.querySelector("#whTkType")) return emptyTaskDraft();
+    var cpEl = root.querySelector("#whTkCounterparty");
     return {
       task_type_id: root.querySelector("#whTkType").value,
       comment: root.querySelector("#whTkComment").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
+      counterparty_id: cpEl ? cpEl.value : "",
       assignee_ids: collectAssigneesFromDom(root),
       documents: formDocuments.map(function (d) {
         return {
@@ -448,6 +488,7 @@
       comment: draft.comment || "",
       start_date: draft.start_date || "",
       end_date: draft.end_date || "",
+      counterparty_id: draft.counterparty_id != null ? draft.counterparty_id : "",
       assignee_ids: formAssigneeIds.slice(),
       documents: formDocuments.slice(),
       custom_fields: draft.custom_fields || [],
@@ -673,6 +714,8 @@
               '<tr data-id="' + esc(t.id) + '">' +
               "<td>#" + esc(t.id) + "</td>" +
               "<td>" + esc(t.task_type_name || "—") + "</td>" +
+              "<td>" + esc(t.author_name || t.created_by_name || "—") + "</td>" +
+              "<td>" + esc(t.counterparty_name || "—") + "</td>" +
               "<td>" + esc(t.assignees_short || "—") + "</td>" +
               "<td>" + esc(t.documents_short || "—") + "</td>" +
               "<td>" + esc(t.comment_short || "—") + "</td>" +
@@ -691,7 +734,7 @@
           '<div id="whTkListWrap">' +
           (rows
             ? '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-              "<th>№</th><th>Тип</th><th>Ответственные</th><th>Документы</th><th>Комментарий</th><th>Начало</th><th>Окончание</th>" +
+              "<th>№</th><th>Тип</th><th>Автор</th><th>Контрагент</th><th>Ответственные</th><th>Документы</th><th>Комментарий</th><th>Начало</th><th>Окончание</th>" +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Задачи не найдены.</p>') +
           "</div>";
@@ -769,6 +812,7 @@
         meta.document_types.forEach(function (dt) {
           docTypeOpts += '<option value="' + esc(dt.id) + '">' + esc(dt.title) + "</option>";
         });
+        var authorName = resolveAuthorName(t, taskId);
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whTkBack">&larr; К списку</button>' +
@@ -779,6 +823,9 @@
           '<div class="wh-form-row">' +
           '<div><label>Тип задачи</label><select id="whTkType" data-prev="' + esc(t.task_type_id || "") + '">' +
           buildSelectOptions(meta.task_types, t.task_type_id) + "</select></div>" +
+          '<div><label>Автор</label><div class="wh-input-readonly" id="whTkAuthor">' + esc(authorName) + "</div></div>" +
+          '<div><label>Контрагент</label><select id="whTkCounterparty">' +
+          buildCounterpartyOptions(meta.counterparties, t.counterparty_id) + "</select></div>" +
           '<div><label>Дата начала</label><input type="date" id="whTkStart" value="' + esc(t.start_date || "") + '" /></div>' +
           '<div><label>Дата окончания</label><input type="date" id="whTkEnd" value="' + esc(t.end_date || "") + '" /></div>' +
           "</div></section>" +
@@ -866,6 +913,7 @@
       comment: root.querySelector("#whTkComment").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
+      counterparty_id: root.querySelector("#whTkCounterparty").value || null,
       assignee_ids: collectAssigneesFromDom(root),
       documents: formDocuments.map(function (d) {
         return { entity_type: d.entity_type, entity_id: d.entity_id };

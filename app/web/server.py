@@ -236,6 +236,7 @@ def create_dashboard_app(
         writeoffs_repo,
         transfers_repo,
         catalog_repo,
+        crm_repo,
     )
     tasks_repo.init_schema()
 
@@ -508,6 +509,7 @@ def create_dashboard_app(
         app,
         tasks_repo,
         warehouse_users_repo,
+        crm_repo,
         require_tasks_access,
     )
 

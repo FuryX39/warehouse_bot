@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request
 
 from app.web.warehouse_tasks_api_auth import TasksApiActor, resolve_created_by
+from app.crm_repository import CrmRepository
 from app.warehouse_tasks_repository import ENTITY_LABELS, WarehouseTasksRepository
 from app.warehouse_users_repository import WarehouseUsersRepository
 
@@ -18,12 +19,13 @@ def register_warehouse_tasks_routes(
     app,
     tasks_repo: WarehouseTasksRepository,
     users_repo: WarehouseUsersRepository,
+    crm_repo: CrmRepository,
     require_tasks_access,
 ) -> None:
     prefixes = ("/api/warehouse/tasks", "/api/v1/tasks")
 
     for prefix in prefixes:
-        _register_on_prefix(app, prefix, tasks_repo, users_repo, require_tasks_access)
+        _register_on_prefix(app, prefix, tasks_repo, users_repo, crm_repo, require_tasks_access)
 
 
 def _register_on_prefix(
@@ -31,6 +33,7 @@ def _register_on_prefix(
     prefix: str,
     tasks_repo: WarehouseTasksRepository,
     users_repo: WarehouseUsersRepository,
+    crm_repo: CrmRepository,
     require_tasks_access,
 ) -> None:
     @app.get(f"{prefix}/schema")
@@ -46,10 +49,15 @@ def _register_on_prefix(
     ) -> dict:
         meta = tasks_repo.get_meta()
         meta["assignees"] = users_repo.list_assignee_picker()
+        meta["counterparties"] = crm_repo.list_counterparty_picker()
         meta["document_types"] = [
             {"id": key, "title": label} for key, label in ENTITY_LABELS.items()
         ]
         meta["current_user_id"] = actor.created_by_user_id
+        if actor.user is not None:
+            meta["current_user_name"] = str(actor.user.display_name or actor.user.login)
+        else:
+            meta["current_user_name"] = ""
         meta["auth_via_api_token"] = actor.via_api_token
         return meta
 
@@ -456,6 +464,7 @@ def _filters_from_query(params: Any, *, skip_pagination: bool = False) -> dict[s
         "task_type_id",
         "assignee_id",
         "created_by_user_id",
+        "counterparty_id",
         "entity_type",
         "entity_id",
         "start_date_from",
