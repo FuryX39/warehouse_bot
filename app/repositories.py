@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 import zlib
 from typing import Callable, Iterable, TYPE_CHECKING
