@@ -216,6 +216,14 @@
       window.WhStock.renderStock(tab, item);
       return;
     }
+    if (tab.id === "warehouse" && item.id === "receipts" && window.WhReceipts) {
+      window.WhReceipts.renderReceipts(tab, item);
+      return;
+    }
+    if (tab.id === "warehouse" && item.id === "writeoffs" && window.WhWriteoffs) {
+      window.WhWriteoffs.renderWriteoffs(tab, item);
+      return;
+    }
     if (tab.id === "products" && item.id === "catalog" && window.WhProducts) {
       window.WhProducts.renderCatalog(tab, item);
       return;

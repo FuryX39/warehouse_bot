@@ -397,7 +397,15 @@ class CatalogRepository:
             rows = session.scalars(q).all()
             return [self._product_row(session, r, load_details=False) for r in rows]
 
-    def list_products_picker(self, *, q: str = "", exclude_id: int | None = None) -> list[dict[str, Any]]:
+    def list_products_picker(
+        self,
+        *,
+        q: str = "",
+        name: str = "",
+        sku: str = "",
+        code: str = "",
+        exclude_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         with Session(self.engine) as session:
             stmt = select(CatalogProduct).order_by(CatalogProduct.name)
             if exclude_id is not None:
@@ -411,6 +419,14 @@ class CatalogRepository:
                         CatalogProduct.code.ilike(pat),
                     )
                 )
+            for key, col, val in (
+                ("name", CatalogProduct.name, name),
+                ("sku", CatalogProduct.sku, sku),
+                ("code", CatalogProduct.code, code),
+            ):
+                p = _like(val)
+                if p:
+                    stmt = stmt.where(col.ilike(p))
             rows = session.scalars(stmt.limit(200)).all()
             return [
                 {
@@ -419,9 +435,55 @@ class CatalogRepository:
                     "sku": r.sku,
                     "code": r.code,
                     "is_kit": bool(r.is_kit),
+                    "image_url": r.image_url or "",
                 }
                 for r in rows
             ]
+
+    def get_prices_for_products(
+        self, product_ids: list[int], price_type_id: int
+    ) -> dict[int, str]:
+        if not product_ids:
+            return {}
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(CatalogProductPrice).where(
+                    CatalogProductPrice.price_type_id == int(price_type_id),
+                    CatalogProductPrice.product_id.in_([int(x) for x in product_ids]),
+                )
+            ).all()
+            return {int(r.product_id): r.price for r in rows}
+
+    def expand_kit_to_lines(self, product_id: int, kit_quantity: int) -> list[dict[str, Any]]:
+        qty_k = max(1, int(kit_quantity))
+        with Session(self.engine) as session:
+            kit = session.get(CatalogProduct, int(product_id))
+            if kit is None:
+                raise ValueError("Товар не найден")
+            if not kit.is_kit:
+                raise ValueError("Товар не является комплектом")
+            comps = session.scalars(
+                select(CatalogKitComponent).where(CatalogKitComponent.kit_product_id == int(product_id))
+            ).all()
+            if not comps:
+                raise ValueError("У комплекта нет составляющих")
+            out: list[dict[str, Any]] = []
+            for comp in comps:
+                p = session.get(CatalogProduct, int(comp.component_product_id))
+                if p is None:
+                    continue
+                out.append(
+                    {
+                        "product_id": int(p.id),
+                        "name": p.name,
+                        "sku": p.sku,
+                        "code": p.code,
+                        "image_url": p.image_url or "",
+                        "is_kit": bool(p.is_kit),
+                        "quantity": int(comp.quantity) * qty_k,
+                    }
+                )
+            return out
 
     def _filter_conditions(self, session: Session, filters: dict[str, str]) -> list:
         conds = []

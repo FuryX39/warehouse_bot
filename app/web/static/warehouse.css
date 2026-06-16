@@ -874,6 +874,145 @@ body.wh-body {
   overflow: auto;
 }
 
+.wh-rc-search-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+  margin-bottom: 0.75rem;
+}
+
+.wh-rc-search-btn-wrap {
+  display: flex;
+  align-items: flex-end;
+}
+
+.wh-rc-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 14rem;
+  overflow: auto;
+  margin-bottom: 0.5rem;
+}
+
+.wh-rc-search-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.wh-rc-search-item:hover {
+  background: #f5f8fc;
+}
+
+.wh-cat-thumb-inline {
+  display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.wh-cat-thumb-inline .wh-cat-thumb {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.wh-rc-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wh-rc-item-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.wh-rc-item-main {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+}
+
+.wh-rc-item-title {
+  font-weight: 600;
+}
+
+.wh-rc-item-meta {
+  font-size: 0.85rem;
+  color: var(--wh-muted, #667);
+}
+
+.wh-rc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+}
+
+.wh-rc-field input {
+  width: 6.5rem;
+}
+
+.wh-rc-comment {
+  width: 100%;
+  max-width: 40rem;
+  box-sizing: border-box;
+}
+
+.wh-rc-price-type-wrap {
+  position: relative;
+}
+
+.wh-rc-price-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  min-width: 12rem;
+  margin-top: 0.25rem;
+  padding: 0.35rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.wh-rc-price-menu.hidden {
+  display: none;
+}
+
+.wh-rc-price-type-opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.wh-rc-price-type-opt:hover {
+  background: #f0f4fa;
+}
+
 @media (max-width: 768px) {
   .wh-workspace {
     flex-direction: column;

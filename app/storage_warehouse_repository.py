@@ -360,6 +360,30 @@ class StorageWarehouseRepository:
         if not skip_recalc and self._on_sku_changed:
             self._on_sku_changed(sku_n)
 
+    def adjust_stock(
+        self, warehouse_id: int, sku: str, delta: int, *, skip_recalc: bool = False
+    ) -> None:
+        if not int(delta):
+            return
+        current = self.get_stock(int(warehouse_id), sku)
+        self.set_stock(int(warehouse_id), sku, current + int(delta), skip_recalc=skip_recalc)
+
+    def adjust_stocks(
+        self, warehouse_id: int, deltas_by_sku: dict[str, int], *, skip_recalc: bool = False
+    ) -> None:
+        if not deltas_by_sku:
+            return
+        for sku, delta in deltas_by_sku.items():
+            sku_n = str(sku or "").strip()
+            if not sku_n or not int(delta):
+                continue
+            self.adjust_stock(int(warehouse_id), sku_n, int(delta), skip_recalc=True)
+        if not skip_recalc and self._on_sku_changed:
+            for sku in deltas_by_sku:
+                sku_n = str(sku or "").strip()
+                if sku_n:
+                    self._on_sku_changed(sku_n)
+
     def list_stocks_for_warehouse(self, warehouse_id: int) -> dict[str, int]:
         with Session(self.engine) as session:
             rows = session.scalars(

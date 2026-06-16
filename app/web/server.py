@@ -88,6 +88,10 @@ from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
 from app.web.warehouse_staff_routes import register_warehouse_staff_routes
 from app.web.warehouse_storage_routes import register_warehouse_storage_routes
+from app.web.warehouse_receipts_routes import register_warehouse_receipts_routes
+from app.warehouse_receipts_repository import WarehouseReceiptsRepository
+from app.web.warehouse_writeoffs_routes import register_warehouse_writeoffs_routes
+from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.web.warehouse_stock_routes import register_warehouse_stock_routes
 
@@ -208,6 +212,12 @@ def create_dashboard_app(
 
     stock_repo = WarehouseStockRepository(settings.db_url)
     stock_repo.init_schema()
+
+    receipts_repo = WarehouseReceiptsRepository(settings.db_url, storage_repo)
+    receipts_repo.init_schema()
+
+    writeoffs_repo = WarehouseWriteoffsRepository(settings.db_url, storage_repo)
+    writeoffs_repo.init_schema()
 
     def _sync_legacy_stock_to_storage(sku: str, stock: int) -> None:
         wh_id = storage_repo.get_default_warehouse_id()
@@ -446,6 +456,22 @@ def create_dashboard_app(
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
     register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo, crm_repo)
     register_warehouse_stock_routes(app, stock_repo, require_warehouse_user)
+    register_warehouse_receipts_routes(
+        app,
+        receipts_repo,
+        catalog_repo,
+        storage_repo,
+        crm_repo,
+        require_warehouse_user,
+    )
+    register_warehouse_writeoffs_routes(
+        app,
+        writeoffs_repo,
+        catalog_repo,
+        storage_repo,
+        crm_repo,
+        require_warehouse_user,
+    )
 
     @app.get("/fbs")
     async def fbs_page(request: Request):
