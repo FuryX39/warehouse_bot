@@ -862,6 +862,8 @@
   var scheduleMonth = 0;
   var scheduleUserId = null;
   var scheduleEmployees = [];
+  var scheduleCalendarMounted = false;
+  var scheduleDaysCache = {};
 
   var SCHEDULE_MONTH_NAMES = [
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -908,29 +910,122 @@
 
   function loadScheduleEmployees() {
     return fetchJson("/api/warehouse/employees?is_active=1").then(function (data) {
-      scheduleEmployees = data.employees || [];
+      var all = data.employees || [];
+      var packers = all.filter(function (emp) {
+        return /упаков/i.test(String(emp.group_name || ""));
+      });
+      scheduleEmployees = packers.length ? packers : all;
       return scheduleEmployees;
     });
   }
 
-  function renderScheduleCalendarBody(root) {
-    var calWrap = root.querySelector("#whStaffScheduleCal");
-    if (!calWrap) return;
-    if (!scheduleUserId) {
-      calWrap.innerHTML = '<p class="wh-msg">Выберите сотрудника в списке выше.</p>';
-      return;
+  function scheduleShortName(name) {
+    var parts = String(name || "").trim().split(/\s+/);
+    if (!parts.length || !parts[0]) return "—";
+    if (parts.length === 1) return parts[0];
+    return parts[0] + " " + parts[1].charAt(0) + ".";
+  }
+
+  function updateScheduleMonthTitle(root) {
+    var title = root.querySelector("#whStaffCalTitle");
+    if (title) {
+      title.textContent = SCHEDULE_MONTH_NAMES[scheduleMonth - 1] + " " + scheduleYear;
     }
-    calWrap.innerHTML = '<p class="wh-msg">Загрузка календаря…</p>';
-    fetchJson(
+  }
+
+  function applyScheduleSelectionHighlight(root) {
+    root.querySelectorAll(".wh-staff-cal-name").forEach(function (el) {
+      var uid = parseInt(el.getAttribute("data-user-id"), 10);
+      el.classList.toggle("wh-staff-cal-name--selected", scheduleUserId && uid === scheduleUserId);
+    });
+  }
+
+  function renderScheduleDayCell(dayNum) {
+    var key = scheduleDayKey(scheduleYear, scheduleMonth, dayNum);
+    var info = scheduleDaysCache[key] || {};
+    var staff = info.staff || [];
+    var hasShift = staff.length > 0;
+    var namesHtml = staff
+      .map(function (s) {
+        var selected = scheduleUserId === s.id ? " wh-staff-cal-name--selected" : "";
+        return (
+          '<span class="wh-staff-cal-name' +
+          selected +
+          '" data-user-id="' +
+          esc(s.id) +
+          '">' +
+          esc(scheduleShortName(s.name)) +
+          "</span>"
+        );
+      })
+      .join("");
+    var shiftClass = hasShift ? " wh-staff-cal-cell--has-shift" : "";
+    return (
+      '<button type="button" class="wh-task-cal-cell wh-staff-cal-cell' +
+      shiftClass +
+      '" data-date="' +
+      esc(key) +
+      '">' +
+      '<span class="wh-task-cal-day">' +
+      esc(dayNum) +
+      "</span>" +
+      '<div class="wh-staff-cal-names">' +
+      namesHtml +
+      "</div>" +
+      "</button>"
+    );
+  }
+
+  function bindScheduleDayClicks(root) {
+    root.querySelectorAll(".wh-staff-cal-cell[data-date]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var date = btn.getAttribute("data-date");
+        var msg = root.querySelector("#whStaffScheduleMsg");
+        if (!date) return;
+        if (!scheduleUserId) {
+          if (msg) {
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent = "Сначала выберите упаковщика в списке выше.";
+          }
+          return;
+        }
+        if (msg) {
+          msg.textContent = "";
+          msg.className = "wh-msg";
+        }
+        btn.disabled = true;
+        fetchJson("/api/warehouse/employees/schedule/toggle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: scheduleUserId, date: date }),
+        })
+          .then(function () {
+            return refreshScheduleGrid(root);
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            if (msg) {
+              msg.className = "wh-msg wh-msg-error";
+              msg.textContent = err.message || "Ошибка сохранения";
+            }
+          });
+      });
+    });
+  }
+
+  function refreshScheduleGrid(root) {
+    var grid = root.querySelector("#whStaffScheduleGrid");
+    if (!grid) return Promise.resolve();
+    grid.innerHTML = '<div class="wh-task-cal-weekday" style="grid-column:1/-1">Загрузка…</div>';
+    return fetchJson(
       "/api/warehouse/employees/schedule/calendar?year=" +
         encodeURIComponent(scheduleYear) +
         "&month=" +
-        encodeURIComponent(scheduleMonth) +
-        "&user_id=" +
-        encodeURIComponent(scheduleUserId)
+        encodeURIComponent(scheduleMonth)
     )
       .then(function (data) {
-        var days = data.days || {};
+        scheduleDaysCache = data.days || {};
+        updateScheduleMonthTitle(root);
         var cells = buildScheduleCalendarCells(scheduleYear, scheduleMonth);
         var weekdayHead = SCHEDULE_WEEKDAY_NAMES.map(function (name) {
           return '<div class="wh-task-cal-weekday">' + esc(name) + "</div>";
@@ -940,105 +1035,56 @@
             if (!dayNum) {
               return '<div class="wh-task-cal-cell wh-task-cal-cell--empty"></div>';
             }
-            var key = scheduleDayKey(scheduleYear, scheduleMonth, dayNum);
-            var info = days[key] || {};
-            var assigned = !!info.assigned;
-            var staffCount = info.staff_count || 0;
-            var staffNames = (info.staff || [])
-              .map(function (s) {
-                return s.name;
-              })
-              .join(", ");
-            var title = staffCount > 0 ? "На смене: " + staffNames : "Никого на смене";
-            var extraClass = assigned ? " wh-staff-cal-cell--assigned" : "";
-            var countHtml =
-              staffCount > 1
-                ? '<span class="wh-staff-cal-count" title="' + esc(title) + '">' + esc(staffCount) + " чел.</span>"
-                : assigned
-                  ? '<span class="wh-staff-cal-mark" title="' + esc(title) + '">смена</span>'
-                  : "";
-            return (
-              '<button type="button" class="wh-task-cal-cell wh-staff-cal-cell' +
-              extraClass +
-              '" data-date="' +
-              esc(key) +
-              '" title="' +
-              esc(title) +
-              '">' +
-              '<span class="wh-task-cal-day">' +
-              esc(dayNum) +
-              "</span>" +
-              countHtml +
-              "</button>"
-            );
+            return renderScheduleDayCell(dayNum);
           })
           .join("");
-
-        calWrap.innerHTML =
-          '<div class="wh-task-cal-toolbar">' +
-          '<button type="button" class="wh-btn" id="whStaffCalPrev">&larr;</button>' +
-          "<h3>" +
-          esc(SCHEDULE_MONTH_NAMES[scheduleMonth - 1]) +
-          " " +
-          esc(scheduleYear) +
-          "</h3>" +
-          '<button type="button" class="wh-btn" id="whStaffCalNext">&rarr;</button>' +
-          '<button type="button" class="wh-btn" id="whStaffCalToday">Сегодня</button>' +
-          "</div>" +
-          '<div class="wh-task-cal-grid">' +
-          weekdayHead +
-          cellHtml +
-          "</div>" +
-          '<p class="wh-muted">Клик по дню — назначить или снять смену выбранного сотрудника.</p>';
-
-        calWrap.querySelector("#whStaffCalPrev").addEventListener("click", function () {
-          shiftScheduleMonth(-1);
-          renderScheduleCalendarBody(root);
-        });
-        calWrap.querySelector("#whStaffCalNext").addEventListener("click", function () {
-          shiftScheduleMonth(1);
-          renderScheduleCalendarBody(root);
-        });
-        calWrap.querySelector("#whStaffCalToday").addEventListener("click", function () {
-          var now = new Date();
-          scheduleYear = now.getFullYear();
-          scheduleMonth = now.getMonth() + 1;
-          renderScheduleCalendarBody(root);
-        });
-        calWrap.querySelectorAll(".wh-staff-cal-cell[data-date]").forEach(function (btn) {
-          btn.addEventListener("click", function () {
-            var date = btn.getAttribute("data-date");
-            if (!date || !scheduleUserId) return;
-            btn.disabled = true;
-            fetchJson("/api/warehouse/employees/schedule/toggle", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ user_id: scheduleUserId, date: date }),
-            })
-              .then(function () {
-                renderScheduleCalendarBody(root);
-              })
-              .catch(function (err) {
-                btn.disabled = false;
-                var msg = root.querySelector("#whStaffScheduleMsg");
-                if (msg) {
-                  msg.className = "wh-msg wh-msg-error";
-                  msg.textContent = err.message || "Ошибка сохранения";
-                }
-              });
-          });
-        });
+        grid.innerHTML = weekdayHead + cellHtml;
+        bindScheduleDayClicks(root);
+        applyScheduleSelectionHighlight(root);
       })
       .catch(function (err) {
-        calWrap.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+        grid.innerHTML =
+          '<div class="wh-task-cal-weekday" style="grid-column:1/-1;color:#c00">' +
+          esc(err.message) +
+          "</div>";
       });
+  }
+
+  function mountScheduleCalendar(root) {
+    var calWrap = root.querySelector("#whStaffScheduleCal");
+    if (!calWrap || scheduleCalendarMounted) return;
+    calWrap.innerHTML =
+      '<div class="wh-task-cal-toolbar">' +
+      '<button type="button" class="wh-btn" id="whStaffCalPrev">&larr;</button>' +
+      '<h3 id="whStaffCalTitle"></h3>' +
+      '<button type="button" class="wh-btn" id="whStaffCalNext">&rarr;</button>' +
+      '<button type="button" class="wh-btn" id="whStaffCalToday">Сегодня</button>' +
+      "</div>" +
+      '<div class="wh-task-cal-grid" id="whStaffScheduleGrid"></div>' +
+      '<p class="wh-muted">Календарь показывает все смены упаковщиков. Выберите человека и кликните по дню, чтобы назначить или снять смену.</p>';
+    calWrap.querySelector("#whStaffCalPrev").addEventListener("click", function () {
+      shiftScheduleMonth(-1);
+      refreshScheduleGrid(root);
+    });
+    calWrap.querySelector("#whStaffCalNext").addEventListener("click", function () {
+      shiftScheduleMonth(1);
+      refreshScheduleGrid(root);
+    });
+    calWrap.querySelector("#whStaffCalToday").addEventListener("click", function () {
+      var now = new Date();
+      scheduleYear = now.getFullYear();
+      scheduleMonth = now.getMonth() + 1;
+      refreshScheduleGrid(root);
+    });
+    scheduleCalendarMounted = true;
+    updateScheduleMonthTitle(root);
   }
 
   function renderScheduleEmployeePicker(root) {
     var listEl = root.querySelector("#whStaffScheduleList");
     if (!listEl) return;
     if (!scheduleEmployees.length) {
-      listEl.innerHTML = '<p class="wh-msg">Нет активных сотрудников.</p>';
+      listEl.innerHTML = '<p class="wh-msg">Нет активных упаковщиков. Добавьте сотрудников или укажите группу «Упаковщики».</p>';
       return;
     }
     listEl.innerHTML = scheduleEmployees
@@ -1058,9 +1104,15 @@
       .join("");
     listEl.querySelectorAll(".wh-staff-schedule-pick").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        scheduleUserId = parseInt(btn.getAttribute("data-id"), 10) || null;
+        var id = parseInt(btn.getAttribute("data-id"), 10) || null;
+        scheduleUserId = scheduleUserId === id ? null : id;
         renderScheduleEmployeePicker(root);
-        renderScheduleCalendarBody(root);
+        applyScheduleSelectionHighlight(root);
+        var msg = root.querySelector("#whStaffScheduleMsg");
+        if (msg) {
+          msg.textContent = "";
+          msg.className = "wh-msg";
+        }
       });
     });
   }
@@ -1073,21 +1125,23 @@
     var now = new Date();
     if (!scheduleYear) scheduleYear = now.getFullYear();
     if (!scheduleMonth) scheduleMonth = now.getMonth() + 1;
+    scheduleCalendarMounted = false;
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     loadScheduleEmployees()
       .then(function () {
         root.innerHTML =
           '<div class="wh-staff-schedule">' +
-          '<p class="wh-muted wh-task-summary-hint">Выберите сотрудника и отметьте на календаре дни его работы. На одну дату можно назначить нескольких человек.</p>' +
+          '<p class="wh-muted wh-task-summary-hint">График смен упаковщиков. В каждом дне отображаются все назначенные на смену. На одну дату можно назначить нескольких человек.</p>' +
           '<div class="wh-staff-schedule-picker-wrap">' +
-          '<h4 class="wh-crm-section-title">Сотрудники</h4>' +
+          '<h4 class="wh-crm-section-title">Упаковщики</h4>' +
           '<div class="wh-staff-schedule-list" id="whStaffScheduleList"></div>' +
           "</div>" +
           '<div id="whStaffScheduleCal"></div>' +
           '<p class="wh-msg" id="whStaffScheduleMsg"></p>' +
           "</div>";
+        mountScheduleCalendar(root);
         renderScheduleEmployeePicker(root);
-        renderScheduleCalendarBody(root);
+        return refreshScheduleGrid(root);
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";

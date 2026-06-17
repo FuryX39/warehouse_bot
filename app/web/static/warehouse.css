@@ -837,6 +837,7 @@ body.wh-body {
   text-align: left;
   font: inherit;
   width: 100%;
+  min-height: 5.5rem;
 }
 
 .wh-staff-cal-cell:disabled {
@@ -844,9 +845,33 @@ body.wh-body {
   cursor: wait;
 }
 
-.wh-staff-cal-cell--assigned {
-  background: #e8f1ff;
-  border-color: #93c5fd;
+.wh-staff-cal-cell--has-shift {
+  background: #f8fafc;
+}
+
+.wh-staff-cal-names {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.15rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.wh-staff-cal-name {
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--wh-text, #1a1a1a);
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  background: #e8eef4;
+  word-break: break-word;
+}
+
+.wh-staff-cal-name--selected {
+  background: var(--wh-primary, #2563eb);
+  color: #fff;
+  font-weight: 600;
 }
 
 .wh-staff-cal-mark {
