@@ -342,13 +342,24 @@ def _register_on_prefix(
         params = request.query_params
         filters = _filters_from_query(params)
         limit, offset = _pagination_from_query(params)
-        rows = tasks_repo.list_tasks(filters, limit=limit, offset=offset)
+        sort_by = str(params.get("sort_by") or "end_date").strip()
+        sort_dir = str(params.get("sort_dir") or "desc").strip()
+        rows = tasks_repo.list_tasks(
+            filters,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
         total = tasks_repo.count_tasks(filters)
+        sort_key, sort_asc = tasks_repo.parse_list_sort(sort_by, sort_dir)
         return {
             "tasks": [tasks_repo.task_to_dict(r) for r in rows],
             "total": total,
             "limit": limit,
             "offset": offset,
+            "sort_by": sort_key,
+            "sort_dir": "asc" if sort_asc else "desc",
         }
 
     @app.get(f"{prefix}/{{task_id}}")

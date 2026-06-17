@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import ForeignKey, Integer, String, delete, func, nulls_last, or_, select
+from sqlalchemy import ForeignKey, Integer, String, delete, func, nulls_first, nulls_last, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
-from app.crm_repository import CrmRepository
+from app.crm_repository import CrmCounterparty, CrmRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
@@ -31,6 +31,20 @@ ENTITY_LABELS = {
     ENTITY_RECEIPT: "Оприходование",
     ENTITY_WRITEOFF: "Списание",
 }
+
+TASK_LIST_SORT_FIELDS = frozenset(
+    {
+        "id",
+        "task_type",
+        "author",
+        "counterparty",
+        "assignees",
+        "documents",
+        "comment",
+        "start_date",
+        "end_date",
+    }
+)
 
 
 class WarehouseTaskType(_Base):
@@ -499,21 +513,99 @@ class WarehouseTasksRepository:
         }
 
     def list_tasks(
-        self, filters: dict[str, str], *, limit: int = 500, offset: int = 0
+        self,
+        filters: dict[str, str],
+        *,
+        limit: int = 500,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_dir: str | None = None,
     ) -> list[TaskRow]:
         limit = max(1, min(2000, int(limit)))
         offset = max(0, int(offset))
+        sort_key, sort_asc = self.parse_list_sort(sort_by, sort_dir)
         with Session(self.engine) as session:
-            q = select(WarehouseTask).order_by(
-                nulls_last(WarehouseTask.end_date_ts.desc()),
-                WarehouseTask.id.desc(),
-            )
+            q = select(WarehouseTask)
             conds = self._list_filter_conditions(session, filters)
             if conds:
                 q = q.where(*conds)
+            q = self._apply_list_sort(q, sort_key, sort_asc)
             q = q.limit(limit).offset(offset)
             rows = session.scalars(q).all()
             return [self._task_row(session, r) for r in rows]
+
+    def parse_list_sort(self, sort_by: str | None, sort_dir: str | None) -> tuple[str, bool]:
+        key = str(sort_by or "end_date").strip().lower()
+        if key not in TASK_LIST_SORT_FIELDS:
+            key = "end_date"
+        asc = str(sort_dir or "desc").strip().lower() == "asc"
+        return key, asc
+
+    def _apply_list_sort(self, q, sort_key: str, asc: bool):
+        from sqlalchemy import asc as sa_asc
+        from sqlalchemy import desc as sa_desc
+
+        direction = sa_asc if asc else sa_desc
+        tie = direction(WarehouseTask.id)
+
+        if sort_key == "id":
+            return q.order_by(direction(WarehouseTask.id))
+
+        if sort_key == "task_type":
+            q = q.outerjoin(
+                WarehouseTaskType, WarehouseTask.task_type_id == WarehouseTaskType.id
+            )
+            return q.order_by(direction(WarehouseTaskType.name), tie)
+
+        if sort_key == "author":
+            q = q.outerjoin(
+                WarehouseUser, WarehouseTask.created_by_user_id == WarehouseUser.id
+            )
+            return q.order_by(
+                direction(func.coalesce(WarehouseUser.display_name, WarehouseUser.login, "")),
+                tie,
+            )
+
+        if sort_key == "counterparty":
+            q = q.outerjoin(
+                CrmCounterparty, WarehouseTask.counterparty_id == CrmCounterparty.id
+            )
+            return q.order_by(direction(func.coalesce(CrmCounterparty.full_name, "")), tie)
+
+        if sort_key == "assignees":
+            assignee_name = (
+                select(func.min(func.coalesce(WarehouseUser.display_name, WarehouseUser.login, "")))
+                .select_from(WarehouseTaskAssignee)
+                .join(WarehouseUser, WarehouseUser.id == WarehouseTaskAssignee.user_id)
+                .where(WarehouseTaskAssignee.task_id == WarehouseTask.id)
+                .correlate(WarehouseTask)
+                .scalar_subquery()
+            )
+            col = direction(assignee_name)
+            return q.order_by(nulls_last(col) if asc else nulls_first(col), tie)
+
+        if sort_key == "documents":
+            doc_count = (
+                select(func.count())
+                .select_from(WarehouseTaskDocument)
+                .where(WarehouseTaskDocument.task_id == WarehouseTask.id)
+                .correlate(WarehouseTask)
+                .scalar_subquery()
+            )
+            return q.order_by(direction(doc_count), tie)
+
+        if sort_key == "comment":
+            return q.order_by(direction(WarehouseTask.comment), tie)
+
+        if sort_key == "start_date":
+            col = direction(WarehouseTask.start_date_ts)
+            return q.order_by(
+                (nulls_first if asc else nulls_last)(col),
+                tie,
+            )
+
+        col = direction(WarehouseTask.end_date_ts)
+        return q.order_by((nulls_first if asc else nulls_last)(col), tie)
 
     def count_tasks(self, filters: dict[str, str]) -> int:
         with Session(self.engine) as session:

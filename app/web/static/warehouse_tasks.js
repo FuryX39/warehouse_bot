@@ -9,6 +9,7 @@
     current_user_name: "",
   };
   var listFilters = {};
+  var listSort = { by: "end_date", dir: "desc" };
   var filterPanelOpen = false;
   var editingId = null;
   var formAssigneeIds = [];
@@ -93,7 +94,18 @@
     Object.keys(listFilters).forEach(function (k) {
       if (listFilters[k]) parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(listFilters[k]));
     });
+    if (listSort.by) {
+      parts.push("sort_by=" + encodeURIComponent(listSort.by));
+      parts.push("sort_dir=" + encodeURIComponent(listSort.dir || "desc"));
+    }
     return parts.length ? "?" + parts.join("&") : "";
+  }
+
+  function sortableHeader(key, label) {
+    var active = listSort.by === key;
+    var cls = "wh-th-sortable";
+    if (active) cls += listSort.dir === "asc" ? " wh-sorted-asc" : " wh-sorted-desc";
+    return '<th class="' + cls + '" data-sort="' + esc(key) + '">' + esc(label) + "</th>";
   }
 
   function readFilterPanel(root) {
@@ -813,6 +825,8 @@
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     fetchJson("/api/warehouse/tasks" + filtersQuery())
       .then(function (data) {
+        if (data.sort_by) listSort.by = data.sort_by;
+        if (data.sort_dir) listSort.dir = data.sort_dir;
         var rows = (data.tasks || [])
           .map(function (t) {
             return (
@@ -839,7 +853,15 @@
           '<div id="whTkListWrap">' +
           (rows
             ? '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-              "<th>№</th><th>Тип</th><th>Автор</th><th>Контрагент</th><th>Ответственные</th><th>Документы</th><th>Комментарий</th><th>Начало</th><th>Окончание</th>" +
+              sortableHeader("id", "№") +
+              sortableHeader("task_type", "Тип") +
+              sortableHeader("author", "Автор") +
+              sortableHeader("counterparty", "Контрагент") +
+              sortableHeader("assignees", "Ответственные") +
+              sortableHeader("documents", "Документы") +
+              sortableHeader("comment", "Комментарий") +
+              sortableHeader("start_date", "Начало") +
+              sortableHeader("end_date", "Окончание") +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Задачи не найдены.</p>') +
           "</div>";
@@ -882,6 +904,20 @@
         listFilters.q = e.target.value.trim();
         renderList();
       }
+    });
+    root.querySelectorAll(".wh-th-sortable").forEach(function (th) {
+      th.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var key = th.getAttribute("data-sort");
+        if (!key) return;
+        if (listSort.by === key) {
+          listSort.dir = listSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          listSort.by = key;
+          listSort.dir = key === "id" || key === "documents" ? "desc" : "asc";
+        }
+        renderList();
+      });
     });
     root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
       tr.style.cursor = "pointer";
