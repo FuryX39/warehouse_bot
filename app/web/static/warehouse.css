@@ -745,6 +745,61 @@ body.wh-body {
   margin: 0 0 1rem;
 }
 
+.wh-task-summary-settings {
+  margin-bottom: 1rem;
+}
+
+.wh-task-summary-default-coef {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.wh-task-summary-default-coef input {
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+}
+
+.wh-task-summary-grid .wh-task-cal-cell {
+  min-height: 6.5rem;
+}
+
+.wh-task-summary-cell {
+  gap: 0.25rem;
+}
+
+.wh-task-cal-staff {
+  font-size: 0.72rem;
+  color: var(--wh-muted, #666);
+}
+
+.wh-task-cal-coef-wrap {
+  font-size: 0.72rem;
+  color: var(--wh-muted, #666);
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.wh-task-cal-coef {
+  width: 2.75rem;
+  padding: 0.1rem 0.25rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.wh-task-cal-hours {
+  font-size: 0.85rem;
+  color: var(--wh-primary, #2563eb);
+  font-weight: 600;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
 .wh-task-cal-toolbar {
   display: flex;
   align-items: center;

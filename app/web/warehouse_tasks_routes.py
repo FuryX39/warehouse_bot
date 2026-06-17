@@ -9,6 +9,8 @@ from fastapi import Depends, HTTPException, Request
 
 from app.web.warehouse_tasks_api_auth import TasksApiActor, resolve_created_by
 from app.crm_repository import CrmRepository
+from app.warehouse_schedule_repository import WarehouseScheduleRepository
+from app.warehouse_task_summary_repository import WarehouseTaskSummaryRepository
 from app.warehouse_tasks_repository import ENTITY_LABELS, WarehouseTasksRepository
 from app.warehouse_users_repository import WarehouseUsersRepository
 
@@ -20,12 +22,23 @@ def register_warehouse_tasks_routes(
     tasks_repo: WarehouseTasksRepository,
     users_repo: WarehouseUsersRepository,
     crm_repo: CrmRepository,
+    schedule_repo: WarehouseScheduleRepository,
+    summary_repo: WarehouseTaskSummaryRepository,
     require_tasks_access,
 ) -> None:
     prefixes = ("/api/warehouse/tasks", "/api/v1/tasks")
 
     for prefix in prefixes:
-        _register_on_prefix(app, prefix, tasks_repo, users_repo, crm_repo, require_tasks_access)
+        _register_on_prefix(
+            app,
+            prefix,
+            tasks_repo,
+            users_repo,
+            crm_repo,
+            schedule_repo,
+            summary_repo,
+            require_tasks_access,
+        )
 
 
 def _register_on_prefix(
@@ -34,6 +47,8 @@ def _register_on_prefix(
     tasks_repo: WarehouseTasksRepository,
     users_repo: WarehouseUsersRepository,
     crm_repo: CrmRepository,
+    schedule_repo: WarehouseScheduleRepository,
+    summary_repo: WarehouseTaskSummaryRepository,
     require_tasks_access,
 ) -> None:
     @app.get(f"{prefix}/schema")
@@ -233,9 +248,59 @@ def _register_on_prefix(
             raise HTTPException(status_code=400, detail="Некорректные year или month") from exc
         filters = _filters_from_query(params, skip_pagination=True)
         try:
-            return tasks_repo.cost_summary_calendar(year=year, month=month, filters=filters)
+            data = tasks_repo.cost_summary_calendar(year=year, month=month, filters=filters)
+            staff_counts = schedule_repo.staff_counts_for_month(year, month)
+            extra = summary_repo.enrich_summary_days(
+                year=year,
+                month=month,
+                days=data.get("days") or {},
+                staff_counts=staff_counts,
+            )
+            data["default_coefficient"] = extra["default_coefficient"]
+            data["days"] = extra["days"]
+            return data
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put(f"{prefix}/summary/default-coefficient")
+    async def api_tasks_summary_default_coefficient(
+        body: dict,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        try:
+            value = summary_repo.set_default_coefficient(body.get("coefficient"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "default_coefficient": value}
+
+    @app.put(f"{prefix}/summary/day-coefficient")
+    async def api_tasks_summary_day_coefficient(
+        body: dict,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        work_date = str(body.get("date") or body.get("work_date") or "").strip()
+        if not work_date:
+            raise HTTPException(status_code=400, detail="date обязателен")
+        raw_coef = body.get("coefficient")
+        try:
+            if raw_coef is None or str(raw_coef).strip() == "":
+                summary_repo.set_day_coefficient(work_date, None)
+                effective = summary_repo.get_default_coefficient()
+                return {
+                    "ok": True,
+                    "date": work_date,
+                    "coefficient_override": None,
+                    "coefficient": effective,
+                }
+            value = summary_repo.set_day_coefficient(work_date, raw_coef)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "date": work_date,
+            "coefficient_override": value,
+            "coefficient": value,
+        }
 
     @app.get(f"{prefix}/planning/summary")
     async def api_tasks_planning_summary(

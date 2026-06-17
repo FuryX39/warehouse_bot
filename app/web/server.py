@@ -84,6 +84,7 @@ from app.warehouse_permissions import (
 )
 from app.warehouse_roles_repository import WarehouseRolesRepository
 from app.warehouse_schedule_repository import WarehouseScheduleRepository
+from app.warehouse_task_summary_repository import WarehouseTaskSummaryRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
@@ -209,6 +210,9 @@ def create_dashboard_app(
 
     warehouse_schedule_repo = WarehouseScheduleRepository(settings.db_url)
     warehouse_schedule_repo.init_schema()
+
+    warehouse_task_summary_repo = WarehouseTaskSummaryRepository(settings.db_url)
+    warehouse_task_summary_repo.init_schema()
 
     crm_repo = CrmRepository(settings.db_url)
     crm_repo.init_schema()
@@ -515,6 +519,8 @@ def create_dashboard_app(
         tasks_repo,
         warehouse_users_repo,
         crm_repo,
+        warehouse_schedule_repo,
+        warehouse_task_summary_repo,
         require_tasks_access,
     )
 

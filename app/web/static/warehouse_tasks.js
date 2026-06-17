@@ -213,6 +213,78 @@
     return s.replace(".", ",");
   }
 
+  function formatHours(val) {
+    if (val === null || val === undefined) return "";
+    var n = Number(val);
+    if (isNaN(n)) return "";
+    if (n === 0) return "0 ч";
+    var s = n.toFixed(2).replace(/\.?0+$/, "");
+    return s.replace(".", ",") + " ч";
+  }
+
+  function parseCoefInput(raw) {
+    return String(raw || "").trim().replace(",", ".");
+  }
+
+  function saveSummaryDefaultCoefficient(root, value, onDone) {
+    fetchJson("/api/warehouse/tasks/summary/default-coefficient", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coefficient: value }),
+    })
+      .then(function () {
+        if (onDone) onDone();
+      })
+      .catch(function (err) {
+        var msg = root.querySelector("#whTkSummaryMsg");
+        if (msg) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка сохранения коэффициента";
+        }
+      });
+  }
+
+  function saveSummaryDayCoefficient(root, date, value, tab, item) {
+    var body =
+      value === "" ? { date: date, coefficient: null } : { date: date, coefficient: value };
+    return fetchJson("/api/warehouse/tasks/summary/day-coefficient", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function () {
+        renderSummaryCalendar(tab, item);
+      })
+      .catch(function (err) {
+        var msg = root.querySelector("#whTkSummaryMsg");
+        if (msg) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка сохранения коэффициента";
+        }
+      });
+  }
+
+  function bindSummaryCoefficientInputs(root, tab, item) {
+    var defaultInput = root.querySelector("#whTkDefaultCoef");
+    if (defaultInput) {
+      defaultInput.addEventListener("change", function () {
+        var val = parseCoefInput(defaultInput.value);
+        if (!val) return;
+        saveSummaryDefaultCoefficient(root, val, function () {
+          renderSummaryCalendar(tab, item);
+        });
+      });
+    }
+    root.querySelectorAll(".wh-task-cal-coef").forEach(function (input) {
+      input.addEventListener("change", function () {
+        var date = input.getAttribute("data-date");
+        if (!date) return;
+        var val = parseCoefInput(input.value);
+        saveSummaryDayCoefficient(root, date, val, tab, item);
+      });
+    });
+  }
+
   function buildCalendarCells(year, month) {
     var first = new Date(year, month - 1, 1);
     var startDow = (first.getDay() + 6) % 7;
@@ -258,6 +330,7 @@
     )
       .then(function (data) {
         var days = data.days || {};
+        var defaultCoef = data.default_coefficient != null ? data.default_coefficient : 1;
         var cells = buildCalendarCells(summaryYear, summaryMonth);
         var weekdayHead = WEEKDAY_NAMES.map(function (name) {
           return "<div class=\"wh-task-cal-weekday\">" + esc(name) + "</div>";
@@ -269,18 +342,42 @@
             }
             var key = dayKey(summaryYear, summaryMonth, dayNum);
             var info = days[key] || {};
-            var cost = formatCost(info.total_cost);
-            var costHtml = cost
-              ? '<span class="wh-task-cal-cost" title="Сумма стоимостей групп товаров">' + esc(cost) + "</span>"
-              : "";
+            var staffCount = info.staff_count || 0;
+            var hours = formatHours(info.hours);
+            var hoursHtml = hours
+              ? '<span class="wh-task-cal-hours" title="Сумма документов ÷ сотрудники ÷ коэффициент">' +
+                esc(hours) +
+                "</span>"
+              : staffCount > 0 && (info.total_cost || 0) > 0
+                ? '<span class="wh-task-cal-hours wh-muted">—</span>'
+                : "";
+            var staffHtml =
+              staffCount > 0
+                ? '<span class="wh-task-cal-staff" title="Сотрудников на смене">' +
+                  esc(staffCount) +
+                  " чел.</span>"
+                : '<span class="wh-task-cal-staff wh-muted">0 чел.</span>';
+            var coefValue =
+              info.coefficient_override != null && info.coefficient_override !== undefined
+                ? String(info.coefficient_override).replace(".", ",")
+                : "";
+            var coefPlaceholder = String(defaultCoef).replace(".", ",");
             var tasksHint =
               info.task_count > 0
-                ? ' title="Задач: ' + esc(info.task_count) + '"'
-                : "";
+                ? "Задач: " + (info.task_count || 0) + ". Сумма: " + formatCost(info.total_cost)
+                : "Нет задач с датой начала";
             return (
-              '<div class="wh-task-cal-cell"' + tasksHint + ">" +
+              '<div class="wh-task-cal-cell wh-task-summary-cell" title="' + esc(tasksHint) + '">' +
               '<span class="wh-task-cal-day">' + esc(dayNum) + "</span>" +
-              costHtml +
+              staffHtml +
+              '<label class="wh-task-cal-coef-wrap">кф. <input type="text" class="wh-task-cal-coef" data-date="' +
+              esc(key) +
+              '" value="' +
+              esc(coefValue) +
+              '" placeholder="' +
+              esc(coefPlaceholder) +
+              '" inputmode="decimal" /></label>' +
+              hoursHtml +
               "</div>"
             );
           })
@@ -288,17 +385,25 @@
 
         root.innerHTML =
           '<div class="wh-task-summary">' +
-          '<p class="wh-muted wh-task-summary-hint">Сумма по стоимостям групп товаров из документов задач. Учитывается только <strong>дата начала</strong> задачи.</p>' +
+          '<p class="wh-muted wh-task-summary-hint">Часы = сумма стоимостей групп товаров из документов задач ÷ количество сотрудников на смену ÷ коэффициент. Учитывается только <strong>дата начала</strong> задачи.</p>' +
+          '<div class="wh-task-summary-settings">' +
+          '<label class="wh-task-summary-default-coef">Коэффициент по умолчанию ' +
+          '<input type="text" id="whTkDefaultCoef" value="' +
+          esc(String(defaultCoef).replace(".", ",")) +
+          '" inputmode="decimal" /></label>' +
+          "</div>" +
           '<div class="wh-task-cal-toolbar">' +
           '<button type="button" class="wh-btn" id="whTkCalPrev">&larr;</button>' +
           "<h3>" + esc(MONTH_NAMES[summaryMonth - 1]) + " " + esc(summaryYear) + "</h3>" +
           '<button type="button" class="wh-btn" id="whTkCalNext">&rarr;</button>' +
           '<button type="button" class="wh-btn" id="whTkCalToday">Сегодня</button>' +
           "</div>" +
-          '<div class="wh-task-cal-grid">' + weekdayHead + cellHtml + "</div>" +
+          '<div class="wh-task-cal-grid wh-task-summary-grid">' + weekdayHead + cellHtml + "</div>" +
           '<p class="wh-muted">Задач с датой начала в месяце: ' + esc(data.total_tasks || 0) + "</p>" +
+          '<p class="wh-msg" id="whTkSummaryMsg"></p>' +
           "</div>";
 
+        bindSummaryCoefficientInputs(root, tab, item);
         root.querySelector("#whTkCalPrev").addEventListener("click", function () {
           shiftSummaryMonth(-1);
           renderSummaryCalendar(tab, item);

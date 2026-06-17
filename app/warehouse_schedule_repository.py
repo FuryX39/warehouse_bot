@@ -6,7 +6,7 @@ import calendar
 import time
 from typing import Any
 
-from sqlalchemy import Integer, String, UniqueConstraint, delete, select
+from sqlalchemy import Integer, String, UniqueConstraint, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.warehouse_users_repository import WarehouseUser
@@ -113,6 +113,22 @@ class WarehouseScheduleRepository:
             "user_id": selected_id,
             "days": days,
         }
+
+    def staff_counts_for_month(self, year: int, month: int) -> dict[str, int]:
+        date_from, date_to = _month_bounds(year, month)
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(
+                    WarehouseEmployeeScheduleEntry.work_date,
+                    func.count(WarehouseEmployeeScheduleEntry.id),
+                )
+                .where(
+                    WarehouseEmployeeScheduleEntry.work_date >= date_from,
+                    WarehouseEmployeeScheduleEntry.work_date <= date_to,
+                )
+                .group_by(WarehouseEmployeeScheduleEntry.work_date)
+            ).all()
+        return {str(work_date): int(count) for work_date, count in rows}
 
     def toggle_day(self, user_id: int, work_date: str) -> bool:
         work_date = _validate_work_date(work_date)
