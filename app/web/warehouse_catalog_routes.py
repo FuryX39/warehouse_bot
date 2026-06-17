@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 from fastapi import Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from app.catalog_bulk_import import build_import_template, import_products_from_xlsx
+from app.catalog_price_type_import import (
+    build_price_type_prices_template,
+    import_price_type_prices_from_xlsx,
+)
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
@@ -94,6 +99,67 @@ def register_warehouse_catalog_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"updated": updated}
+
+    @app.get("/api/warehouse/catalog/price-types/import/template")
+    async def api_catalog_price_type_import_template(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        try:
+            content = await asyncio.to_thread(build_price_type_prices_template, catalog_repo)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="price_type_prices_template.xlsx"',
+            },
+        )
+
+    @app.post("/api/warehouse/catalog/price-types/import", response_model=None)
+    async def api_catalog_price_type_import(
+        file: UploadFile = File(...),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ):
+        if crm_repo is None:
+            raise HTTPException(status_code=500, detail="CRM не подключён")
+        data = await file.read()
+        if len(data) > _IMPORT_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 10 МБ)")
+        if not data:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        filename = (file.filename or "").lower()
+        if not filename.endswith(".xlsx"):
+            raise HTTPException(status_code=400, detail="Нужен файл Excel в формате .xlsx")
+        try:
+            result = await asyncio.to_thread(
+                import_price_type_prices_from_xlsx, catalog_repo, crm_repo, data
+            )
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "ok": result.failed == 0,
+            "price_type_id": result.price_type_id,
+            "price_type_name": result.price_type_name,
+            "created_price_type": result.created_price_type,
+            "updated": result.updated,
+            "failed": result.failed,
+            "total_rows": result.total_rows,
+            "error_report_b64": (
+                base64.b64encode(result.error_report).decode("ascii")
+                if result.error_report
+                else None
+            ),
+        }
 
     @app.get("/api/warehouse/catalog/products")
     async def api_catalog_list_products(

@@ -395,6 +395,23 @@ class CrmRepository:
             ).all()
             return [self._price_type_dict(r) for r in rows]
 
+    def get_or_create_price_type_by_name(self, name: str) -> tuple[dict[str, Any], bool]:
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("Название вида цен обязательно")
+        name = name[:128]
+        with Session(self.engine) as session:
+            rows = session.scalars(select(CrmPriceType)).all()
+            for row in rows:
+                if str(row.name or "").strip().casefold() == name.casefold():
+                    return self._price_type_dict(row), False
+            max_order = session.scalar(select(func.max(CrmPriceType.sort_order))) or 0
+            row = CrmPriceType(name=name, sort_order=int(max_order) + 1)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._price_type_dict(row), True
+
     def list_counterparties(self, filters: dict[str, str]) -> list[CounterpartyRow]:
         with Session(self.engine) as session:
             q = select(CrmCounterparty).order_by(

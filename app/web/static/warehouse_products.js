@@ -389,6 +389,145 @@
     }, 1000);
   }
 
+  function downloadBase64Xlsx(b64, filename) {
+    var binary = atob(b64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    downloadBlob(
+      new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      filename
+    );
+  }
+
+  function openPriceTypeImportModal(root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal wh-modal-wide" role="dialog">' +
+      '<div class="wh-modal-header"><h3>Массовая загрузка цен</h3>' +
+      '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      "<p>Укажите название вида цен в ячейке B1 шаблона. Если вид цен уже существует — цены обновятся в нём, иначе будет создан новый.</p>" +
+      '<div class="wh-import-actions">' +
+      '<button type="button" class="wh-btn" id="whPtImportTemplate">Скачать шаблон Excel</button>' +
+      "</div>" +
+      '<label class="wh-import-file-label">Файл для загрузки<input type="file" id="whPtImportFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
+      '<p class="wh-msg" id="whPtImportMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whPtImportSubmit">Загрузить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button>' +
+      "</div></div>";
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) close();
+    });
+
+    backdrop.querySelector("#whPtImportTemplate").addEventListener("click", function () {
+      fetch("/api/warehouse/catalog/price-types/import/template", { credentials: "include" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("Не удалось скачать шаблон");
+          return r.blob();
+        })
+        .then(function (blob) {
+          downloadBlob(blob, "price_type_prices_template.xlsx");
+        })
+        .catch(function (err) {
+          var msg = backdrop.querySelector("#whPtImportMsg");
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка скачивания шаблона";
+        });
+    });
+
+    backdrop.querySelector("#whPtImportSubmit").addEventListener("click", function () {
+      var fileInput = backdrop.querySelector("#whPtImportFile");
+      var msg = backdrop.querySelector("#whPtImportMsg");
+      var submitBtn = backdrop.querySelector("#whPtImportSubmit");
+      msg.textContent = "";
+      msg.className = "wh-msg";
+      if (!fileInput.files || !fileInput.files.length) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите файл Excel (.xlsx)";
+        return;
+      }
+      var formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      submitBtn.disabled = true;
+      msg.textContent = "Обработка файла…";
+      fetch("/api/warehouse/catalog/price-types/import", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      })
+        .then(function (r) {
+          return r.text().then(function (text) {
+            var json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (e) {
+              json = null;
+            }
+            if (!r.ok) {
+              var detail = json && json.detail != null ? json.detail : text || "HTTP " + r.status;
+              if (typeof detail === "object" && detail.msg) detail = detail.msg;
+              throw new Error(typeof detail === "string" ? detail : "Ошибка загрузки");
+            }
+            return json || {};
+          });
+        })
+        .then(function (data) {
+          if (data.error_report_b64) {
+            downloadBase64Xlsx(data.error_report_b64, "price_type_import_errors.xlsx");
+          }
+          return loadMeta().then(function () {
+            renderPriceTypeList(root);
+            return data;
+          });
+        })
+        .then(function (data) {
+          var createdNote = data.created_price_type ? " Создан новый вид цен." : "";
+          if (data.failed > 0) {
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent =
+              "Вид цен: «" +
+              (data.price_type_name || "") +
+              "». Обновлено цен: " +
+              (data.updated || 0) +
+              ". Ошибок в строках: " +
+              data.failed +
+              ". Скачан файл с описанием проблем." +
+              createdNote;
+            return;
+          }
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent =
+            "Вид цен: «" +
+            (data.price_type_name || "") +
+            "». Обновлено цен: " +
+            (data.updated || 0) +
+            "." +
+            createdNote;
+          setTimeout(close, 1500);
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка загрузки";
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
+  }
+
   function openBulkImportModal() {
     var backdrop = document.createElement("div");
     backdrop.className = "wh-modal-backdrop";
@@ -1082,6 +1221,7 @@
           '<div class="wh-crm-toolbar">' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whPtSave">Сохранить названия</button>' +
           '<button type="button" class="wh-btn" id="whPtAdd">+ Вид цены</button>' +
+          '<button type="button" class="wh-btn" id="whPtImport">Загрузка из Excel</button>' +
           "</div>" +
           '<p class="wh-muted">Нажмите на строку вида цены, чтобы открыть список товаров и задать цены.</p>' +
           '<div id="whPtListWrap"></div>' +
@@ -1092,6 +1232,9 @@
           renderPriceTypeList(root);
           var inputs = root.querySelectorAll(".wh-cat-pt-name");
           if (inputs.length) inputs[inputs.length - 1].focus();
+        });
+        root.querySelector("#whPtImport").addEventListener("click", function () {
+          openPriceTypeImportModal(root);
         });
         root.querySelector("#whPtSave").addEventListener("click", function () {
           savePriceTypeNames(root).catch(function (err) {
