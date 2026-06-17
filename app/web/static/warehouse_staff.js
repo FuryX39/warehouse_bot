@@ -862,8 +862,8 @@
   var scheduleMonth = 0;
   var scheduleUserId = null;
   var scheduleEmployees = [];
-  var scheduleCalendarMounted = false;
   var scheduleDaysCache = {};
+  var scheduleLoadSeq = 0;
 
   var SCHEDULE_MONTH_NAMES = [
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -1052,7 +1052,7 @@
 
   function mountScheduleCalendar(root) {
     var calWrap = root.querySelector("#whStaffScheduleCal");
-    if (!calWrap || scheduleCalendarMounted) return;
+    if (!calWrap || calWrap.querySelector("#whStaffScheduleGrid")) return;
     calWrap.innerHTML =
       '<div class="wh-task-cal-toolbar">' +
       '<button type="button" class="wh-btn" id="whStaffCalPrev">&larr;</button>' +
@@ -1076,7 +1076,6 @@
       scheduleMonth = now.getMonth() + 1;
       refreshScheduleGrid(root);
     });
-    scheduleCalendarMounted = true;
     updateScheduleMonthTitle(root);
   }
 
@@ -1125,10 +1124,11 @@
     var now = new Date();
     if (!scheduleYear) scheduleYear = now.getFullYear();
     if (!scheduleMonth) scheduleMonth = now.getMonth() + 1;
-    scheduleCalendarMounted = false;
+    var loadSeq = ++scheduleLoadSeq;
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     loadScheduleEmployees()
       .then(function () {
+        if (loadSeq !== scheduleLoadSeq) return;
         root.innerHTML =
           '<div class="wh-staff-schedule">' +
           '<p class="wh-muted wh-task-summary-hint">График смен упаковщиков. В каждом дне отображаются все назначенные на смену. На одну дату можно назначить нескольких человек.</p>' +
@@ -1144,6 +1144,7 @@
         return refreshScheduleGrid(root);
       })
       .catch(function (err) {
+        if (loadSeq !== scheduleLoadSeq) return;
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
       });
   }
