@@ -200,6 +200,10 @@
       window.WhStaff.renderRoles(tab, item);
       return;
     }
+    if (tab.id === "employees" && item.id === "schedule" && window.WhStaff) {
+      window.WhStaff.renderSchedule(tab, item);
+      return;
+    }
     if (tab.id === "crm" && item.id === "counterparties" && window.WhCrm) {
       window.WhCrm.renderCounterparties(tab, item);
       return;

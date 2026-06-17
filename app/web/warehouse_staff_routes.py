@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request
 
 from app.warehouse_roles_repository import WarehouseRolesRepository
+from app.warehouse_schedule_repository import WarehouseScheduleRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.warehouse_permissions import permissions_schema, sanitize_permissions
 
@@ -33,6 +34,7 @@ def register_warehouse_staff_routes(
     app,
     users_repo: WarehouseUsersRepository,
     roles_repo: WarehouseRolesRepository,
+    schedule_repo: WarehouseScheduleRepository,
     require_warehouse_admin,
 ) -> None:
     def _employee_dict(user: WarehouseUserRow) -> dict:
@@ -130,6 +132,49 @@ def register_warehouse_staff_routes(
         if not deleted:
             raise HTTPException(status_code=404, detail="Роль не найдена")
         return {"ok": True}
+
+    @app.get("/api/warehouse/employees/schedule/calendar")
+    async def api_warehouse_employee_schedule_calendar(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        params = request.query_params
+        try:
+            year = int(params.get("year") or 0)
+            month = int(params.get("month") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="year и month обязательны") from exc
+        if year < 1970 or year > 2100 or month < 1 or month > 12:
+            raise HTTPException(status_code=400, detail="Некорректный год или месяц")
+        user_id_raw = params.get("user_id")
+        user_id = None
+        if user_id_raw not in (None, ""):
+            try:
+                user_id = int(user_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="user_id должен быть числом") from exc
+        try:
+            return schedule_repo.get_month_calendar(year, month, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/warehouse/employees/schedule/toggle")
+    async def api_warehouse_employee_schedule_toggle(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        try:
+            user_id = int(body.get("user_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="user_id обязателен") from exc
+        work_date = str(body.get("date") or body.get("work_date") or "").strip()
+        if not work_date:
+            raise HTTPException(status_code=400, detail="date обязателен")
+        try:
+            assigned = schedule_repo.toggle_day(user_id, work_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "assigned": assigned, "user_id": user_id, "date": work_date}
 
     @app.get("/api/warehouse/employees/meta")
     async def api_warehouse_employees_meta(

@@ -803,6 +803,64 @@ body.wh-body {
   word-break: break-word;
 }
 
+.wh-staff-schedule-picker-wrap {
+  margin-bottom: 1rem;
+}
+
+.wh-staff-schedule-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.55rem;
+}
+
+.wh-staff-schedule-pick {
+  border: 1px solid var(--wh-border);
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  background: var(--wh-surface, #fff);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.wh-staff-schedule-pick:hover {
+  border-color: var(--wh-primary, #2563eb);
+}
+
+.wh-staff-schedule-pick--active {
+  background: var(--wh-primary, #2563eb);
+  border-color: var(--wh-primary, #2563eb);
+  color: #fff;
+}
+
+.wh-staff-cal-cell {
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+
+.wh-staff-cal-cell:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.wh-staff-cal-cell--assigned {
+  background: #e8f1ff;
+  border-color: #93c5fd;
+}
+
+.wh-staff-cal-mark {
+  font-size: 0.75rem;
+  color: var(--wh-primary, #2563eb);
+  font-weight: 600;
+}
+
+.wh-staff-cal-count {
+  font-size: 0.75rem;
+  color: var(--wh-muted, #666);
+  font-weight: 600;
+}
+
 .wh-task-assignees {
   display: flex;
   flex-wrap: wrap;

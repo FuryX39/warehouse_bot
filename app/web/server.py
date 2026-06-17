@@ -83,6 +83,7 @@ from app.warehouse_permissions import (
     permissions_schema,
 )
 from app.warehouse_roles_repository import WarehouseRolesRepository
+from app.warehouse_schedule_repository import WarehouseScheduleRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
 from app.web.warehouse_crm_routes import register_warehouse_crm_routes
@@ -205,6 +206,9 @@ def create_dashboard_app(
     warehouse_roles_repo.migrate_legacy_admin_users(
         [user.id for user in warehouse_users_repo.list_users() if user.is_admin]
     )
+
+    warehouse_schedule_repo = WarehouseScheduleRepository(settings.db_url)
+    warehouse_schedule_repo.init_schema()
 
     crm_repo = CrmRepository(settings.db_url)
     crm_repo.init_schema()
@@ -471,6 +475,7 @@ def create_dashboard_app(
         app,
         warehouse_users_repo,
         warehouse_roles_repo,
+        warehouse_schedule_repo,
         require_warehouse_admin,
     )
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
