@@ -1049,6 +1049,7 @@
           '<input type="search" id="whTkQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
           '<button type="button" class="wh-btn" id="whTkToggleFilter">Фильтр</button>' +
           '<button type="button" class="wh-btn" id="whTkStatuses">Статусы</button>' +
+          '<button type="button" class="wh-btn" id="whTkRefresh" title="Обновить список">Обновить</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whTkCreate">+ Задача</button>' +
           "</div>" +
           '<div class="wh-tk-list-sort-bar">' +
@@ -1100,6 +1101,9 @@
       modalStatusesEditor(function () {
         renderList();
       });
+    });
+    root.querySelector("#whTkRefresh").addEventListener("click", function () {
+      renderList();
     });
     var sort2By = root.querySelector("#whTkSort2By");
     var sort2Dir = root.querySelector("#whTkSort2Dir");
