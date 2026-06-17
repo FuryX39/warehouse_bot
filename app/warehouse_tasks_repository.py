@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import ForeignKey, Integer, String, delete, func, nulls_first, nulls_last, or_, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, func, nulls_first, nulls_last, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
@@ -35,6 +35,7 @@ ENTITY_LABELS = {
 TASK_LIST_SORT_FIELDS = frozenset(
     {
         "id",
+        "status",
         "task_type",
         "author",
         "counterparty",
@@ -45,6 +46,23 @@ TASK_LIST_SORT_FIELDS = frozenset(
         "end_date",
     }
 )
+
+_DEFAULT_TASK_STATUSES: tuple[tuple[str, str], ...] = (
+    ("Новый", "#f9a825"),
+    ("В работе", "#42a5f5"),
+    ("На проверке", "#ab47bc"),
+    ("Выполнен", "#66bb6a"),
+)
+
+
+class WarehouseTaskStatus(_Base):
+    __tablename__ = "warehouse_task_statuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    color: Mapped[str] = mapped_column(String(16), nullable=False, default="#9e9e9e")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class WarehouseTaskType(_Base):
@@ -68,6 +86,9 @@ class WarehouseTask(_Base):
     end_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=True)
     counterparty_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    status_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("warehouse_task_statuses.id"), nullable=True
+    )
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -140,6 +161,9 @@ class TaskRow:
     id: int
     task_type_id: int
     task_type_name: str
+    status_id: int | None
+    status_name: str
+    status_color: str
     comment: str
     start_date_ts: int | None
     end_date_ts: int | None
@@ -247,10 +271,122 @@ class WarehouseTasksRepository:
             )
             session.commit()
 
+    def _ensure_schema(self) -> None:
+        _Base.metadata.create_all(self.engine)
+        self._migrate_counterparty_id_column()
+        self._migrate_status_column()
+        self._seed_task_statuses()
+
+    def _migrate_status_column(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "warehouse_tasks" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_tasks")}
+        if "status_id" not in cols:
+            with Session(self.engine) as session:
+                session.execute(text("ALTER TABLE warehouse_tasks ADD COLUMN status_id INTEGER"))
+                session.commit()
+        self._seed_task_statuses()
+        with Session(self.engine) as session:
+            default_id = self._default_status_id(session)
+            if default_id is not None:
+                session.execute(
+                    text(
+                        "UPDATE warehouse_tasks SET status_id = :sid "
+                        "WHERE status_id IS NULL"
+                    ),
+                    {"sid": int(default_id)},
+                )
+                session.commit()
+
+    def _seed_task_statuses(self) -> None:
+        with Session(self.engine) as session:
+            count = int(
+                session.scalar(select(func.count()).select_from(WarehouseTaskStatus)) or 0
+            )
+            if count > 0:
+                return
+            for i, (name, color) in enumerate(_DEFAULT_TASK_STATUSES):
+                session.add(
+                    WarehouseTaskStatus(
+                        name=name,
+                        color=color,
+                        sort_order=i,
+                        is_default=(i == 0),
+                    )
+                )
+            session.commit()
+
+    def _default_status_id(self, session: Session) -> int | None:
+        row = session.scalar(
+            select(WarehouseTaskStatus)
+            .where(WarehouseTaskStatus.is_default.is_(True))
+            .order_by(WarehouseTaskStatus.sort_order, WarehouseTaskStatus.id)
+        )
+        if row is not None:
+            return int(row.id)
+        row = session.scalar(
+            select(WarehouseTaskStatus).order_by(
+                WarehouseTaskStatus.sort_order, WarehouseTaskStatus.id
+            )
+        )
+        return int(row.id) if row is not None else None
+
     def get_meta(self) -> dict[str, Any]:
         return {
             "task_types": self.list_task_types(),
+            "task_statuses": self.list_task_statuses(),
             "custom_fields": self.list_custom_fields(),
+        }
+
+    def list_task_statuses(self) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(WarehouseTaskStatus).order_by(
+                    WarehouseTaskStatus.sort_order, WarehouseTaskStatus.name
+                )
+            ).all()
+            return [self._task_status_dict(r) for r in rows]
+
+    def save_task_statuses(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {r.id: r for r in session.scalars(select(WarehouseTaskStatus)).all()}
+            keep_ids: set[int] = set()
+            for i, item in enumerate(items):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                color = str(item.get("color") or "#9e9e9e").strip() or "#9e9e9e"
+                raw_id = item.get("id")
+                row = None
+                if raw_id is not None:
+                    try:
+                        row = existing.get(int(raw_id))
+                    except (TypeError, ValueError):
+                        row = None
+                if row is None:
+                    row = WarehouseTaskStatus(name=name[:128], color=color[:16], sort_order=i)
+                    session.add(row)
+                else:
+                    row.name = name[:128]
+                    row.color = color[:16]
+                    row.sort_order = i
+                session.flush()
+                keep_ids.add(int(row.id))
+            for sid, row in existing.items():
+                if sid not in keep_ids and not row.is_default:
+                    session.delete(row)
+            session.commit()
+        return self.list_task_statuses()
+
+    def _task_status_dict(self, row: WarehouseTaskStatus) -> dict[str, Any]:
+        return {
+            "id": int(row.id),
+            "name": str(row.name),
+            "color": str(row.color or "#9e9e9e"),
+            "sort_order": int(row.sort_order),
+            "is_default": bool(row.is_default),
         }
 
     def list_task_types(self) -> list[dict[str, Any]]:
@@ -520,57 +656,117 @@ class WarehouseTasksRepository:
         offset: int = 0,
         sort_by: str | None = None,
         sort_dir: str | None = None,
+        sort_by2: str | None = None,
+        sort_dir2: str | None = None,
     ) -> list[TaskRow]:
         limit = max(1, min(2000, int(limit)))
         offset = max(0, int(offset))
-        sort_key, sort_asc = self.parse_list_sort(sort_by, sort_dir)
+        sort_key, sort_asc = self.parse_list_sort(
+            sort_by, sort_dir, default_key="start_date", default_dir="asc"
+        )
+        sort_key2, sort_asc2 = self.parse_list_sort(
+            sort_by2, sort_dir2, default_key="status", default_dir="asc"
+        )
         with Session(self.engine) as session:
             q = select(WarehouseTask)
             conds = self._list_filter_conditions(session, filters)
             if conds:
                 q = q.where(*conds)
-            q = self._apply_list_sort(q, sort_key, sort_asc)
+            q = self._apply_list_sort(q, sort_key, sort_asc, sort_key2, sort_asc2)
             q = q.limit(limit).offset(offset)
             rows = session.scalars(q).all()
             return [self._task_row(session, r) for r in rows]
 
-    def parse_list_sort(self, sort_by: str | None, sort_dir: str | None) -> tuple[str, bool]:
-        key = str(sort_by or "end_date").strip().lower()
+    def parse_list_sort(
+        self,
+        sort_by: str | None,
+        sort_dir: str | None,
+        *,
+        default_key: str = "start_date",
+        default_dir: str = "asc",
+    ) -> tuple[str, bool]:
+        key = str(sort_by or default_key).strip().lower()
         if key not in TASK_LIST_SORT_FIELDS:
-            key = "end_date"
-        asc = str(sort_dir or "desc").strip().lower() == "asc"
+            key = default_key
+        default_asc = str(default_dir or "asc").strip().lower() == "asc"
+        if sort_dir is None or str(sort_dir).strip() == "":
+            asc = default_asc
+        else:
+            asc = str(sort_dir).strip().lower() == "asc"
         return key, asc
 
-    def _apply_list_sort(self, q, sort_key: str, asc: bool):
+    def _apply_list_sort(
+        self,
+        q,
+        sort_key: str,
+        sort_asc: bool,
+        sort_key2: str,
+        sort_asc2: bool,
+    ):
+        joins: set[str] = set()
+        order_parts: list = []
+        seen_keys: set[str] = set()
+        for key, asc in ((sort_key, sort_asc), (sort_key2, sort_asc2)):
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            q, joins, exprs = self._sort_key_order(q, key, asc, joins)
+            order_parts.extend(exprs)
+        from sqlalchemy import asc as sa_asc
+        from sqlalchemy import desc as sa_desc
+
+        order_parts.append(sa_desc(WarehouseTask.id))
+        return q.order_by(*order_parts)
+
+    def _sort_key_order(self, q, sort_key: str, asc: bool, joins: set[str]):
         from sqlalchemy import asc as sa_asc
         from sqlalchemy import desc as sa_desc
 
         direction = sa_asc if asc else sa_desc
-        tie = direction(WarehouseTask.id)
+        exprs: list = []
 
         if sort_key == "id":
-            return q.order_by(direction(WarehouseTask.id))
+            exprs.append(direction(WarehouseTask.id))
+            return q, joins, exprs
+
+        if sort_key == "status":
+            if "status" not in joins:
+                q = q.outerjoin(
+                    WarehouseTaskStatus, WarehouseTask.status_id == WarehouseTaskStatus.id
+                )
+                joins.add("status")
+            col = direction(WarehouseTaskStatus.sort_order)
+            exprs.append(nulls_last(col) if asc else nulls_first(col))
+            return q, joins, exprs
 
         if sort_key == "task_type":
-            q = q.outerjoin(
-                WarehouseTaskType, WarehouseTask.task_type_id == WarehouseTaskType.id
-            )
-            return q.order_by(direction(WarehouseTaskType.name), tie)
+            if "task_type" not in joins:
+                q = q.outerjoin(
+                    WarehouseTaskType, WarehouseTask.task_type_id == WarehouseTaskType.id
+                )
+                joins.add("task_type")
+            exprs.append(direction(WarehouseTaskType.name))
+            return q, joins, exprs
 
         if sort_key == "author":
-            q = q.outerjoin(
-                WarehouseUser, WarehouseTask.created_by_user_id == WarehouseUser.id
+            if "author" not in joins:
+                q = q.outerjoin(
+                    WarehouseUser, WarehouseTask.created_by_user_id == WarehouseUser.id
+                )
+                joins.add("author")
+            exprs.append(
+                direction(func.coalesce(WarehouseUser.display_name, WarehouseUser.login, ""))
             )
-            return q.order_by(
-                direction(func.coalesce(WarehouseUser.display_name, WarehouseUser.login, "")),
-                tie,
-            )
+            return q, joins, exprs
 
         if sort_key == "counterparty":
-            q = q.outerjoin(
-                CrmCounterparty, WarehouseTask.counterparty_id == CrmCounterparty.id
-            )
-            return q.order_by(direction(func.coalesce(CrmCounterparty.full_name, "")), tie)
+            if "counterparty" not in joins:
+                q = q.outerjoin(
+                    CrmCounterparty, WarehouseTask.counterparty_id == CrmCounterparty.id
+                )
+                joins.add("counterparty")
+            exprs.append(direction(func.coalesce(CrmCounterparty.full_name, "")))
+            return q, joins, exprs
 
         if sort_key == "assignees":
             assignee_name = (
@@ -582,7 +778,8 @@ class WarehouseTasksRepository:
                 .scalar_subquery()
             )
             col = direction(assignee_name)
-            return q.order_by(nulls_last(col) if asc else nulls_first(col), tie)
+            exprs.append(nulls_last(col) if asc else nulls_first(col))
+            return q, joins, exprs
 
         if sort_key == "documents":
             doc_count = (
@@ -592,20 +789,21 @@ class WarehouseTasksRepository:
                 .correlate(WarehouseTask)
                 .scalar_subquery()
             )
-            return q.order_by(direction(doc_count), tie)
+            exprs.append(direction(doc_count))
+            return q, joins, exprs
 
         if sort_key == "comment":
-            return q.order_by(direction(WarehouseTask.comment), tie)
+            exprs.append(direction(WarehouseTask.comment))
+            return q, joins, exprs
 
         if sort_key == "start_date":
             col = direction(WarehouseTask.start_date_ts)
-            return q.order_by(
-                (nulls_first if asc else nulls_last)(col),
-                tie,
-            )
+            exprs.append((nulls_first if asc else nulls_last)(col))
+            return q, joins, exprs
 
         col = direction(WarehouseTask.end_date_ts)
-        return q.order_by((nulls_first if asc else nulls_last)(col), tie)
+        exprs.append((nulls_first if asc else nulls_last)(col))
+        return q, joins, exprs
 
     def count_tasks(self, filters: dict[str, str]) -> int:
         with Session(self.engine) as session:
@@ -637,6 +835,7 @@ class WarehouseTasksRepository:
             return None
         merged: dict[str, Any] = {
             "task_type_id": current.task_type_id,
+            "status_id": current.status_id,
             "comment": current.comment,
             "start_date": _ts_to_day_str(current.start_date_ts) or None,
             "end_date": _ts_to_day_str(current.end_date_ts) or None,
@@ -651,6 +850,7 @@ class WarehouseTasksRepository:
         }
         for key in (
             "task_type_id",
+            "status_id",
             "comment",
             "start_date",
             "end_date",
@@ -1006,6 +1206,9 @@ class WarehouseTasksRepository:
             "id": row.id,
             "task_type_id": row.task_type_id,
             "task_type_name": row.task_type_name,
+            "status_id": row.status_id,
+            "status_name": row.status_name,
+            "status_color": row.status_color,
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
             "start_date": _ts_to_day_str(row.start_date_ts),
@@ -1085,6 +1288,7 @@ class WarehouseTasksRepository:
         self._ensure_schema()
 
         with Session(self.engine) as session:
+            status_id = self._normalize_status_id(session, data.get("status_id"))
             if session.get(WarehouseTaskType, task_type_id) is None:
                 raise ValueError("Тип задачи не найден")
             for uid in assignee_ids:
@@ -1105,6 +1309,7 @@ class WarehouseTasksRepository:
                     end_date_ts=end_date_ts,
                     created_by_user_id=int(created_by_user_id) if created_by_user_id else None,
                     counterparty_id=counterparty_id,
+                    status_id=status_id,
                     created_at_ts=now,
                 )
                 session.add(task)
@@ -1117,6 +1322,7 @@ class WarehouseTasksRepository:
                 task.start_date_ts = start_date_ts
                 task.end_date_ts = end_date_ts
                 task.counterparty_id = counterparty_id
+                task.status_id = status_id
                 session.execute(
                     delete(WarehouseTaskAssignee).where(
                         WarehouseTaskAssignee.task_id == int(task_id)
@@ -1224,6 +1430,19 @@ class WarehouseTasksRepository:
             raise ValueError(f"Контрагент id={counterparty_id} не найден")
         return counterparty_id
 
+    def _normalize_status_id(self, session: Session, raw: Any) -> int | None:
+        if raw is None or raw == "":
+            return self._default_status_id(session)
+        try:
+            status_id = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Некорректный статус") from exc
+        if status_id <= 0:
+            return self._default_status_id(session)
+        if session.get(WarehouseTaskStatus, status_id) is None:
+            raise ValueError(f"Статус id={status_id} не найден")
+        return status_id
+
     def _validate_documents(self, documents: list[dict[str, Any]]) -> None:
         for doc in documents:
             entity_type = doc["entity_type"]
@@ -1266,6 +1485,14 @@ class WarehouseTasksRepository:
             cp = self.crm_repo.get_counterparty(int(row.counterparty_id))
             if cp:
                 counterparty_name = str(cp.full_name or "").strip() or f"Контрагент #{cp.id}"
+
+        status_name = ""
+        status_color = "#9e9e9e"
+        if row.status_id:
+            st = session.get(WarehouseTaskStatus, int(row.status_id))
+            if st:
+                status_name = str(st.name)
+                status_color = str(st.color or "#9e9e9e")
 
         assignee_rows = session.scalars(
             select(WarehouseTaskAssignee).where(WarehouseTaskAssignee.task_id == int(row.id))
@@ -1327,6 +1554,9 @@ class WarehouseTasksRepository:
             id=int(row.id),
             task_type_id=int(row.task_type_id),
             task_type_name=task_type_name,
+            status_id=int(row.status_id) if row.status_id else None,
+            status_name=status_name,
+            status_color=status_color,
             comment=str(row.comment or ""),
             start_date_ts=int(row.start_date_ts) if row.start_date_ts is not None else None,
             end_date_ts=int(row.end_date_ts) if row.end_date_ts is not None else None,
@@ -1359,6 +1589,12 @@ class WarehouseTasksRepository:
         if raw_counterparty:
             try:
                 conds.append(WarehouseTask.counterparty_id == int(raw_counterparty))
+            except ValueError:
+                pass
+        raw_status = (filters.get("status_id") or "").strip()
+        if raw_status:
+            try:
+                conds.append(WarehouseTask.status_id == int(raw_status))
             except ValueError:
                 pass
         raw_assignee = (filters.get("assignee_id") or "").strip()

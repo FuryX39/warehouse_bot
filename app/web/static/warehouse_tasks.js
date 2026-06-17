@@ -1,6 +1,7 @@
 (function (global) {
   var meta = {
     task_types: [],
+    task_statuses: [],
     custom_fields: [],
     assignees: [],
     counterparties: [],
@@ -9,7 +10,8 @@
     current_user_name: "",
   };
   var listFilters = {};
-  var listSort = { by: "end_date", dir: "desc" };
+  var listSort = { by: "start_date", dir: "asc" };
+  var listSort2 = { by: "status", dir: "asc" };
   var filterPanelOpen = false;
   var editingId = null;
   var formAssigneeIds = [];
@@ -23,6 +25,19 @@
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
   ];
   var WEEKDAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
+  var TASK_SORT_OPTIONS = [
+    { id: "status", label: "Статус" },
+    { id: "start_date", label: "Дата начала" },
+    { id: "end_date", label: "Дата окончания" },
+    { id: "id", label: "№" },
+    { id: "task_type", label: "Тип" },
+    { id: "author", label: "Автор" },
+    { id: "counterparty", label: "Контрагент" },
+    { id: "assignees", label: "Ответственные" },
+    { id: "documents", label: "Документы" },
+    { id: "comment", label: "Комментарий" },
+  ];
 
   function esc(s) {
     return String(s || "")
@@ -79,6 +94,7 @@
   function loadMeta() {
     return fetchJson("/api/warehouse/tasks/meta").then(function (data) {
       meta.task_types = data.task_types || [];
+      meta.task_statuses = data.task_statuses || [];
       meta.custom_fields = data.custom_fields || [];
       meta.assignees = data.assignees || [];
       meta.counterparties = data.counterparties || [];
@@ -96,9 +112,98 @@
     });
     if (listSort.by) {
       parts.push("sort_by=" + encodeURIComponent(listSort.by));
-      parts.push("sort_dir=" + encodeURIComponent(listSort.dir || "desc"));
+      parts.push("sort_dir=" + encodeURIComponent(listSort.dir || "asc"));
+    }
+    if (listSort2.by) {
+      parts.push("sort_by2=" + encodeURIComponent(listSort2.by));
+      parts.push("sort_dir2=" + encodeURIComponent(listSort2.dir || "asc"));
     }
     return parts.length ? "?" + parts.join("&") : "";
+  }
+
+  function textOnBg(hex) {
+    var h = String(hex || "").replace("#", "");
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var r = parseInt(h.slice(0, 2), 16);
+    var g = parseInt(h.slice(2, 4), 16);
+    var b = parseInt(h.slice(4, 6), 16);
+    if (isNaN(r) || isNaN(g) || isNaN(b)) return "#1c2434";
+    var lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return lum > 0.58 ? "#1c2434" : "#ffffff";
+  }
+
+  function buildStatusSelectOptions(items, selectedId, withConfigure) {
+    var html = "";
+    (items || []).forEach(function (it) {
+      var sel = String(selectedId || "") === String(it.id) ? " selected" : "";
+      var bg = it.color || "#9e9e9e";
+      var fg = textOnBg(bg);
+      html +=
+        '<option value="' +
+        esc(it.id) +
+        '" data-color="' +
+        esc(bg) +
+        '" style="background-color:' +
+        esc(bg) +
+        ";color:" +
+        esc(fg) +
+        '"' +
+        sel +
+        ">" +
+        esc(it.name) +
+        "</option>";
+    });
+    if (withConfigure) {
+      html +=
+        '<option value="' +
+        CONFIGURE_VALUE +
+        '" class="wh-crm-status-configure">Настроить…</option>';
+    }
+    return html;
+  }
+
+  function styleStatusSelect(selectEl) {
+    if (!selectEl) return;
+    var opt = selectEl.options[selectEl.selectedIndex];
+    if (!opt) return;
+    var bg = opt.getAttribute("data-color") || "#9e9e9e";
+    selectEl.style.backgroundColor = bg;
+    selectEl.style.color = textOnBg(bg);
+  }
+
+  function bindStatusSelect(selectEl, onConfigure) {
+    if (!selectEl) return;
+    styleStatusSelect(selectEl);
+    selectEl.addEventListener("change", function () {
+      if (selectEl.value === CONFIGURE_VALUE) {
+        var prev = selectEl.getAttribute("data-prev") || "";
+        selectEl.value = prev;
+        styleStatusSelect(selectEl);
+        if (onConfigure) onConfigure();
+        return;
+      }
+      selectEl.setAttribute("data-prev", selectEl.value);
+      styleStatusSelect(selectEl);
+    });
+  }
+
+  function renderSecondarySortControls() {
+    var opts = TASK_SORT_OPTIONS.map(function (opt) {
+      var sel = listSort2.by === opt.id ? " selected" : "";
+      return '<option value="' + esc(opt.id) + '"' + sel + ">" + esc(opt.label) + "</option>";
+    }).join("");
+    var dirSel = listSort2.dir === "desc" ? " selected" : "";
+    return (
+      '<label class="wh-tk-secondary-sort">Вторичная сортировка ' +
+      '<select id="whTkSort2By">' +
+      opts +
+      "</select> " +
+      '<select id="whTkSort2Dir">' +
+      '<option value="asc">по возрастанию</option>' +
+      '<option value="desc"' +
+      dirSel +
+      ">по убыванию</option></select></label>"
+    );
   }
 
   function sortableHeader(key, label) {
@@ -130,6 +235,18 @@
       });
       return '<div><label>' + esc(label) + '</label><select data-filter="' + key + '">' + opts + "</select></div>";
     }
+    if (type === "status-select") {
+      return (
+        '<div><label>' +
+        esc(label) +
+        '</label><select class="wh-crm-status-select" data-filter="' +
+        key +
+        '" data-status-select="1">' +
+        '<option value="">—</option>' +
+        buildStatusSelectOptions(items, listFilters[key], false) +
+        "</select></div>"
+      );
+    }
     if (type === "date") {
       return (
         '<div><label>' + esc(label) + '</label><input type="date" data-filter="' + key + '" value="' + val + '" /></div>'
@@ -143,6 +260,7 @@
       '<div class="wh-crm-filters' + (filterPanelOpen ? "" : " hidden") + '" id="whTkFilters">' +
       '<div class="wh-crm-filter-grid">' +
       filterField("comment", "Комментарий", "text") +
+      filterField("status_id", "Статус", "status-select", meta.task_statuses) +
       filterField("task_type_id", "Тип задачи", "select", meta.task_types) +
       filterField("assignee_id", "Ответственный", "select", meta.assignees) +
       filterField("created_by_user_id", "Автор", "select", meta.assignees) +
@@ -556,6 +674,7 @@
   function emptyTaskDraft() {
     return {
       task_type_id: "",
+      status_id: "",
       comment: "",
       start_date: "",
       end_date: "",
@@ -571,6 +690,7 @@
     var cpEl = root.querySelector("#whTkCounterparty");
     return {
       task_type_id: root.querySelector("#whTkType").value,
+      status_id: root.querySelector("#whTkStatus") ? root.querySelector("#whTkStatus").value : "",
       comment: root.querySelector("#whTkComment").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
@@ -602,6 +722,7 @@
     });
     return {
       task_type_id: draft.task_type_id != null ? draft.task_type_id : "",
+      status_id: draft.status_id != null ? draft.status_id : "",
       comment: draft.comment || "",
       start_date: draft.start_date || "",
       end_date: draft.end_date || "",
@@ -634,6 +755,77 @@
       .filter(function (item) {
         return item != null;
       });
+  }
+
+  function modalStatusesEditor(onDone) {
+    var rows = (meta.task_statuses || []).map(function (s) {
+      return (
+        '<div class="wh-modal-row wh-crm-dict-row" data-id="' +
+        esc(s.id) +
+        '">' +
+        '<input type="text" class="wh-crm-dict-name" value="' +
+        esc(s.name) +
+        '" placeholder="Название" />' +
+        '<input type="color" class="wh-crm-dict-color" value="' +
+        esc(s.color || "#9e9e9e") +
+        '" title="Цвет" />' +
+        (s.is_default
+          ? '<span class="wh-crm-dict-tag">по умолчанию</span>'
+          : '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>') +
+        "</div>"
+      );
+    });
+    openModal(
+      "Статусы задач",
+      '<p class="wh-msg">Название и цвет статуса. Порядок строк определяет сортировку по статусу.</p>' +
+        '<div id="whTkStatusRows">' +
+        rows.join("") +
+        "</div>" +
+        '<button type="button" class="wh-btn wh-btn-sm" id="whTkStatusAdd">+ Добавить статус</button>',
+      function (backdrop, close) {
+        var items = [];
+        backdrop.querySelectorAll(".wh-crm-dict-row").forEach(function (row) {
+          var name = row.querySelector(".wh-crm-dict-name").value.trim();
+          if (!name) return;
+          var item = {
+            name: name,
+            color: row.querySelector(".wh-crm-dict-color").value,
+          };
+          var id = row.getAttribute("data-id");
+          if (id) item.id = parseInt(id, 10);
+          items.push(item);
+        });
+        fetchJson("/api/warehouse/tasks/statuses", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: items }),
+        })
+          .then(function (data) {
+            meta.task_statuses = data.task_statuses || [];
+            close();
+            if (onDone) onDone();
+          })
+          .catch(function (err) {
+            alert(err.message || "Ошибка сохранения");
+          });
+      }
+    );
+    var backdrop = document.querySelector(".wh-modal-backdrop:last-of-type");
+    if (!backdrop) return;
+    backdrop.querySelector("#whTkStatusAdd").addEventListener("click", function () {
+      var row = document.createElement("div");
+      row.className = "wh-modal-row wh-crm-dict-row";
+      row.innerHTML =
+        '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
+        '<input type="color" class="wh-crm-dict-color" value="#9e9e9e" />' +
+        '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
+      backdrop.querySelector("#whTkStatusRows").appendChild(row);
+    });
+    backdrop.addEventListener("click", function (e) {
+      if (e.target.classList.contains("wh-crm-dict-remove")) {
+        e.target.closest(".wh-crm-dict-row").remove();
+      }
+    });
   }
 
   function modalTaskTypesEditor(onDone) {
@@ -827,11 +1019,20 @@
       .then(function (data) {
         if (data.sort_by) listSort.by = data.sort_by;
         if (data.sort_dir) listSort.dir = data.sort_dir;
+        if (data.sort_by2) listSort2.by = data.sort_by2;
+        if (data.sort_dir2) listSort2.dir = data.sort_dir2;
         var rows = (data.tasks || [])
           .map(function (t) {
             return (
               '<tr data-id="' + esc(t.id) + '">' +
               "<td>#" + esc(t.id) + "</td>" +
+              '<td class="wh-tk-status-cell"><select class="wh-crm-status-select wh-tk-status-inline" data-task-id="' +
+              esc(t.id) +
+              '" data-prev="' +
+              esc(t.status_id || "") +
+              '">' +
+              buildStatusSelectOptions(meta.task_statuses, t.status_id, true) +
+              "</select></td>" +
               "<td>" + esc(t.task_type_name || "—") + "</td>" +
               "<td>" + esc(t.author_name || t.created_by_name || "—") + "</td>" +
               "<td>" + esc(t.counterparty_name || "—") + "</td>" +
@@ -847,13 +1048,18 @@
           '<div class="wh-crm-toolbar">' +
           '<input type="search" id="whTkQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
           '<button type="button" class="wh-btn" id="whTkToggleFilter">Фильтр</button>' +
+          '<button type="button" class="wh-btn" id="whTkStatuses">Статусы</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whTkCreate">+ Задача</button>' +
+          "</div>" +
+          '<div class="wh-tk-list-sort-bar">' +
+          renderSecondarySortControls() +
           "</div>" +
           renderFilterPanel() +
           '<div id="whTkListWrap">' +
           (rows
             ? '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
               sortableHeader("id", "№") +
+              sortableHeader("status", "Статус") +
               sortableHeader("task_type", "Тип") +
               sortableHeader("author", "Автор") +
               sortableHeader("counterparty", "Контрагент") +
@@ -889,6 +1095,65 @@
       filterPanelOpen = !filterPanelOpen;
       var fp = root.querySelector("#whTkFilters");
       if (fp) fp.classList.toggle("hidden", !filterPanelOpen);
+    });
+    root.querySelector("#whTkStatuses").addEventListener("click", function () {
+      modalStatusesEditor(function () {
+        renderList();
+      });
+    });
+    var sort2By = root.querySelector("#whTkSort2By");
+    var sort2Dir = root.querySelector("#whTkSort2Dir");
+    if (sort2By) {
+      sort2By.addEventListener("change", function () {
+        listSort2.by = sort2By.value || "status";
+        renderList();
+      });
+    }
+    if (sort2Dir) {
+      sort2Dir.addEventListener("change", function () {
+        listSort2.dir = sort2Dir.value || "asc";
+        renderList();
+      });
+    }
+    root.querySelectorAll(".wh-tk-status-inline").forEach(function (sel) {
+      styleStatusSelect(sel);
+      sel.addEventListener("mousedown", function (e) {
+        e.stopPropagation();
+      });
+      sel.addEventListener("click", function (e) {
+        e.stopPropagation();
+      });
+      sel.addEventListener("change", function () {
+        if (sel.value === CONFIGURE_VALUE) {
+          var prev = sel.getAttribute("data-prev") || "";
+          sel.value = prev;
+          styleStatusSelect(sel);
+          modalStatusesEditor(function () {
+            renderList();
+          });
+          return;
+        }
+        var taskId = parseInt(sel.getAttribute("data-task-id"), 10);
+        if (!taskId) return;
+        var prevVal = sel.getAttribute("data-prev") || "";
+        fetchJson("/api/warehouse/tasks/" + taskId, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status_id: sel.value || null }),
+        })
+          .then(function () {
+            sel.setAttribute("data-prev", sel.value);
+            styleStatusSelect(sel);
+          })
+          .catch(function (err) {
+            sel.value = prevVal;
+            styleStatusSelect(sel);
+            alert(err.message || "Ошибка сохранения статуса");
+          });
+      });
+    });
+    root.querySelectorAll("[data-status-select]").forEach(function (sel) {
+      styleStatusSelect(sel);
     });
     root.querySelector("#whTkApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
@@ -964,6 +1229,11 @@
           '<div class="wh-form-row">' +
           '<div><label>Тип задачи</label><select id="whTkType" data-prev="' + esc(t.task_type_id || "") + '">' +
           buildSelectOptions(meta.task_types, t.task_type_id) + "</select></div>" +
+          '<div><label>Статус</label><select id="whTkStatus" class="wh-crm-status-select" data-prev="' +
+          esc(t.status_id || "") +
+          '">' +
+          buildStatusSelectOptions(meta.task_statuses, t.status_id, true) +
+          "</select></div>" +
           '<div><label>Автор</label><div class="wh-input-readonly" id="whTkAuthor">' + esc(authorName) + "</div></div>" +
           '<div><label>Контрагент</label><select id="whTkCounterparty">' +
           buildCounterpartyOptions(meta.counterparties, t.counterparty_id) + "</select></div>" +
@@ -989,6 +1259,12 @@
         bindConfigureSelect(root.querySelector("#whTkType"), function () {
           var formDraft = captureFormDraft(root);
           modalTaskTypesEditor(function () {
+            renderForm(taskId, formDraft);
+          });
+        });
+        bindStatusSelect(root.querySelector("#whTkStatus"), function () {
+          var formDraft = captureFormDraft(root);
+          modalStatusesEditor(function () {
             renderForm(taskId, formDraft);
           });
         });
@@ -1049,8 +1325,15 @@
       msg.textContent = "Выберите тип задачи";
       return;
     }
+    var statusVal = root.querySelector("#whTkStatus").value;
+    if (statusVal === CONFIGURE_VALUE) {
+      msg.className = "wh-msg wh-msg-error";
+      msg.textContent = "Выберите статус";
+      return;
+    }
     var body = {
       task_type_id: typeVal,
+      status_id: statusVal || null,
       comment: root.querySelector("#whTkComment").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,

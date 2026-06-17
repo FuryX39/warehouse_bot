@@ -119,6 +119,22 @@ def _register_on_prefix(
             raise HTTPException(status_code=400, detail="items должен быть массивом")
         return {"task_types": tasks_repo.save_task_types(items)}
 
+    @app.get(f"{prefix}/statuses")
+    async def api_tasks_statuses_list(
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        return {"task_statuses": tasks_repo.list_task_statuses()}
+
+    @app.put(f"{prefix}/statuses")
+    async def api_tasks_statuses_bulk_save(
+        body: dict,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        items = body.get("items")
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="items должен быть массивом")
+        return {"task_statuses": tasks_repo.save_task_statuses(items)}
+
     @app.put(f"{prefix}/types/{{type_id}}")
     async def api_tasks_type_update(
         type_id: int,
@@ -342,17 +358,26 @@ def _register_on_prefix(
         params = request.query_params
         filters = _filters_from_query(params)
         limit, offset = _pagination_from_query(params)
-        sort_by = str(params.get("sort_by") or "end_date").strip()
-        sort_dir = str(params.get("sort_dir") or "desc").strip()
+        sort_by = str(params.get("sort_by") or "start_date").strip()
+        sort_dir = str(params.get("sort_dir") or "asc").strip()
+        sort_by2 = str(params.get("sort_by2") or "status").strip()
+        sort_dir2 = str(params.get("sort_dir2") or "asc").strip()
         rows = tasks_repo.list_tasks(
             filters,
             limit=limit,
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            sort_by2=sort_by2,
+            sort_dir2=sort_dir2,
         )
         total = tasks_repo.count_tasks(filters)
-        sort_key, sort_asc = tasks_repo.parse_list_sort(sort_by, sort_dir)
+        sort_key, sort_asc = tasks_repo.parse_list_sort(
+            sort_by, sort_dir, default_key="start_date", default_dir="asc"
+        )
+        sort_key2, sort_asc2 = tasks_repo.parse_list_sort(
+            sort_by2, sort_dir2, default_key="status", default_dir="asc"
+        )
         return {
             "tasks": [tasks_repo.task_to_dict(r) for r in rows],
             "total": total,
@@ -360,6 +385,8 @@ def _register_on_prefix(
             "offset": offset,
             "sort_by": sort_key,
             "sort_dir": "asc" if sort_asc else "desc",
+            "sort_by2": sort_key2,
+            "sort_dir2": "asc" if sort_asc2 else "desc",
         }
 
     @app.get(f"{prefix}/{{task_id}}")
@@ -538,6 +565,7 @@ def _filters_from_query(params: Any, *, skip_pagination: bool = False) -> dict[s
         "q",
         "comment",
         "task_type_id",
+        "status_id",
         "assignee_id",
         "created_by_user_id",
         "counterparty_id",
