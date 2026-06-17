@@ -1376,30 +1376,17 @@
       });
   }
 
-  function applyNavPreset(itemId) {
-    listFilters = {};
-    filterPanelOpen = false;
-    if (itemId === "assigned-to-me" && meta.current_user_id != null) {
-      listFilters.assignee_id = String(meta.current_user_id);
-    } else if (itemId === "created-by-me" && meta.current_user_id != null) {
-      listFilters.created_by_user_id = String(meta.current_user_id);
-    }
-  }
-
   function renderTasks(tab, item) {
     preparePanel(tab, item);
     editingId = null;
     formAssigneeIds = [];
     formDocuments = [];
-    applyNavPreset(item.id);
+    listFilters = {};
+    filterPanelOpen = false;
     loadMeta()
       .then(function () {
         if (item.id === "tasks-summary") {
           renderSummaryCalendar(tab, item);
-          return;
-        }
-        if (item.id === "task-create") {
-          renderForm(null);
           return;
         }
         renderList();
