@@ -101,8 +101,12 @@ def build_price_type_prices_template(catalog_repo: CatalogRepository) -> bytes:
 
 
 def _read_price_type_name(sheet) -> str:
-    label = _cell_str(sheet.cell(row=1, column=1).value)
-    name = _cell_str(sheet.cell(row=1, column=2).value)
+    first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+    if not first_row:
+        raise ValueError("Укажите название вида цен в ячейке B1")
+    cells = list(first_row)
+    label = _cell_str(cells[0] if len(cells) > 0 else None)
+    name = _cell_str(cells[1] if len(cells) > 1 else None)
     if label.casefold().replace("*", "").strip() != _PRICE_TYPE_LABEL.casefold():
         raise ValueError(f'В ячейке A1 должно быть «{_PRICE_TYPE_LABEL}»')
     if not name:
@@ -111,7 +115,9 @@ def _read_price_type_name(sheet) -> str:
 
 
 def _row_is_empty(values: list[str]) -> bool:
-    return not any(values[0].strip(), values[1].strip(), values[2].strip(), values[4].strip())
+    return not any(
+        (values[0].strip(), values[1].strip(), values[2].strip(), values[4].strip())
+    )
 
 
 def _parse_data_rows(sheet) -> list[tuple[int, list[str]]]:
