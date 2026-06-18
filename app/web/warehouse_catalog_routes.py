@@ -14,6 +14,7 @@ from app.catalog_price_type_import import (
     build_price_type_prices_template,
     import_price_type_prices_from_xlsx,
 )
+from app.barcode_label_pdf import generate_barcode_label_pdf
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
@@ -284,6 +285,37 @@ def register_warehouse_catalog_routes(
         if row is None:
             raise HTTPException(status_code=404, detail="Товар не найден")
         return {"product": catalog_repo.product_to_dict(row)}
+
+    @app.get("/api/warehouse/catalog/products/{product_id}/barcode-label")
+    async def api_catalog_barcode_label(
+        product_id: int,
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ):
+        barcode = str(request.query_params.get("barcode") or "").strip()
+        if not barcode:
+            raise HTTPException(status_code=400, detail="Укажите barcode")
+        row = catalog_repo.get_product(product_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        allowed = {str(b).strip() for b in (row.barcodes or []) if str(b).strip()}
+        if barcode not in allowed:
+            raise HTTPException(status_code=404, detail="Штрихкод не привязан к этому товару")
+        try:
+            pdf = await asyncio.to_thread(
+                generate_barcode_label_pdf,
+                barcode,
+                sku=str(row.sku or ""),
+                product_name=str(row.name or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        safe_bc = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in barcode)[:40]
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="barcode_{safe_bc}.pdf"'},
+        )
 
     @app.post("/api/warehouse/catalog/products")
     async def api_catalog_create_product(

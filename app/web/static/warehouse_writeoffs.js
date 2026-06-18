@@ -147,6 +147,10 @@
     var kitBtn = item.is_kit
       ? '<button type="button" class="wh-btn wh-btn-sm wh-rc-split-kit" data-index="' + index + '">Разбить на компоненты</button>'
       : "";
+    var printBtn =
+      global.WhBarcodePrint && global.WhBarcodePrint.printButtonHtml
+        ? global.WhBarcodePrint.printButtonHtml(item.product_id, item.sku, item.name)
+        : "";
     return (
       '<div class="wh-rc-item-row" data-index="' + index + '" data-product-id="' + esc(item.product_id || "") + '">' +
       productThumbCell(item.image_url, true) +
@@ -158,6 +162,7 @@
       '<label class="wh-rc-field">Цена <input type="text" class="wh-rc-price" value="' + esc(item.unit_price || "") + '" inputmode="decimal" placeholder="—" /></label>' +
       '<label class="wh-rc-field">Сумма <input type="text" class="wh-rc-sum" value="' + esc(item.line_sum || "") + '" inputmode="decimal" placeholder="—" /></label>' +
       kitBtn +
+      printBtn +
       '<button type="button" class="wh-btn wh-btn-sm wh-rc-remove-item" title="Удалить">&times;</button></div>'
     );
   }

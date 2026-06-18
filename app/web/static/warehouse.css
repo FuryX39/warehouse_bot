@@ -1400,6 +1400,54 @@ body.wh-body {
   background: #f0f4fa;
 }
 
+.wh-barcode-print-col {
+  white-space: nowrap;
+  width: 4rem;
+  text-align: center;
+}
+
+.wh-barcode-print-btn,
+.wh-barcode-print-one {
+  min-width: 2.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.wh-barcode-pick-modal {
+  max-width: 28rem;
+}
+
+.wh-barcode-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.wh-barcode-pick-item {
+  justify-content: flex-start;
+  font-family: ui-monospace, monospace;
+}
+
+.wh-barcode-print-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 12000;
+  max-width: 22rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  background: #1b4332;
+  color: #fff;
+  font-size: 0.9rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.wh-barcode-print-toast--error {
+  background: #7f1d1d;
+}
+
 @media (max-width: 768px) {
   .wh-workspace {
     flex-direction: column;

@@ -335,6 +335,10 @@
           ? '<span class="wh-badge wh-badge-admin">комплект</span>'
           : "товар";
         var checked = selectedProductIds.has(p.id) ? " checked" : "";
+        var printBtn =
+          global.WhBarcodePrint && global.WhBarcodePrint.printButtonHtml
+            ? global.WhBarcodePrint.printButtonHtml(p.id, p.sku, p.name)
+            : "";
         return (
           "<tr data-id=\"" + p.id + '">' +
           '<td class="wh-cat-select-col"><input type="checkbox" class="wh-cat-select-cb" data-id="' +
@@ -349,14 +353,15 @@
           "<td><code>" + esc(p.code) + "</code></td>" +
           "<td>" + esc(p.group_name || "—") + "</td>" +
           "<td>" + esc(p.unit_name || "—") + "</td>" +
-          "<td>" + esc(p.barcode_count || 0) + "</td></tr>"
+          "<td>" + esc(p.barcode_count || 0) + "</td>" +
+          '<td class="wh-barcode-print-col">' + printBtn + "</td></tr>"
         );
       })
       .join("");
     return (
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
       '<th class="wh-cat-select-col"><input type="checkbox" id="whCatSelectAll" title="Выбрать все" aria-label="Выбрать все" /></th>' +
-      "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th><th>Ед.</th><th>ШК</th>" +
+      "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th><th>Ед.</th><th>ШК</th><th>Печать</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table>"
     );
   }
@@ -825,10 +830,20 @@
     return isNaN(n) ? 0 : n;
   }
 
-  function barcodeRow(value) {
+  function barcodeRow(value, productId, sku, name) {
+    var printOne = productId
+      ? '<button type="button" class="wh-btn wh-btn-sm wh-barcode-print-one" data-product-id="' +
+        esc(productId) +
+        '" data-sku="' +
+        esc(sku || "") +
+        '" data-name="' +
+        esc(name || "") +
+        '" title="Печать штрихкода">ШК</button>'
+      : "";
     return (
       '<div class="wh-crm-barcode-row">' +
       '<input type="text" class="wh-crm-barcode-input" value="' + esc(value || "") + '" placeholder="Code128" />' +
+      printOne +
       '<button type="button" class="wh-btn wh-btn-sm wh-crm-barcode-remove" title="Удалить">&times;</button></div>'
     );
   }
@@ -873,7 +888,11 @@
       .then(function (p) {
         formIsKit = forceKit !== null ? !!forceKit : !!p.is_kit;
         kitComponents = (p.components || []).slice();
-        var barcodesHtml = (p.barcodes || []).map(barcodeRow).join("");
+        var barcodesHtml = (p.barcodes || [])
+          .map(function (bc) {
+            return barcodeRow(bc, productId, p.sku, p.name);
+          })
+          .join("");
         var componentsHtml = kitComponents.map(componentRow).join("");
         var pricesList =
           p.prices && p.prices.length
@@ -957,7 +976,10 @@
             });
         });
         root.querySelector("#whPrAddBarcode").addEventListener("click", function () {
-          root.querySelector("#whPrBarcodes").insertAdjacentHTML("beforeend", barcodeRow(""));
+          root.querySelector("#whPrBarcodes").insertAdjacentHTML(
+            "beforeend",
+            barcodeRow("", productId, p.sku, p.name)
+          );
         });
         root.querySelector("#whPrBarcodes").addEventListener("click", function (e) {
           if (e.target.classList.contains("wh-crm-barcode-remove")) {
