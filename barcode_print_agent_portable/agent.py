@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
 """
-Локальный агент тихой печати штрихкодов Code128 для панели /warehouse.
+Автономный агент тихой печати штрихкодов Code128 для панели /warehouse.
 
-Запуск на компьютере пользователя (рядом с принтером):
-  python tools/barcode_print_agent.py
-
-Переменные окружения:
-  BARCODE_PRINT_AGENT_HOST — хост (по умолчанию 127.0.0.1)
-  BARCODE_PRINT_AGENT_PORT — порт (по умолчанию 18766)
-  BARCODE_PRINT_SUMATRA    — путь к SumatraPDF.exe (Windows, для тихой печати)
-  BARCODE_PRINT_PRINTER    — имя принтера (опционально)
-
-Панель отправляет POST http://127.0.0.1:18766/print с JSON:
-  {"barcode": "...", "sku": "...", "name": "..."}
+На этом компьютере: setup.bat (один раз), затем start.bat.
+Панель шлёт POST http://127.0.0.1:18766/print
 """
 
 from __future__ import annotations
@@ -24,7 +15,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
@@ -41,18 +32,19 @@ _HOST = os.getenv("BARCODE_PRINT_AGENT_HOST", "127.0.0.1").strip() or "127.0.0.1
 _PORT = int(os.getenv("BARCODE_PRINT_AGENT_PORT", "18766"))
 
 
-def _load_dotenv() -> None:
-    env_path = _ROOT / ".env"
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+def _load_config_env() -> None:
+    for name in ("config.env", ".env"):
+        env_path = _ROOT / name
+        if not env_path.is_file():
             continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        if key and key not in os.environ:
-            os.environ[key] = val.strip().strip('"').strip("'")
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = val.strip().strip('"').strip("'")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -121,17 +113,15 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    _load_dotenv()
+    _load_config_env()
     server = ThreadingHTTPServer((_HOST, _PORT), _Handler)
-    logger.info("Агент печати штрихкодов: http://%s:%s (GET /health, POST /print)", _HOST, _PORT)
+    logger.info("Агент печати: http://%s:%s (GET /health, POST /print)", _HOST, _PORT)
     if os.name == "nt":
         sumatra = os.getenv("BARCODE_PRINT_SUMATRA", "")
         if sumatra:
             logger.info("SumatraPDF: %s", sumatra)
         else:
-            logger.warning(
-                "BARCODE_PRINT_SUMATRA не задан — укажите путь к SumatraPDF.exe для тихой печати"
-            )
+            logger.warning("Задайте BARCODE_PRINT_SUMATRA в config.env для тихой печати на Windows")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

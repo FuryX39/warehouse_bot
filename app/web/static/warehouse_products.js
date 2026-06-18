@@ -765,7 +765,7 @@
       tr.addEventListener("click", function (e) {
         if (
           e.target.closest(
-            ".wh-cat-select-col, .wh-cat-select-cb, .wh-barcode-print-col, .wh-barcode-print-btn, .wh-barcode-print-one"
+            ".wh-cat-select-col, .wh-cat-select-cb, .wh-barcode-print-col, .wh-barcode-print-wrap, .wh-barcode-print-copies, .wh-barcode-print-btn, .wh-barcode-print-one"
           )
         ) {
           return;
@@ -838,7 +838,8 @@
 
   function barcodeRow(value, productId, sku, name) {
     var printOne = productId
-      ? '<button type="button" class="wh-btn wh-btn-sm wh-barcode-print-one" data-product-id="' +
+      ? '<input type="number" class="wh-barcode-print-copies" min="1" max="9999" placeholder="1" title="Копий" aria-label="Копий" />' +
+        '<button type="button" class="wh-btn wh-btn-sm wh-barcode-print-one" data-product-id="' +
         esc(productId) +
         '" data-sku="' +
         esc(sku || "") +

@@ -1402,8 +1402,32 @@ body.wh-body {
 
 .wh-barcode-print-col {
   white-space: nowrap;
-  width: 4rem;
+  width: 6.5rem;
   text-align: center;
+}
+
+.wh-barcode-print-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.wh-barcode-print-copies {
+  width: 3.4rem;
+  padding: 0.28rem 0.35rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.wh-rc-item-row .wh-barcode-print-wrap {
+  flex: 0 0 auto;
+}
+
+.wh-crm-barcode-row .wh-barcode-print-copies {
+  width: 3rem;
+  flex: 0 0 3rem;
 }
 
 .wh-barcode-print-btn,

@@ -40,6 +40,28 @@
       });
   }
 
+  function parseCopies(raw) {
+    var s = String(raw || "").trim();
+    if (!s) return 1;
+    var n = parseInt(s, 10);
+    if (!n || n < 1) return 1;
+    return Math.min(9999, n);
+  }
+
+  function readCopiesFromContext(el) {
+    var wrap = el && el.closest(".wh-barcode-print-wrap");
+    if (!wrap) {
+      var row = el && el.closest(".wh-crm-barcode-row");
+      if (row) {
+        var rowInp = row.querySelector(".wh-barcode-print-copies");
+        return parseCopies(rowInp && rowInp.value);
+      }
+      return 1;
+    }
+    var inp = wrap.querySelector(".wh-barcode-print-copies");
+    return parseCopies(inp && inp.value);
+  }
+
   function printViaAgent(payload) {
     return fetch(AGENT_BASE + "/print", {
       method: "POST",
@@ -56,41 +78,49 @@
     });
   }
 
-  function downloadLabelPdf(productId, barcode) {
+  function downloadLabelPdf(productId, barcode, copies) {
     var url =
       "/api/warehouse/catalog/products/" +
       encodeURIComponent(productId) +
       "/barcode-label?barcode=" +
       encodeURIComponent(barcode);
-    return fetch(url, { credentials: "include" })
-      .then(function (r) {
-        if (!r.ok) {
-          return r.text().then(function (t) {
-            var msg = t;
-            try {
-              var j = JSON.parse(t);
-              if (j && j.detail) {
-                msg = typeof j.detail === "string" ? j.detail : String(j.detail);
+    function once() {
+      return fetch(url, { credentials: "include" })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.text().then(function (t) {
+              var msg = t;
+              try {
+                var j = JSON.parse(t);
+                if (j && j.detail) {
+                  msg = typeof j.detail === "string" ? j.detail : String(j.detail);
+                }
+              } catch (e) {
+                /* ignore */
               }
-            } catch (e) {
-              /* ignore */
-            }
-            throw new Error(msg || "HTTP " + r.status);
-          });
-        }
-        return r.blob();
-      })
-      .then(function (blob) {
-        var a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "barcode_" + String(barcode).replace(/[^\w.-]+/g, "_") + ".pdf";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function () {
-          URL.revokeObjectURL(a.href);
-          a.remove();
-        }, 500);
-      });
+              throw new Error(msg || "HTTP " + r.status);
+            });
+          }
+          return r.blob();
+        })
+        .then(function (blob) {
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "barcode_" + String(barcode).replace(/[^\w.-]+/g, "_") + ".pdf";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () {
+            URL.revokeObjectURL(a.href);
+            a.remove();
+          }, 500);
+        });
+    }
+    var chain = Promise.resolve();
+    var n = parseCopies(copies);
+    for (var i = 0; i < n; i++) {
+      chain = chain.then(once);
+    }
+    return chain;
   }
 
   function openPickModal(barcodes, product) {
@@ -138,16 +168,21 @@
     });
   }
 
-  function sendPrint(productId, barcode, sku, name) {
-    var payload = { barcode: barcode, sku: sku || "", name: name || "" };
+  function sendPrint(productId, barcode, sku, name, copies) {
+    var payload = {
+      barcode: barcode,
+      sku: sku || "",
+      name: name || "",
+      copies: parseCopies(copies),
+    };
     return checkAgent().then(function (ok) {
       if (ok) {
         return printViaAgent(payload).then(function () {
-          return { mode: "print" };
+          return { mode: "print", copies: payload.copies };
         });
       }
-      return downloadLabelPdf(productId, barcode).then(function () {
-        return { mode: "download" };
+      return downloadLabelPdf(productId, barcode, payload.copies).then(function () {
+        return { mode: "download", copies: payload.copies };
       });
     });
   }
@@ -168,8 +203,10 @@
     var sku = opts.sku || "";
     var name = opts.name || "";
 
+    var copies = parseCopies(opts.copies);
+
     function run(product, barcode) {
-      return sendPrint(productId, barcode, product.sku || sku, product.name || name);
+      return sendPrint(productId, barcode, product.sku || sku, product.name || name, copies);
     }
 
     if (directBarcode) {
@@ -193,14 +230,30 @@
   function printButtonHtml(productId, sku, name) {
     if (!productId) return "";
     return (
+      '<span class="wh-barcode-print-wrap">' +
+      '<input type="number" class="wh-barcode-print-copies" min="1" max="9999" placeholder="1" title="Копий" aria-label="Копий" />' +
       '<button type="button" class="wh-btn wh-btn-sm wh-barcode-print-btn" data-product-id="' +
       esc(productId) +
       '" data-sku="' +
       esc(sku || "") +
       '" data-name="' +
       esc(name || "") +
-      '" title="Печать штрихкода Code128">ШК</button>'
+      '" title="Печать штрихкода Code128">ШК</button></span>'
     );
+  }
+
+  function showPrintResult(result) {
+    var copies = (result && result.copies) || 1;
+    if (result && result.mode === "download") {
+      showToast(
+        "Агент печати не запущен — скачано PDF: " +
+          copies +
+          ". Запустите start_barcode_print_agent.bat на этом ПК.",
+        true
+      );
+    } else {
+      showToast(copies > 1 ? "Отправлено на печать: " + copies + " шт." : "Отправлено на печать", false);
+    }
   }
 
   function showToast(msg, isError) {
@@ -221,6 +274,10 @@
   }
 
   document.addEventListener("click", function (e) {
+    if (e.target.closest(".wh-barcode-print-copies")) {
+      e.stopPropagation();
+      return;
+    }
     var btn = e.target.closest(".wh-barcode-print-btn");
     if (btn) {
       e.preventDefault();
@@ -229,17 +286,9 @@
       printProduct(btn.getAttribute("data-product-id"), {
         sku: btn.getAttribute("data-sku"),
         name: btn.getAttribute("data-name"),
+        copies: readCopiesFromContext(btn),
       })
-        .then(function (result) {
-          if (result && result.mode === "download") {
-            showToast(
-              "Агент печати не запущен — PDF скачан. Запустите start_barcode_print_agent.bat на этом ПК.",
-              true
-            );
-          } else {
-            showToast("Отправлено на печать", false);
-          }
-        })
+        .then(showPrintResult)
         .catch(function (err) {
           showToast(err.message || "Ошибка печати", true);
         })
@@ -261,17 +310,13 @@
         return;
       }
       oneBtn.disabled = true;
-      printProduct(pid, { barcode: bc, sku: oneBtn.getAttribute("data-sku"), name: oneBtn.getAttribute("data-name") })
-        .then(function (result) {
-          if (result && result.mode === "download") {
-            showToast(
-              "Агент печати не запущен — PDF скачан. Запустите start_barcode_print_agent.bat на этом ПК.",
-              true
-            );
-          } else {
-            showToast("Отправлено на печать", false);
-          }
-        })
+      printProduct(pid, {
+        barcode: bc,
+        sku: oneBtn.getAttribute("data-sku"),
+        name: oneBtn.getAttribute("data-name"),
+        copies: readCopiesFromContext(oneBtn),
+      })
+        .then(showPrintResult)
         .catch(function (err) {
           showToast(err.message || "Ошибка печати", true);
         })
