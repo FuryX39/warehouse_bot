@@ -9,10 +9,10 @@
   BARCODE_PRINT_AGENT_HOST — хост (по умолчанию 127.0.0.1)
   BARCODE_PRINT_AGENT_PORT — порт (по умолчанию 18766)
   BARCODE_PRINT_SUMATRA    — путь к SumatraPDF.exe (Windows, для тихой печати)
-  BARCODE_PRINT_PRINTER    — имя принтера (опционально)
+  BARCODE_PRINT_PRINTER    — имя принтера (как в Windows), иначе принтер по умолчанию
 
 Панель отправляет POST http://127.0.0.1:18766/print с JSON:
-  {"barcode": "...", "sku": "...", "name": "..."}
+  {"barcode": "...", "sku": "...", "name": "...", "copies": 1}
 """
 
 from __future__ import annotations
@@ -42,17 +42,18 @@ _PORT = int(os.getenv("BARCODE_PRINT_AGENT_PORT", "18766"))
 
 
 def _load_dotenv() -> None:
-    env_path = _ROOT / ".env"
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for name in ("config.env", ".env"):
+        env_path = _ROOT / name
+        if not env_path.is_file():
             continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        if key and key not in os.environ:
-            os.environ[key] = val.strip().strip('"').strip("'")
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = val.strip().strip('"').strip("'")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -81,7 +82,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        if self.path.rstrip("/") == "/health":
+        if self.path.split("?", 1)[0].rstrip("/") == "/health":
             self._json(200, {"ok": True, "service": "barcode_print_agent"})
             return
         self._json(404, {"ok": False, "error": "not found"})
@@ -103,7 +104,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         sku = str(data.get("sku") or "").strip()
         name = str(data.get("name") or "").strip()
-        printer = str(data.get("printer") or "").strip() or None
         try:
             copies = int(data.get("copies") or 1)
         except (TypeError, ValueError):
@@ -112,7 +112,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             for _ in range(copies):
                 pdf = generate_barcode_label_pdf(barcode, sku=sku, product_name=name)
-                print_label_pdf(pdf, printer=printer)
+                print_label_pdf(pdf)
         except Exception as exc:
             logger.exception("print failed")
             self._json(500, {"ok": False, "error": str(exc)})
@@ -126,12 +126,15 @@ def main() -> None:
     logger.info("Агент печати штрихкодов: http://%s:%s (GET /health, POST /print)", _HOST, _PORT)
     if os.name == "nt":
         sumatra = os.getenv("BARCODE_PRINT_SUMATRA", "")
+        printer = os.getenv("BARCODE_PRINT_PRINTER", "")
         if sumatra:
             logger.info("SumatraPDF: %s", sumatra)
         else:
             logger.warning(
                 "BARCODE_PRINT_SUMATRA не задан — укажите путь к SumatraPDF.exe для тихой печати"
             )
+        if printer:
+            logger.info("Принтер: %s", printer)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

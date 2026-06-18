@@ -44,7 +44,7 @@ def _print_pdf_windows(path: Path, *, printer: str | None) -> None:
     if not exe:
         raise RuntimeError(
             "Для тихой печати на Windows установите SumatraPDF и задайте BARCODE_PRINT_SUMATRA "
-            "(полный путь к SumatraPDF.exe) в переменных окружения или в .env рядом с агентом."
+            "(полный путь к SumatraPDF.exe) в переменных окружения или в config.env рядом с агентом."
         )
     cmd = [exe, "-silent"]
     if printer:
