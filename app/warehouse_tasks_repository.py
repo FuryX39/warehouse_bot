@@ -15,6 +15,7 @@ from app.crm_repository import CrmCounterparty, CrmRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
+from app.warehouse_task_summary_repository import parse_coefficient
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 
 
@@ -71,6 +72,7 @@ class WarehouseTaskType(_Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    coefficient: Mapped[str] = mapped_column(String(32), nullable=False, default="1")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -253,10 +255,6 @@ class WarehouseTasksRepository:
     def init_schema(self) -> None:
         self._ensure_schema()
 
-    def _ensure_schema(self) -> None:
-        _Base.metadata.create_all(self.engine)
-        self._migrate_counterparty_id_column()
-
     def _migrate_counterparty_id_column(self) -> None:
         from sqlalchemy import inspect, text
 
@@ -275,7 +273,25 @@ class WarehouseTasksRepository:
         _Base.metadata.create_all(self.engine)
         self._migrate_counterparty_id_column()
         self._migrate_status_column()
+        self._migrate_task_type_coefficient_column()
         self._seed_task_statuses()
+
+    def _migrate_task_type_coefficient_column(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "warehouse_task_types" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_task_types")}
+        if "coefficient" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE warehouse_task_types "
+                    "ADD COLUMN coefficient VARCHAR(32) NOT NULL DEFAULT '1'"
+                )
+            )
+            session.commit()
 
     def _migrate_status_column(self) -> None:
         from sqlalchemy import inspect, text
@@ -401,6 +417,7 @@ class WarehouseTasksRepository:
                     "id": int(r.id),
                     "name": r.name,
                     "comment": r.comment or "",
+                    "coefficient": _task_type_coef_float(r.coefficient),
                     "sort_order": int(r.sort_order),
                 }
                 for r in rows
@@ -425,12 +442,15 @@ class WarehouseTasksRepository:
                     row = WarehouseTaskType(
                         name=name[:128],
                         comment=str(item.get("comment") or "").strip()[:512],
+                        coefficient=_task_type_coef_storage(item.get("coefficient")),
                         sort_order=i,
                     )
                     session.add(row)
                 else:
                     row.name = name[:128]
                     row.comment = str(item.get("comment") or "").strip()[:512]
+                    if "coefficient" in item:
+                        row.coefficient = _task_type_coef_storage(item.get("coefficient"))
                     row.sort_order = i
                 session.flush()
                 keep_ids.add(int(row.id))
@@ -465,6 +485,7 @@ class WarehouseTasksRepository:
             row = WarehouseTaskType(
                 name=name[:128],
                 comment=comment,
+                coefficient=_task_type_coef_storage(data.get("coefficient")),
                 sort_order=int(max_order) + 1,
             )
             session.add(row)
@@ -491,6 +512,8 @@ class WarehouseTasksRepository:
                 row.name = name[:128]
             if "comment" in data:
                 row.comment = str(data.get("comment") or "").strip()[:512]
+            if "coefficient" in data:
+                row.coefficient = _task_type_coef_storage(data.get("coefficient"))
             if "sort_order" in data:
                 try:
                     row.sort_order = int(data.get("sort_order"))
@@ -521,6 +544,7 @@ class WarehouseTasksRepository:
             "id": int(row.id),
             "name": str(row.name),
             "comment": str(row.comment or ""),
+            "coefficient": _task_type_coef_float(row.coefficient),
             "sort_order": int(row.sort_order),
         }
 
@@ -963,69 +987,75 @@ class WarehouseTasksRepository:
             q = q.where(*conds).limit(5000)
             task_rows = session.scalars(q).all()
             rows = [self._task_row(session, r) for r in task_rows]
+            type_coef_map = {
+                int(r.id): _task_type_coef_float(r.coefficient)
+                for r in session.scalars(select(WarehouseTaskType)).all()
+            }
 
-        day_docs: dict[str, set[tuple[str, int]]] = {}
         day_task_count: dict[str, int] = {}
+        task_entries: list[tuple[str, int, list[TaskDocumentRow]]] = []
 
         for row in rows:
             day = _ts_to_day_str(row.start_date_ts)
             if not day:
                 continue
             day_task_count[day] = day_task_count.get(day, 0) + 1
-            bucket = day_docs.setdefault(day, set())
-            for doc in row.documents:
-                bucket.add((doc.entity_type, int(doc.entity_id)))
+            task_entries.append((day, int(row.task_type_id), row.documents))
 
         receipt_ids: set[int] = set()
         writeoff_ids: set[int] = set()
         transfer_ids: set[int] = set()
-        for docs in day_docs.values():
-            for entity_type, entity_id in docs:
-                if entity_type == ENTITY_RECEIPT:
-                    receipt_ids.add(entity_id)
-                elif entity_type == ENTITY_WRITEOFF:
-                    writeoff_ids.add(entity_id)
-                elif entity_type == ENTITY_TRANSFER:
-                    transfer_ids.add(entity_id)
+        for _day, _type_id, docs in task_entries:
+            for doc in docs:
+                if doc.entity_type == ENTITY_RECEIPT:
+                    receipt_ids.add(int(doc.entity_id))
+                elif doc.entity_type == ENTITY_WRITEOFF:
+                    writeoff_ids.add(int(doc.entity_id))
+                elif doc.entity_type == ENTITY_TRANSFER:
+                    transfer_ids.add(int(doc.entity_id))
 
         receipt_items = self.receipts_repo.map_product_quantities_by_ids(list(receipt_ids))
         writeoff_items = self.writeoffs_repo.map_product_quantities_by_ids(list(writeoff_ids))
         transfer_items = self.transfers_repo.map_product_quantities_by_ids(list(transfer_ids))
 
-        day_product_qty: dict[str, dict[int, int]] = {}
         all_product_ids: set[int] = set()
 
-        def add_doc_items(day_key: str, entity_type: str, entity_id: int) -> None:
-            if entity_type == ENTITY_RECEIPT:
-                lines = receipt_items.get(entity_id, [])
-            elif entity_type == ENTITY_WRITEOFF:
-                lines = writeoff_items.get(entity_id, [])
-            elif entity_type == ENTITY_TRANSFER:
-                lines = transfer_items.get(entity_id, [])
-            else:
-                return
-            bucket = day_product_qty.setdefault(day_key, {})
-            for product_id, quantity in lines:
-                pid = int(product_id)
-                bucket[pid] = bucket.get(pid, 0) + int(quantity)
-                all_product_ids.add(pid)
+        def collect_product_ids(docs: list[TaskDocumentRow]) -> None:
+            for doc in docs:
+                if doc.entity_type == ENTITY_RECEIPT:
+                    lines = receipt_items.get(int(doc.entity_id), [])
+                elif doc.entity_type == ENTITY_WRITEOFF:
+                    lines = writeoff_items.get(int(doc.entity_id), [])
+                elif doc.entity_type == ENTITY_TRANSFER:
+                    lines = transfer_items.get(int(doc.entity_id), [])
+                else:
+                    continue
+                for product_id, _quantity in lines:
+                    all_product_ids.add(int(product_id))
 
-        for day_key, docs in day_docs.items():
-            for entity_type, entity_id in docs:
-                add_doc_items(day_key, entity_type, entity_id)
+        for _day, _type_id, docs in task_entries:
+            collect_product_ids(docs)
 
         unit_costs = self.catalog_repo.get_product_group_unit_costs(list(all_product_ids))
 
         days_out: dict[str, dict[str, Any]] = {}
-        for day_key, product_qty in day_product_qty.items():
-            total = Decimal("0")
-            for product_id, quantity in product_qty.items():
-                unit = Decimal(str(unit_costs.get(product_id, 0) or 0))
-                total += unit * Decimal(int(quantity))
-            days_out[day_key] = {
-                "total_cost": _decimal_to_cost_float(total),
-                "task_count": day_task_count.get(day_key, 0),
-            }
+        for day_key, type_id, docs in task_entries:
+            raw_cost = _documents_raw_cost(
+                docs,
+                receipt_items=receipt_items,
+                writeoff_items=writeoff_items,
+                transfer_items=transfer_items,
+                unit_costs=unit_costs,
+            )
+            coef = type_coef_map.get(type_id, 1.0)
+            weighted = raw_cost * Decimal(str(coef))
+            bucket = days_out.setdefault(
+                day_key,
+                {"total_cost": 0.0, "task_count": day_task_count.get(day_key, 0)},
+            )
+            bucket["total_cost"] = _decimal_to_cost_float(
+                Decimal(str(bucket["total_cost"])) + weighted
+            )
 
         for day_key, count in day_task_count.items():
             if day_key not in days_out:
@@ -1657,6 +1687,55 @@ class WarehouseTasksRepository:
             or_conds.append(WarehouseTask.id.in_(assignee_subq))
             conds.append(or_(*or_conds))
         return conds
+
+
+def _task_type_coef_float(value: Any) -> float:
+    if value is None or str(value).strip() == "":
+        return 1.0
+    try:
+        return parse_coefficient(value) or 1.0
+    except ValueError:
+        return 1.0
+
+
+def _task_type_coef_storage(value: Any) -> str:
+    if value is None or str(value).strip() == "":
+        return "1"
+    coef = parse_coefficient(value)
+    assert coef is not None
+    return str(coef)
+
+
+def _documents_raw_cost(
+    documents: list[TaskDocumentRow],
+    *,
+    receipt_items: dict[int, list[tuple[int, int]]],
+    writeoff_items: dict[int, list[tuple[int, int]]],
+    transfer_items: dict[int, list[tuple[int, int]]],
+    unit_costs: dict[int, float],
+):
+    from decimal import Decimal
+
+    product_qty: dict[int, int] = {}
+    for doc in documents:
+        entity_id = int(doc.entity_id)
+        if doc.entity_type == ENTITY_RECEIPT:
+            lines = receipt_items.get(entity_id, [])
+        elif doc.entity_type == ENTITY_WRITEOFF:
+            lines = writeoff_items.get(entity_id, [])
+        elif doc.entity_type == ENTITY_TRANSFER:
+            lines = transfer_items.get(entity_id, [])
+        else:
+            continue
+        for product_id, quantity in lines:
+            pid = int(product_id)
+            product_qty[pid] = product_qty.get(pid, 0) + int(quantity)
+
+    total = Decimal("0")
+    for product_id, quantity in product_qty.items():
+        unit = Decimal(str(unit_costs.get(product_id, 0) or 0))
+        total += unit * Decimal(int(quantity))
+    return total
 
 
 def _decimal_to_cost_float(value) -> float:

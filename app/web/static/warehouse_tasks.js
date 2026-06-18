@@ -475,7 +475,7 @@
             var staffCount = info.staff_count || 0;
             var hours = formatHours(info.hours);
             var hoursHtml = hours
-              ? '<span class="wh-task-cal-hours" title="Сумма документов ÷ сотрудники ÷ коэффициент">' +
+              ? '<span class="wh-task-cal-hours" title="Сумма документов × кф. типа ÷ сотрудники ÷ кф. дня">' +
                 esc(hours) +
                 "</span>"
               : staffCount > 0 && (info.total_cost || 0) > 0
@@ -515,7 +515,7 @@
 
         root.innerHTML =
           '<div class="wh-task-summary">' +
-          '<p class="wh-muted wh-task-summary-hint">Часы = сумма стоимостей групп товаров из документов задач ÷ количество сотрудников на смену ÷ коэффициент. Учитывается только <strong>дата начала</strong> задачи.</p>' +
+          '<p class="wh-muted wh-task-summary-hint">Часы = (сумма стоимостей документов каждой задачи × коэффициент её типа) ÷ количество сотрудников на смену ÷ коэффициент дня. Учитывается только <strong>дата начала</strong> задачи.</p>' +
           '<div class="wh-task-summary-settings">' +
           '<label class="wh-task-summary-default-coef">Коэффициент по умолчанию ' +
           '<input type="text" id="whTkDefaultCoef" value="' +
@@ -830,10 +830,17 @@
 
   function modalTaskTypesEditor(onDone) {
     var rows = (meta.task_types || []).map(function (item) {
+      var coef =
+        item.coefficient != null && item.coefficient !== undefined
+          ? String(item.coefficient).replace(".", ",")
+          : "1";
       return (
         '<div class="wh-modal-row wh-crm-dict-row" data-id="' + esc(item.id) + '">' +
         '<input type="text" class="wh-crm-dict-name" value="' + esc(item.name) + '" placeholder="Название" />' +
         '<input type="text" class="wh-crm-dict-comment" value="' + esc(item.comment || "") + '" placeholder="Комментарий" />' +
+        '<input type="text" class="wh-crm-dict-cost wh-crm-dict-coef" value="' +
+        esc(coef) +
+        '" placeholder="Кф." title="Коэффициент для сводной" inputmode="decimal" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button></div>'
       );
     });
@@ -850,6 +857,11 @@
             name: name,
             comment: row.querySelector(".wh-crm-dict-comment").value.trim(),
           };
+          var coefRaw = row.querySelector(".wh-crm-dict-coef");
+          if (coefRaw) {
+            var coefVal = parseCoefInput(coefRaw.value);
+            if (coefVal) item.coefficient = coefVal;
+          }
           var id = row.getAttribute("data-id");
           if (id) item.id = parseInt(id, 10);
           items.push(item);
@@ -877,6 +889,7 @@
       row.innerHTML =
         '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
         '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' +
+        '<input type="text" class="wh-crm-dict-cost wh-crm-dict-coef" value="1" placeholder="Кф." title="Коэффициент для сводной" inputmode="decimal" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
       backdrop.querySelector("#whTkTypeRows").appendChild(row);
     });
