@@ -763,7 +763,13 @@
     root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function (e) {
-        if (e.target.closest(".wh-cat-select-col, .wh-cat-select-cb")) return;
+        if (
+          e.target.closest(
+            ".wh-cat-select-col, .wh-cat-select-cb, .wh-barcode-print-col, .wh-barcode-print-btn, .wh-barcode-print-one"
+          )
+        ) {
+          return;
+        }
         editingId = parseInt(tr.getAttribute("data-id"), 10);
         renderForm(editingId, null);
       });

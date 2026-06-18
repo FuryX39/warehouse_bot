@@ -224,6 +224,7 @@
     var btn = e.target.closest(".wh-barcode-print-btn");
     if (btn) {
       e.preventDefault();
+      e.stopPropagation();
       btn.disabled = true;
       printProduct(btn.getAttribute("data-product-id"), {
         sku: btn.getAttribute("data-sku"),
@@ -250,6 +251,7 @@
     var oneBtn = e.target.closest(".wh-barcode-print-one");
     if (oneBtn) {
       e.preventDefault();
+      e.stopPropagation();
       var row = oneBtn.closest(".wh-crm-barcode-row");
       var inp = row && row.querySelector(".wh-crm-barcode-input");
       var bc = inp && inp.value.trim();
