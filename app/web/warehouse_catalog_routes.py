@@ -252,6 +252,29 @@ def register_warehouse_catalog_routes(
     ) -> dict:
         return {"code": catalog_repo.generate_next_product_code()}
 
+    @app.post("/api/warehouse/catalog/products/bulk-delete")
+    async def api_catalog_bulk_delete_products(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        raw_ids = body.get("ids") if isinstance(body, dict) else None
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(status_code=400, detail="Укажите ids — массив идентификаторов товаров")
+        try:
+            ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Некорректный список ids") from exc
+        result = catalog_repo.delete_products(ids)
+        if stock_repo is not None and result.get("deleted_skus"):
+            for sku in result["deleted_skus"]:
+                stock_repo.remove_cached_sku(sku)
+            stock_repo.recalculate_skus(set(result["deleted_skus"]))
+        return {
+            "ok": True,
+            "deleted": int(result.get("deleted") or 0),
+            "failed": result.get("failed") or [],
+        }
+
     @app.get("/api/warehouse/catalog/products/{product_id}")
     async def api_catalog_get_product(
         product_id: int,

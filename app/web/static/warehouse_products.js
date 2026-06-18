@@ -6,6 +6,7 @@
   var editingId = null;
   var formIsKit = false;
   var kitComponents = [];
+  var selectedProductIds = new Set();
 
   function esc(s) {
     return String(s || "")
@@ -333,8 +334,14 @@
         var typeLabel = p.is_kit
           ? '<span class="wh-badge wh-badge-admin">комплект</span>'
           : "товар";
+        var checked = selectedProductIds.has(p.id) ? " checked" : "";
         return (
           "<tr data-id=\"" + p.id + '">' +
+          '<td class="wh-cat-select-col"><input type="checkbox" class="wh-cat-select-cb" data-id="' +
+          esc(p.id) +
+          '"' +
+          checked +
+          ' aria-label="Выбрать" /></td>' +
           productThumbCell(p.image_url) +
           "<td>" + esc(p.name) + "</td>" +
           "<td>" + typeLabel + "</td>" +
@@ -348,9 +355,32 @@
       .join("");
     return (
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
+      '<th class="wh-cat-select-col"><input type="checkbox" id="whCatSelectAll" title="Выбрать все" aria-label="Выбрать все" /></th>' +
       "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>Группа</th><th>Ед.</th><th>ШК</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table>"
     );
+  }
+
+  function updateBulkDeleteButton(root) {
+    var btn = root.querySelector("#whCatBulkDelete");
+    if (!btn) return;
+    var n = selectedProductIds.size;
+    btn.disabled = n === 0;
+    btn.textContent = n > 0 ? "Удалить выбранные (" + n + ")" : "Удалить выбранные";
+  }
+
+  function syncSelectAllCheckbox(root) {
+    var selectAll = root.querySelector("#whCatSelectAll");
+    var boxes = root.querySelectorAll(".wh-cat-select-cb");
+    if (!selectAll) return;
+    if (!boxes.length) {
+      selectAll.checked = false;
+      selectAll.indeterminate = false;
+      return;
+    }
+    var checked = root.querySelectorAll(".wh-cat-select-cb:checked").length;
+    selectAll.checked = checked === boxes.length;
+    selectAll.indeterminate = checked > 0 && checked < boxes.length;
   }
 
   function renderList() {
@@ -363,6 +393,7 @@
           '<input type="search" id="whCatQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
           '<button type="button" class="wh-btn" id="whCatToggleFilter">Фильтр</button>' +
           '<button type="button" class="wh-btn" id="whCatBulkImport">Массовая загрузка</button>' +
+          '<button type="button" class="wh-btn wh-btn-danger" id="whCatBulkDelete" disabled>Удалить выбранные</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whCatCreate">+ Товар</button>' +
           '<button type="button" class="wh-btn" id="whCatCreateKit">+ Комплект</button>' +
           "</div>" +
@@ -370,6 +401,8 @@
           '<div id="whCatListWrap"></div>';
         root.querySelector("#whCatListWrap").innerHTML = renderListTable(data.products || []);
         bindListEvents(root);
+        updateBulkDeleteButton(root);
+        syncSelectAllCheckbox(root);
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
@@ -663,6 +696,45 @@
       renderForm(null, true);
     });
     root.querySelector("#whCatBulkImport").addEventListener("click", openBulkImportModal);
+    var bulkDeleteBtn = root.querySelector("#whCatBulkDelete");
+    if (bulkDeleteBtn) {
+      bulkDeleteBtn.addEventListener("click", function () {
+        bulkDeleteProducts(root);
+      });
+    }
+    var selectAll = root.querySelector("#whCatSelectAll");
+    if (selectAll) {
+      selectAll.addEventListener("change", function () {
+        var on = selectAll.checked;
+        root.querySelectorAll(".wh-cat-select-cb").forEach(function (cb) {
+          cb.checked = on;
+          var id = parseInt(cb.getAttribute("data-id"), 10);
+          if (!id) return;
+          if (on) selectedProductIds.add(id);
+          else selectedProductIds.delete(id);
+        });
+        selectAll.indeterminate = false;
+        updateBulkDeleteButton(root);
+      });
+    }
+    root.querySelectorAll(".wh-cat-select-cb").forEach(function (cb) {
+      cb.addEventListener("click", function (e) {
+        e.stopPropagation();
+      });
+      cb.addEventListener("change", function () {
+        var id = parseInt(cb.getAttribute("data-id"), 10);
+        if (!id) return;
+        if (cb.checked) selectedProductIds.add(id);
+        else selectedProductIds.delete(id);
+        updateBulkDeleteButton(root);
+        syncSelectAllCheckbox(root);
+      });
+    });
+    root.querySelectorAll(".wh-cat-select-col").forEach(function (td) {
+      td.addEventListener("click", function (e) {
+        e.stopPropagation();
+      });
+    });
     root.querySelector("#whCatToggleFilter").addEventListener("click", function () {
       filterPanelOpen = !filterPanelOpen;
       var fp = root.querySelector("#whCatFilters");
@@ -685,11 +757,72 @@
     });
     root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
       tr.style.cursor = "pointer";
-      tr.addEventListener("click", function () {
+      tr.addEventListener("click", function (e) {
+        if (e.target.closest(".wh-cat-select-col, .wh-cat-select-cb")) return;
         editingId = parseInt(tr.getAttribute("data-id"), 10);
         renderForm(editingId, null);
       });
     });
+  }
+
+  function bulkDeleteProducts(root) {
+    var ids = Array.from(selectedProductIds);
+    if (!ids.length) return;
+    if (
+      !confirm(
+        "Удалить выбранные товары (" +
+          ids.length +
+          ")? Это действие нельзя отменить."
+      )
+    ) {
+      return;
+    }
+    var btn = root.querySelector("#whCatBulkDelete");
+    if (btn) btn.disabled = true;
+    fetchJson("/api/warehouse/catalog/products/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: ids }),
+    })
+      .then(function (data) {
+        var deleted = intOrZero(data.deleted);
+        var failed = data.failed || [];
+        var failedIds = new Set(
+          failed.map(function (f) {
+            return intOrZero(f.id);
+          })
+        );
+        ids.forEach(function (id) {
+          if (!failedIds.has(id)) selectedProductIds.delete(id);
+        });
+        if (failed.length) {
+          var lines = failed
+            .slice(0, 8)
+            .map(function (f) {
+              return "#" + f.id + ": " + (f.error || "ошибка");
+            })
+            .join("\n");
+          if (failed.length > 8) lines += "\n…и ещё " + (failed.length - 8);
+          alert(
+            "Удалено: " +
+              deleted +
+              ". Не удалось: " +
+              failed.length +
+              ".\n\n" +
+              lines
+          );
+        }
+        renderList();
+      })
+      .catch(function (err) {
+        alert(err.message || "Ошибка удаления");
+        updateBulkDeleteButton(root);
+      });
+  }
+
+  function intOrZero(v) {
+    var n = parseInt(v, 10);
+    return isNaN(n) ? 0 : n;
   }
 
   function barcodeRow(value) {

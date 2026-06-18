@@ -670,6 +670,33 @@ class CatalogRepository:
             session.commit()
             return True
 
+    def delete_products(self, product_ids: list[int]) -> dict[str, Any]:
+        """Массовое удаление. Возвращает число удалённых и ошибки по id."""
+        deleted = 0
+        deleted_skus: list[str] = []
+        failed: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for raw_id in product_ids:
+            try:
+                pid = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if pid in seen:
+                continue
+            seen.add(pid)
+            old = self.get_product(pid)
+            old_sku = str(old.sku).strip() if old and old.sku else ""
+            try:
+                if self.delete_product(pid):
+                    deleted += 1
+                    if old_sku:
+                        deleted_skus.append(old_sku)
+                else:
+                    failed.append({"id": pid, "error": "Не найден"})
+            except ValueError as exc:
+                failed.append({"id": pid, "error": str(exc)})
+        return {"deleted": deleted, "failed": failed, "deleted_skus": deleted_skus}
+
     def generate_next_product_code(self) -> str:
         with Session(self.engine) as session:
             codes = session.scalars(select(CatalogProduct.code)).all()
