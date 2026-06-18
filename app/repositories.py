@@ -12,7 +12,6 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
-    create_engine,
     delete,
     func,
     inspect,
@@ -23,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
+from app.db import create_db_engine
 from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 
 # Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
@@ -130,7 +130,7 @@ class InventorySnapshot:
 
 class InventoryRepository:
     def __init__(self, db_url: str) -> None:
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
         self._on_skus_affected: Callable[[set[str]], None] | None = None
         self._after_stock_write: Callable[[str, int], None] | None = None
         self._storage_repo: StorageWarehouseRepository | None = None
@@ -918,20 +918,46 @@ class InventoryRepository:
     def _deduct_reserved_stock(self, session: Session, sku: str, qty: int) -> bool:
         if qty <= 0:
             return False
-        legacy_id = self._legacy_warehouse_id()
-        stock_row = session.get(ProductStock, sku)
+        sku_n = str(sku or "").strip()
+        if not sku_n:
+            return False
+        stock_row = session.get(ProductStock, sku_n)
         current = int(stock_row.stock) if stock_row is not None else 0
-        if legacy_id is not None and self._storage_repo is not None:
-            current = max(current, self._storage_repo.get_stock(legacy_id, sku))
-        if current <= 0 and stock_row is None:
+        legacy_id = self._legacy_warehouse_id()
+        if legacy_id is not None:
+            from app.storage_warehouse_repository import StorageStock
+
+            legacy_row = session.scalar(
+                select(StorageStock).where(
+                    StorageStock.warehouse_id == int(legacy_id),
+                    StorageStock.sku == sku_n,
+                )
+            )
+            if legacy_row is not None:
+                current = max(current, int(legacy_row.stock))
+        if current <= 0:
             return False
         new_qty = max(current - int(qty), 0)
         if stock_row is None:
-            session.add(ProductStock(sku=sku, stock=new_qty))
+            session.add(ProductStock(sku=sku_n, stock=new_qty))
         else:
             stock_row.stock = new_qty
-        self._sync_stock_to_legacy_warehouse(sku, new_qty)
         return True
+
+    def _finalize_stock_deduct(self, session: Session, reserved_by_sku: dict[str, int]) -> None:
+        if not reserved_by_sku:
+            return
+        if self._after_stock_write:
+            for sku in reserved_by_sku:
+                stock_row = session.get(ProductStock, sku)
+                qty_after = int(stock_row.stock) if stock_row is not None else 0
+                self._after_stock_write(sku, qty_after)
+        else:
+            for sku in reserved_by_sku:
+                stock_row = session.get(ProductStock, sku)
+                qty_after = int(stock_row.stock) if stock_row is not None else 0
+                self._sync_stock_to_legacy_warehouse(sku, qty_after)
+        self._notify_skus(reserved_by_sku.keys())
 
     def ship_added_orders_before_cutoff(
         self, sources: set[str] | None, cutoff_ts: int
@@ -972,6 +998,8 @@ class InventoryRepository:
                 r.state = "shipped"
 
             session.commit()
+
+            self._finalize_stock_deduct(session, reserved_by_sku)
 
             by_source_out: dict[str, dict[str, int]] = {}
             total_skus_summed = 0
@@ -1032,12 +1060,7 @@ class InventoryRepository:
 
             session.commit()
 
-            if self._after_stock_write:
-                for sku in reserved_by_sku:
-                    stock_row = session.get(ProductStock, sku)
-                    qty_after = int(stock_row.stock) if stock_row is not None else 0
-                    self._after_stock_write(sku, qty_after)
-            self._notify_skus(reserved_by_sku.keys())
+            self._finalize_stock_deduct(session, reserved_by_sku)
 
             return {
                 "affected_skus": len(reserved_by_sku),

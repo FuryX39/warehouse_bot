@@ -83,9 +83,9 @@ def _like(pattern: str) -> str:
 
 class StorageWarehouseRepository:
     def __init__(self, db_url: str) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
         self._on_sku_changed: Callable[[str], None] | None = None
 
     def set_stock_balance_hook(self, on_sku_changed: Callable[[str], None] | None) -> None:
