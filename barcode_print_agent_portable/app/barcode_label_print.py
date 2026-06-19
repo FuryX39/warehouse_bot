@@ -8,6 +8,17 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from app.barcode_label_pdf import LABEL_HEIGHT_MM, LABEL_WIDTH_MM
+
+
+def _sumatra_print_settings() -> str:
+    custom = (os.getenv("BARCODE_PRINT_SETTINGS") or "").strip()
+    if custom:
+        return custom
+    w = (os.getenv("BARCODE_LABEL_WIDTH_MM") or str(LABEL_WIDTH_MM)).strip()
+    h = (os.getenv("BARCODE_LABEL_HEIGHT_MM") or str(LABEL_HEIGHT_MM)).strip()
+    return f"noscale,portrait,disable-auto-rotation,paper={w}mm x {h}mm"
+
 
 def print_label_pdf(pdf_bytes: bytes, *, printer: str | None = None) -> None:
     if not pdf_bytes:
@@ -35,8 +46,8 @@ def _print_pdf_windows(path: Path, *, printer: str | None) -> None:
     candidates = [sumatra] if sumatra else []
     candidates.extend(
         [
-            r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
             r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
+            r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         ]
     )
     exe = next((c for c in candidates if c and Path(c).is_file()), "")
@@ -50,6 +61,7 @@ def _print_pdf_windows(path: Path, *, printer: str | None) -> None:
         cmd.extend(["-print-to", printer])
     else:
         cmd.append("-print-to-default")
+    cmd.extend(["-print-settings", _sumatra_print_settings()])
     cmd.append(str(path))
     subprocess.run(cmd, check=True, timeout=90)
 

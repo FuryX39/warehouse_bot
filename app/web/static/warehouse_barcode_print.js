@@ -1,6 +1,7 @@
 (function (global) {
-  var AGENT_BASE = "http://127.0.0.1:18766";
-  var agentOk = null;
+  var DEFAULT_PORT = 18766;
+  var agentPort = DEFAULT_PORT;
+  var agentRoute = null;
   var agentCheckedAt = 0;
 
   function esc(s) {
@@ -22,22 +23,84 @@
     });
   }
 
-  function checkAgent(force) {
-    var now = Date.now();
-    if (!force && agentOk !== null && now - agentCheckedAt < 15000) {
-      return Promise.resolve(agentOk);
-    }
-    return fetch(AGENT_BASE + "/health", { method: "GET", mode: "cors" })
+  function directBases() {
+    var port = agentPort || DEFAULT_PORT;
+    return ["http://127.0.0.1:" + port, "http://localhost:" + port];
+  }
+
+  function probeDirect(base) {
+    return fetch(base + "/health", { method: "GET", mode: "cors" })
       .then(function (r) {
-        agentOk = r.ok;
-        agentCheckedAt = now;
-        return agentOk;
+        if (!r.ok) return null;
+        return r
+          .json()
+          .then(function (json) {
+            return json && json.ok ? base : null;
+          })
+          .catch(function () {
+            return r.ok ? base : null;
+          });
       })
       .catch(function () {
-        agentOk = false;
-        agentCheckedAt = now;
-        return false;
+        return null;
       });
+  }
+
+  function probeProxy() {
+    return fetchJson("/api/warehouse/barcode-print/health")
+      .then(function (json) {
+        return json && json.ok ? "proxy" : null;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function loadAgentPort() {
+    return fetchJson("/api/warehouse/barcode-print/config")
+      .then(function (json) {
+        var p = parseInt(json && json.port, 10);
+        if (p > 0 && p <= 65535) agentPort = p;
+      })
+      .catch(function () {
+        /* default port */
+      });
+  }
+
+  var portLoaded = loadAgentPort();
+
+  function checkAgent(force) {
+    var now = Date.now();
+    if (!force && agentRoute && now - agentCheckedAt < 10000) {
+      return Promise.resolve(!!agentRoute);
+    }
+    return portLoaded.then(function () {
+      var bases = directBases();
+      var chain = Promise.resolve(null);
+      bases.forEach(function (base) {
+        chain = chain.then(function (found) {
+          if (found) return found;
+          return probeDirect(base);
+        });
+      });
+      return chain.then(function (directBase) {
+        if (directBase) {
+          agentRoute = { type: "direct", base: directBase };
+          agentCheckedAt = now;
+          return true;
+        }
+        return probeProxy().then(function (proxy) {
+          if (proxy) {
+            agentRoute = { type: "proxy" };
+            agentCheckedAt = now;
+            return true;
+          }
+          agentRoute = null;
+          agentCheckedAt = now;
+          return false;
+        });
+      });
+    });
   }
 
   function parseCopies(raw) {
@@ -63,7 +126,17 @@
   }
 
   function printViaAgent(payload) {
-    return fetch(AGENT_BASE + "/print", {
+    if (!agentRoute) {
+      return Promise.reject(new Error("Агент печати недоступен"));
+    }
+    if (agentRoute.type === "proxy") {
+      return fetchJson("/api/warehouse/barcode-print/print", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+    return fetch(agentRoute.base + "/print", {
       method: "POST",
       mode: "cors",
       headers: { "Content-Type": "application/json" },
@@ -175,10 +248,10 @@
       name: name || "",
       copies: parseCopies(copies),
     };
-    return checkAgent().then(function (ok) {
+    return checkAgent(true).then(function (ok) {
       if (ok) {
         return printViaAgent(payload).then(function () {
-          return { mode: "print", copies: payload.copies };
+          return { mode: "print", copies: payload.copies, route: agentRoute };
         });
       }
       return downloadLabelPdf(productId, barcode, payload.copies).then(function () {
@@ -245,12 +318,16 @@
   function showPrintResult(result) {
     var copies = (result && result.copies) || 1;
     if (result && result.mode === "download") {
-      showToast(
-        "Агент печати не запущен — скачано PDF: " +
-          copies +
-          ". Запустите start_barcode_print_agent.bat на этом ПК.",
-        true
-      );
+      var hint =
+        "Агент печати недоступен — скачано PDF: " +
+        copies +
+        ". Запустите start.bat на ПК с принтером (порт " +
+        (agentPort || DEFAULT_PORT) +
+        ").";
+      if (location.protocol === "https:") {
+        hint += " Для HTTPS-сайта разрешите доступ к локальной сети в браузере.";
+      }
+      showToast(hint, true);
     } else {
       showToast(copies > 1 ? "Отправлено на печать: " + copies + " шт." : "Отправлено на печать", false);
     }
@@ -270,7 +347,7 @@
     clearTimeout(el._hideTimer);
     el._hideTimer = setTimeout(function () {
       el.hidden = true;
-    }, isError ? 8000 : 3500);
+    }, isError ? 10000 : 3500);
   }
 
   document.addEventListener("click", function (e) {
@@ -330,6 +407,8 @@
     printProduct: printProduct,
     printButtonHtml: printButtonHtml,
     checkAgent: checkAgent,
-    agentUrl: AGENT_BASE,
+    agentPort: function () {
+      return agentPort;
+    },
   };
 })(window);
