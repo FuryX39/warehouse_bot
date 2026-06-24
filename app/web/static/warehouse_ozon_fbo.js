@@ -353,12 +353,25 @@
           '<div><label>Склад Ozon</label><input type="text" id="whFboWarehouseName" value="' +
           esc(s.ozon_warehouse_name || "") +
           '" /></div>' +
-          '<div><label>ID кластера Ozon</label><input type="text" id="whFboClusterId" value="' +
+          '<input type="hidden" id="whFboClusterId" value="' +
           esc(s.ozon_cluster_id || "") +
-          '" /></div>' +
-          '<div><label>Кластер Ozon</label><input type="text" id="whFboClusterName" value="' +
+          '" />' +
+          '<input type="hidden" id="whFboClusterName" value="' +
           esc(s.ozon_cluster_name || "") +
-          '" /></div>' +
+          '" />' +
+          '<div><label>Кластер Ozon</label><select id="whFboClusterSelect">' +
+          (s.ozon_cluster_id
+            ? '<option value="' +
+              esc(s.ozon_cluster_id) +
+              '" data-name="' +
+              esc(s.ozon_cluster_name || s.ozon_cluster_id) +
+              '" selected>' +
+              esc(s.ozon_cluster_name || s.ozon_cluster_id) +
+              " · " +
+              esc(s.ozon_cluster_id) +
+              "</option>"
+            : '<option value="">Нажмите «Загрузить кластеры Ozon»</option>') +
+          "</select></div>" +
           "</div>" +
           '<div class="wh-form-actions">' +
           '<button type="button" class="wh-btn wh-btn-sm" id="whFboLoadWarehouses">Загрузить склады Ozon</button>' +
@@ -414,7 +427,25 @@
       } else {
         root.querySelector("#whFboClusterId").value = btn.getAttribute("data-id") || "";
         root.querySelector("#whFboClusterName").value = btn.getAttribute("data-name") || "";
+        var sel = root.querySelector("#whFboClusterSelect");
+        if (sel) {
+          sel.innerHTML =
+            '<option value="' +
+            esc(btn.getAttribute("data-id") || "") +
+            '" data-name="' +
+            esc(btn.getAttribute("data-name") || "") +
+            '" selected>' +
+            esc(btn.getAttribute("data-name") || "") +
+            " · " +
+            esc(btn.getAttribute("data-id") || "") +
+            "</option>";
+        }
       }
+    });
+    root.querySelector("#whFboClusterSelect").addEventListener("change", function () {
+      var opt = this.options[this.selectedIndex];
+      root.querySelector("#whFboClusterId").value = this.value || "";
+      root.querySelector("#whFboClusterName").value = opt ? opt.getAttribute("data-name") || "" : "";
     });
     root.querySelector("#whFboProductSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") searchProducts(root);
@@ -489,12 +520,36 @@
             "</pre></details>";
           return;
         }
+        if (type === "clusters") {
+          var sel = root.querySelector("#whFboClusterSelect");
+          var current = root.querySelector("#whFboClusterId").value;
+          sel.innerHTML =
+            '<option value="">Выберите кластер</option>' +
+            rows
+              .map(function (r) {
+                var selected = String(current || "") === String(r.id) ? " selected" : "";
+                return (
+                  '<option value="' +
+                  esc(r.id) +
+                  '" data-name="' +
+                  esc(r.name) +
+                  '"' +
+                  selected +
+                  ">" +
+                  esc(r.name) +
+                  " · " +
+                  esc(r.id) +
+                  "</option>"
+                );
+              })
+              .join("");
+          out.innerHTML = '<p class="wh-msg wh-msg-ok">Кластеры загружены. Выберите кластер в списке.</p>';
+          return;
+        }
         out.innerHTML = rows
           .map(function (r) {
             return (
-              '<button type="button" class="wh-btn wh-btn-sm wh-fbo-ozon-pick" data-type="' +
-              (type === "warehouses" ? "warehouse" : "cluster") +
-              '" data-id="' +
+              '<button type="button" class="wh-btn wh-btn-sm wh-fbo-ozon-pick" data-type="warehouse" data-id="' +
               esc(r.id) +
               '" data-name="' +
               esc(r.name) +

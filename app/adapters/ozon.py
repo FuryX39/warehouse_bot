@@ -97,7 +97,31 @@ class OzonAdapter(MarketplaceAdapter):
         return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     def fbo_cluster_list(self, payload: dict | None = None) -> dict:
-        return self._post_json("/v1/cluster/list", payload or {})
+        body = dict(payload or {})
+        if body.get("cluster_type"):
+            return self._post_json("/v1/cluster/list", body)
+
+        # Ozon made cluster_type validation strict. Different documentation mirrors
+        # mention different enum values, so try the known FBO-related variants and
+        # keep the first successful response.
+        candidates = (
+            "CLUSTER_TYPE_OZON",
+            "CLUSTER_TYPE_FBO",
+            "CLUSTER_TYPE_LOGISTIC",
+            "CLUSTER_TYPE_UNKNOWN",
+        )
+        errors: list[str] = []
+        for cluster_type in candidates:
+            attempt = {**body, "cluster_type": cluster_type}
+            try:
+                data = self._post_json("/v1/cluster/list", attempt)
+            except requests.HTTPError as exc:
+                errors.append(f"{cluster_type}: {exc}")
+                continue
+            if isinstance(data, dict):
+                data.setdefault("_request_cluster_type", cluster_type)
+            return data
+        raise RuntimeError("Не удалось получить кластеры Ozon; " + " | ".join(errors[:4]))
 
     def fbo_warehouse_list(self, payload: dict | None = None) -> dict:
         return self._post_json("/v1/warehouse/fbo/list", payload or {})
