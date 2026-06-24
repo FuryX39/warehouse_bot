@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -15,8 +16,9 @@ from app.crm_repository import CrmCounterparty, CrmRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
-from app.warehouse_task_summary_repository import parse_coefficient
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
+
+_WORK_HOURS_RE = re.compile(r"^\d+([.,]\d+)?$")
 
 
 class _Base(DeclarativeBase):
@@ -84,6 +86,7 @@ class WarehouseTask(_Base):
         Integer, ForeignKey("warehouse_task_types.id"), nullable=False
     )
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    work_hours: Mapped[str] = mapped_column(String(32), nullable=False, default="0")
     start_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
     end_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=True)
@@ -167,6 +170,7 @@ class TaskRow:
     status_name: str
     status_color: str
     comment: str
+    work_hours: float
     start_date_ts: int | None
     end_date_ts: int | None
     created_by_user_id: int | None
@@ -274,6 +278,7 @@ class WarehouseTasksRepository:
         self._migrate_counterparty_id_column()
         self._migrate_status_column()
         self._migrate_task_type_coefficient_column()
+        self._migrate_task_work_hours_column()
         self._seed_task_statuses()
 
     def _migrate_task_type_coefficient_column(self) -> None:
@@ -315,6 +320,23 @@ class WarehouseTasksRepository:
                     {"sid": int(default_id)},
                 )
                 session.commit()
+
+    def _migrate_task_work_hours_column(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "warehouse_tasks" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_tasks")}
+        if "work_hours" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE warehouse_tasks "
+                    "ADD COLUMN work_hours VARCHAR(32) NOT NULL DEFAULT '0'"
+                )
+            )
+            session.commit()
 
     def _seed_task_statuses(self) -> None:
         with Session(self.engine) as session:
@@ -417,7 +439,6 @@ class WarehouseTasksRepository:
                     "id": int(r.id),
                     "name": r.name,
                     "comment": r.comment or "",
-                    "coefficient": _task_type_coef_float(r.coefficient),
                     "sort_order": int(r.sort_order),
                 }
                 for r in rows
@@ -442,15 +463,12 @@ class WarehouseTasksRepository:
                     row = WarehouseTaskType(
                         name=name[:128],
                         comment=str(item.get("comment") or "").strip()[:512],
-                        coefficient=_task_type_coef_storage(item.get("coefficient")),
                         sort_order=i,
                     )
                     session.add(row)
                 else:
                     row.name = name[:128]
                     row.comment = str(item.get("comment") or "").strip()[:512]
-                    if "coefficient" in item:
-                        row.coefficient = _task_type_coef_storage(item.get("coefficient"))
                     row.sort_order = i
                 session.flush()
                 keep_ids.add(int(row.id))
@@ -458,8 +476,6 @@ class WarehouseTasksRepository:
                 if rid not in keep_ids:
                     session.delete(row)
             session.commit()
-        return self.list_task_types()
-
         return self.list_task_types()
 
     def get_task_type(self, type_id: int) -> dict[str, Any] | None:
@@ -485,7 +501,6 @@ class WarehouseTasksRepository:
             row = WarehouseTaskType(
                 name=name[:128],
                 comment=comment,
-                coefficient=_task_type_coef_storage(data.get("coefficient")),
                 sort_order=int(max_order) + 1,
             )
             session.add(row)
@@ -512,8 +527,6 @@ class WarehouseTasksRepository:
                 row.name = name[:128]
             if "comment" in data:
                 row.comment = str(data.get("comment") or "").strip()[:512]
-            if "coefficient" in data:
-                row.coefficient = _task_type_coef_storage(data.get("coefficient"))
             if "sort_order" in data:
                 try:
                     row.sort_order = int(data.get("sort_order"))
@@ -544,7 +557,6 @@ class WarehouseTasksRepository:
             "id": int(row.id),
             "name": str(row.name),
             "comment": str(row.comment or ""),
-            "coefficient": _task_type_coef_float(row.coefficient),
             "sort_order": int(row.sort_order),
         }
 
@@ -861,6 +873,7 @@ class WarehouseTasksRepository:
             "task_type_id": current.task_type_id,
             "status_id": current.status_id,
             "comment": current.comment,
+            "work_hours": current.work_hours,
             "start_date": _ts_to_day_str(current.start_date_ts) or None,
             "end_date": _ts_to_day_str(current.end_date_ts) or None,
             "counterparty_id": current.counterparty_id,
@@ -876,6 +889,7 @@ class WarehouseTasksRepository:
             "task_type_id",
             "status_id",
             "comment",
+            "work_hours",
             "start_date",
             "end_date",
             "counterparty_id",
@@ -955,11 +969,10 @@ class WarehouseTasksRepository:
         ]
         return self.patch_task(task_id, {"documents": docs})
 
-    def cost_summary_calendar(
+    def hours_summary_calendar(
         self, *, year: int, month: int, filters: dict[str, str] | None = None
     ) -> dict[str, Any]:
         from calendar import monthrange
-        from decimal import Decimal
 
         year = int(year)
         month = int(month)
@@ -987,79 +1000,20 @@ class WarehouseTasksRepository:
             q = q.where(*conds).limit(5000)
             task_rows = session.scalars(q).all()
             rows = [self._task_row(session, r) for r in task_rows]
-            type_coef_map = {
-                int(r.id): _task_type_coef_float(r.coefficient)
-                for r in session.scalars(select(WarehouseTaskType)).all()
-            }
-
-        day_task_count: dict[str, int] = {}
-        task_entries: list[tuple[str, int, list[TaskDocumentRow]]] = []
-
-        for row in rows:
-            day = _ts_to_day_str(row.start_date_ts)
-            if not day:
-                continue
-            day_task_count[day] = day_task_count.get(day, 0) + 1
-            task_entries.append((day, int(row.task_type_id), row.documents))
-
-        receipt_ids: set[int] = set()
-        writeoff_ids: set[int] = set()
-        transfer_ids: set[int] = set()
-        for _day, _type_id, docs in task_entries:
-            for doc in docs:
-                if doc.entity_type == ENTITY_RECEIPT:
-                    receipt_ids.add(int(doc.entity_id))
-                elif doc.entity_type == ENTITY_WRITEOFF:
-                    writeoff_ids.add(int(doc.entity_id))
-                elif doc.entity_type == ENTITY_TRANSFER:
-                    transfer_ids.add(int(doc.entity_id))
-
-        receipt_items = self.receipts_repo.map_product_quantities_by_ids(list(receipt_ids))
-        writeoff_items = self.writeoffs_repo.map_product_quantities_by_ids(list(writeoff_ids))
-        transfer_items = self.transfers_repo.map_product_quantities_by_ids(list(transfer_ids))
-
-        all_product_ids: set[int] = set()
-
-        def collect_product_ids(docs: list[TaskDocumentRow]) -> None:
-            for doc in docs:
-                if doc.entity_type == ENTITY_RECEIPT:
-                    lines = receipt_items.get(int(doc.entity_id), [])
-                elif doc.entity_type == ENTITY_WRITEOFF:
-                    lines = writeoff_items.get(int(doc.entity_id), [])
-                elif doc.entity_type == ENTITY_TRANSFER:
-                    lines = transfer_items.get(int(doc.entity_id), [])
-                else:
-                    continue
-                for product_id, _quantity in lines:
-                    all_product_ids.add(int(product_id))
-
-        for _day, _type_id, docs in task_entries:
-            collect_product_ids(docs)
-
-        unit_costs = self.catalog_repo.get_product_group_unit_costs(list(all_product_ids))
 
         days_out: dict[str, dict[str, Any]] = {}
-        for day_key, type_id, docs in task_entries:
-            raw_cost = _documents_raw_cost(
-                docs,
-                receipt_items=receipt_items,
-                writeoff_items=writeoff_items,
-                transfer_items=transfer_items,
-                unit_costs=unit_costs,
-            )
-            coef = type_coef_map.get(type_id, 1.0)
-            weighted = raw_cost * Decimal(str(coef))
+        for row in rows:
+            day_key = _ts_to_day_str(row.start_date_ts)
+            if not day_key:
+                continue
             bucket = days_out.setdefault(
                 day_key,
-                {"total_cost": 0.0, "task_count": day_task_count.get(day_key, 0)},
+                {"total_task_hours": 0.0, "task_count": 0},
             )
-            bucket["total_cost"] = _decimal_to_cost_float(
-                Decimal(str(bucket["total_cost"])) + weighted
+            bucket["task_count"] += 1
+            bucket["total_task_hours"] = float(bucket["total_task_hours"]) + float(
+                row.work_hours or 0
             )
-
-        for day_key, count in day_task_count.items():
-            if day_key not in days_out:
-                days_out[day_key] = {"total_cost": 0.0, "task_count": count}
 
         return {
             "year": year,
@@ -1175,6 +1129,7 @@ class WarehouseTasksRepository:
             "task_fields": {
                 "task_type_id": "int, обязателен при создании",
                 "comment": "string",
+                "work_hours": "decimal >= 0, часы на выполнение задачи",
                 "start_date": "YYYY-MM-DD",
                 "end_date": "YYYY-MM-DD",
                 "counterparty_id": "int, id контрагента из CRM",
@@ -1241,6 +1196,7 @@ class WarehouseTasksRepository:
             "status_color": row.status_color,
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
+            "work_hours": row.work_hours,
             "start_date": _ts_to_day_str(row.start_date_ts),
             "end_date": _ts_to_day_str(row.end_date_ts),
             "start_date_ts": row.start_date_ts,
@@ -1305,6 +1261,7 @@ class WarehouseTasksRepository:
         except (TypeError, ValueError) as exc:
             raise ValueError("Выберите тип задачи") from exc
         comment = str(data.get("comment") or "").strip()[:2048]
+        work_hours = _work_hours_storage(data.get("work_hours"))
         start_date_ts = _day_to_ts(_parse_day(data.get("start_date")))
         end_date_ts = _day_to_ts(_parse_day(data.get("end_date")))
         if start_date_ts and end_date_ts and end_date_ts < start_date_ts:
@@ -1335,6 +1292,7 @@ class WarehouseTasksRepository:
                 task = WarehouseTask(
                     task_type_id=task_type_id,
                     comment=comment,
+                    work_hours=work_hours,
                     start_date_ts=start_date_ts,
                     end_date_ts=end_date_ts,
                     created_by_user_id=int(created_by_user_id) if created_by_user_id else None,
@@ -1349,6 +1307,7 @@ class WarehouseTasksRepository:
                     raise ValueError("Задача не найдена")
                 task.task_type_id = task_type_id
                 task.comment = comment
+                task.work_hours = work_hours
                 task.start_date_ts = start_date_ts
                 task.end_date_ts = end_date_ts
                 task.counterparty_id = counterparty_id
@@ -1588,6 +1547,7 @@ class WarehouseTasksRepository:
             status_name=status_name,
             status_color=status_color,
             comment=str(row.comment or ""),
+            work_hours=_work_hours_float(row.work_hours),
             start_date_ts=int(row.start_date_ts) if row.start_date_ts is not None else None,
             end_date_ts=int(row.end_date_ts) if row.end_date_ts is not None else None,
             created_by_user_id=int(row.created_by_user_id) if row.created_by_user_id else None,
@@ -1689,61 +1649,31 @@ class WarehouseTasksRepository:
         return conds
 
 
-def _task_type_coef_float(value: Any) -> float:
+def parse_work_hours(value: Any) -> float:
     if value is None or str(value).strip() == "":
-        return 1.0
+        return 0.0
+    raw = str(value).strip().replace(",", ".")
+    if not _WORK_HOURS_RE.match(raw):
+        raise ValueError("Часы должны быть неотрицательным числом")
+    from decimal import Decimal, InvalidOperation
+
     try:
-        return parse_coefficient(value) or 1.0
-    except ValueError:
-        return 1.0
-
-
-def _task_type_coef_storage(value: Any) -> str:
-    if value is None or str(value).strip() == "":
-        return "1"
-    coef = parse_coefficient(value)
-    assert coef is not None
-    return str(coef)
-
-
-def _documents_raw_cost(
-    documents: list[TaskDocumentRow],
-    *,
-    receipt_items: dict[int, list[tuple[int, int]]],
-    writeoff_items: dict[int, list[tuple[int, int]]],
-    transfer_items: dict[int, list[tuple[int, int]]],
-    unit_costs: dict[int, float],
-):
-    from decimal import Decimal
-
-    product_qty: dict[int, int] = {}
-    for doc in documents:
-        entity_id = int(doc.entity_id)
-        if doc.entity_type == ENTITY_RECEIPT:
-            lines = receipt_items.get(entity_id, [])
-        elif doc.entity_type == ENTITY_WRITEOFF:
-            lines = writeoff_items.get(entity_id, [])
-        elif doc.entity_type == ENTITY_TRANSFER:
-            lines = transfer_items.get(entity_id, [])
-        else:
-            continue
-        for product_id, quantity in lines:
-            pid = int(product_id)
-            product_qty[pid] = product_qty.get(pid, 0) + int(quantity)
-
-    total = Decimal("0")
-    for product_id, quantity in product_qty.items():
-        unit = Decimal(str(unit_costs.get(product_id, 0) or 0))
-        total += unit * Decimal(int(quantity))
-    return total
-
-
-def _decimal_to_cost_float(value) -> float:
-    from decimal import Decimal
-
-    if not value:
-        return 0.0
-    amount = Decimal(value)
-    if amount == 0:
-        return 0.0
+        amount = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("Некорректное значение часов") from exc
+    if amount < 0:
+        raise ValueError("Часы не могут быть отрицательными")
     return float(amount)
+
+
+def _work_hours_float(value: Any) -> float:
+    try:
+        return parse_work_hours(value)
+    except ValueError:
+        return 0.0
+
+
+def _work_hours_storage(value: Any) -> str:
+    hours = parse_work_hours(value)
+    text = f"{hours:.4f}".rstrip("0").rstrip(".")
+    return text or "0"

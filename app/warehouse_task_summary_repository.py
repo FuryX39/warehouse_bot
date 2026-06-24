@@ -43,13 +43,13 @@ def parse_coefficient(value: Any, *, required: bool = True) -> float | None:
     return float(amount)
 
 
-def compute_summary_hours(total_cost: float, staff_count: int, coefficient: float) -> float | None:
+def compute_summary_hours(total_task_hours: float, staff_count: int, coefficient: float) -> float | None:
     if staff_count <= 0 or coefficient <= 0:
         return None
-    cost = float(total_cost or 0)
-    if cost <= 0:
+    hours = float(total_task_hours or 0)
+    if hours <= 0:
         return 0.0
-    return cost / float(staff_count) / float(coefficient)
+    return hours / float(staff_count) / float(coefficient)
 
 
 class WarehouseTaskSummaryRepository:
@@ -145,8 +145,8 @@ class WarehouseTaskSummaryRepository:
             staff_count = int(staff_counts.get(day_key, 0) or 0)
             override = overrides.get(day_key)
             effective_coef = override if override is not None else default_coef
-            total_cost = float(base.get("total_cost") or 0)
-            hours = compute_summary_hours(total_cost, staff_count, effective_coef)
+            total_task_hours = float(base.get("total_task_hours") or 0)
+            hours = compute_summary_hours(total_task_hours, staff_count, effective_coef)
             enriched[day_key] = {
                 **base,
                 "staff_count": staff_count,

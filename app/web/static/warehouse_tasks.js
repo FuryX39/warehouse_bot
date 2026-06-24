@@ -335,11 +335,12 @@
     return year + "-" + pad2(month) + "-" + pad2(day);
   }
 
-  function formatCost(val) {
-    if (val === null || val === undefined || val === 0) return "";
+  function formatTaskHours(val) {
+    if (val === null || val === undefined || val === "") return "—";
     var n = Number(val);
-    if (isNaN(n) || n === 0) return "";
-    var s = n.toFixed(3).replace(/\.?0+$/, "");
+    if (isNaN(n)) return "—";
+    if (n === 0) return "0";
+    var s = n.toFixed(2).replace(/\.?0+$/, "");
     return s.replace(".", ",");
   }
 
@@ -475,10 +476,10 @@
             var staffCount = info.staff_count || 0;
             var hours = formatHours(info.hours);
             var hoursHtml = hours
-              ? '<span class="wh-task-cal-hours" title="Сумма документов × кф. типа ÷ сотрудники ÷ кф. дня">' +
+              ? '<span class="wh-task-cal-hours" title="Сумма часов задач ÷ сотрудники ÷ кф. дня">' +
                 esc(hours) +
                 "</span>"
-              : staffCount > 0 && (info.total_cost || 0) > 0
+              : staffCount > 0 && (info.total_task_hours || 0) > 0
                 ? '<span class="wh-task-cal-hours wh-muted">—</span>'
                 : "";
             var staffHtml =
@@ -494,7 +495,7 @@
             var coefPlaceholder = String(defaultCoef).replace(".", ",");
             var tasksHint =
               info.task_count > 0
-                ? "Задач: " + (info.task_count || 0) + ". Сумма: " + formatCost(info.total_cost)
+                ? "Задач: " + (info.task_count || 0) + ". Часов: " + formatTaskHours(info.total_task_hours)
                 : "Нет задач с датой начала";
             return (
               '<div class="wh-task-cal-cell wh-task-summary-cell" title="' + esc(tasksHint) + '">' +
@@ -515,7 +516,7 @@
 
         root.innerHTML =
           '<div class="wh-task-summary">' +
-          '<p class="wh-muted wh-task-summary-hint">Часы = (сумма стоимостей документов каждой задачи × коэффициент её типа) ÷ количество сотрудников на смену ÷ коэффициент дня. Учитывается только <strong>дата начала</strong> задачи.</p>' +
+          '<p class="wh-muted wh-task-summary-hint">Часы = сумма часов задач за день ÷ количество сотрудников на смену ÷ коэффициент дня. Учитывается только <strong>дата начала</strong> задачи.</p>' +
           '<div class="wh-task-summary-settings">' +
           '<label class="wh-task-summary-default-coef">Коэффициент по умолчанию ' +
           '<input type="text" id="whTkDefaultCoef" value="' +
@@ -676,6 +677,7 @@
       task_type_id: "",
       status_id: "",
       comment: "",
+      work_hours: "",
       start_date: "",
       end_date: "",
       counterparty_id: "",
@@ -692,6 +694,9 @@
       task_type_id: root.querySelector("#whTkType").value,
       status_id: root.querySelector("#whTkStatus") ? root.querySelector("#whTkStatus").value : "",
       comment: root.querySelector("#whTkComment").value.trim(),
+      work_hours: root.querySelector("#whTkWorkHours")
+        ? root.querySelector("#whTkWorkHours").value.trim()
+        : "",
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
       counterparty_id: cpEl ? cpEl.value : "",
@@ -724,6 +729,7 @@
       task_type_id: draft.task_type_id != null ? draft.task_type_id : "",
       status_id: draft.status_id != null ? draft.status_id : "",
       comment: draft.comment || "",
+      work_hours: draft.work_hours != null ? draft.work_hours : "",
       start_date: draft.start_date || "",
       end_date: draft.end_date || "",
       counterparty_id: draft.counterparty_id != null ? draft.counterparty_id : "",
@@ -830,17 +836,10 @@
 
   function modalTaskTypesEditor(onDone) {
     var rows = (meta.task_types || []).map(function (item) {
-      var coef =
-        item.coefficient != null && item.coefficient !== undefined
-          ? String(item.coefficient).replace(".", ",")
-          : "1";
       return (
         '<div class="wh-modal-row wh-crm-dict-row" data-id="' + esc(item.id) + '">' +
         '<input type="text" class="wh-crm-dict-name" value="' + esc(item.name) + '" placeholder="Название" />' +
         '<input type="text" class="wh-crm-dict-comment" value="' + esc(item.comment || "") + '" placeholder="Комментарий" />' +
-        '<input type="text" class="wh-crm-dict-cost wh-crm-dict-coef" value="' +
-        esc(coef) +
-        '" placeholder="Кф." title="Коэффициент для сводной" inputmode="decimal" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button></div>'
       );
     });
@@ -857,11 +856,6 @@
             name: name,
             comment: row.querySelector(".wh-crm-dict-comment").value.trim(),
           };
-          var coefRaw = row.querySelector(".wh-crm-dict-coef");
-          if (coefRaw) {
-            var coefVal = parseCoefInput(coefRaw.value);
-            if (coefVal) item.coefficient = coefVal;
-          }
           var id = row.getAttribute("data-id");
           if (id) item.id = parseInt(id, 10);
           items.push(item);
@@ -889,7 +883,6 @@
       row.innerHTML =
         '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
         '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' +
-        '<input type="text" class="wh-crm-dict-cost wh-crm-dict-coef" value="1" placeholder="Кф." title="Коэффициент для сводной" inputmode="decimal" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
       backdrop.querySelector("#whTkTypeRows").appendChild(row);
     });
@@ -1051,6 +1044,7 @@
               "<td>" + esc(t.counterparty_name || "—") + "</td>" +
               "<td>" + esc(t.assignees_short || "—") + "</td>" +
               "<td>" + esc(t.documents_short || "—") + "</td>" +
+              "<td>" + esc(formatTaskHours(t.work_hours)) + "</td>" +
               "<td>" + esc(t.comment_short || "—") + "</td>" +
               "<td>" + esc(formatDay(t.start_date)) + "</td>" +
               "<td>" + esc(formatDay(t.end_date)) + "</td></tr>"
@@ -1079,6 +1073,7 @@
               sortableHeader("counterparty", "Контрагент") +
               sortableHeader("assignees", "Ответственные") +
               sortableHeader("documents", "Документы") +
+              "<th scope=\"col\">Часы</th>" +
               sortableHeader("comment", "Комментарий") +
               sortableHeader("start_date", "Начало") +
               sortableHeader("end_date", "Окончание") +
@@ -1236,6 +1231,10 @@
           docTypeOpts += '<option value="' + esc(dt.id) + '">' + esc(dt.title) + "</option>";
         });
         var authorName = resolveAuthorName(t, taskId);
+        var workHoursVal =
+          t.work_hours != null && t.work_hours !== ""
+            ? String(t.work_hours).replace(".", ",")
+            : "";
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whTkBack">&larr; К списку</button>' +
@@ -1256,6 +1255,9 @@
           buildCounterpartyOptions(meta.counterparties, t.counterparty_id) + "</select></div>" +
           '<div><label>Дата начала</label><input type="date" id="whTkStart" value="' + esc(t.start_date || "") + '" /></div>' +
           '<div><label>Дата окончания</label><input type="date" id="whTkEnd" value="' + esc(t.end_date || "") + '" /></div>' +
+          '<div><label>Часы на выполнение</label><input type="text" id="whTkWorkHours" value="' +
+          esc(workHoursVal) +
+          '" inputmode="decimal" placeholder="0" /></div>' +
           "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Ответственные</h4>' +
           renderAssigneesBlock() + "</section>" +
@@ -1352,6 +1354,7 @@
       task_type_id: typeVal,
       status_id: statusVal || null,
       comment: root.querySelector("#whTkComment").value.trim(),
+      work_hours: root.querySelector("#whTkWorkHours").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
       counterparty_id: root.querySelector("#whTkCounterparty").value || null,

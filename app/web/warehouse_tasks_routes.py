@@ -264,7 +264,7 @@ def _register_on_prefix(
             raise HTTPException(status_code=400, detail="Некорректные year или month") from exc
         filters = _filters_from_query(params, skip_pagination=True)
         try:
-            data = tasks_repo.cost_summary_calendar(year=year, month=month, filters=filters)
+            data = tasks_repo.hours_summary_calendar(year=year, month=month, filters=filters)
             staff_counts = schedule_repo.staff_counts_for_month(year, month)
             extra = summary_repo.enrich_summary_days(
                 year=year,

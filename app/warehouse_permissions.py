@@ -64,6 +64,8 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "title": "Маркетплейсы",
         "items": [
             {"id": "fbs", "title": "FBS"},
+            {"id": "ozon-fbo-supplies", "title": "Поставки FBO"},
+            {"id": "ozon-fbo-packing", "title": "Сборка FBO"},
             {"id": "stock-sync", "title": "Синхронизация остатков"},
             {"id": "pick-lists", "title": "Листы подбора"},
         ],

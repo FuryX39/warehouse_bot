@@ -63,9 +63,89 @@ class OzonAdapter(MarketplaceAdapter):
             "Content-Type": "application/json",
         }
 
+    def _post_json(self, path: str, payload: dict, *, timeout: int = 60) -> dict:
+        if not self.is_configured():
+            raise RuntimeError("Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)")
+        response = requests.post(
+            f"{self.base_url}{path}",
+            headers=self._headers(),
+            json=payload,
+            timeout=timeout,
+        )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            body = (response.text or "").strip()
+            if body:
+                raise requests.HTTPError(f"{exc}; body={body[:1000]}") from exc
+            raise
+        return response.json() if response.content else {}
+
+    def _get_bytes(self, path: str, *, timeout: int = 90) -> bytes:
+        if not self.is_configured():
+            raise RuntimeError("Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)")
+        response = requests.get(
+            f"{self.base_url}{path}",
+            headers=self._headers(),
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.content
+
     @staticmethod
     def _to_ozon_datetime(dt: datetime) -> str:
         return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    def fbo_cluster_list(self, payload: dict | None = None) -> dict:
+        return self._post_json("/v1/cluster/list", payload or {})
+
+    def fbo_warehouse_list(self, payload: dict | None = None) -> dict:
+        return self._post_json("/v1/warehouse/fbo/list", payload or {})
+
+    def fbo_draft_create(self, payload: dict) -> dict:
+        return self._post_json("/v1/draft/create", payload, timeout=90)
+
+    def fbo_draft_create_info(self, payload: dict) -> dict:
+        return self._post_json("/v1/draft/create/info", payload)
+
+    def fbo_timeslot_info(self, payload: dict) -> dict:
+        return self._post_json("/v1/draft/timeslot/info", payload)
+
+    def fbo_draft_supply_create(self, payload: dict) -> dict:
+        return self._post_json("/v1/draft/supply/create", payload, timeout=90)
+
+    def fbo_draft_supply_create_status(self, payload: dict) -> dict:
+        return self._post_json("/v1/draft/supply/create/status", payload)
+
+    def fbo_supply_order_list(self, payload: dict) -> dict:
+        return self._post_json("/v3/supply-order/list", payload)
+
+    def fbo_supply_order_get(self, payload: dict) -> dict:
+        return self._post_json("/v3/supply-order/get", payload)
+
+    def fbo_supply_order_bundle(self, payload: dict) -> dict:
+        return self._post_json("/v1/supply-order/bundle", payload)
+
+    def fbo_cargoes_create(self, payload: dict) -> dict:
+        return self._post_json("/v1/cargoes/create", payload, timeout=90)
+
+    def fbo_cargoes_create_info(self, payload: dict) -> dict:
+        return self._post_json("/v2/cargoes/create/info", payload)
+
+    def fbo_cargoes_rules_get(self, payload: dict) -> dict:
+        return self._post_json("/v1/cargoes/rules/get", payload)
+
+    def fbo_cargo_labels_create(self, payload: dict) -> dict:
+        return self._post_json("/v1/cargoes-label/create", payload, timeout=90)
+
+    def fbo_cargo_labels_get(self, payload: dict) -> dict:
+        return self._post_json("/v1/cargoes-label/get", payload)
+
+    def fbo_cargo_labels_file(self, file_guid: str) -> bytes:
+        guid = str(file_guid or "").strip()
+        if not guid:
+            raise ValueError("file_guid пуст")
+        return self._get_bytes(f"/v1/cargoes-label/file/{guid}", timeout=120)
 
     @staticmethod
     def _in_process_at_ts(posting: dict) -> int:
