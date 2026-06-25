@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException
 
 from app.barcode_print_agent_client import (
     barcode_print_agent_health,
+    barcode_print_agent_host,
     barcode_print_agent_port,
     barcode_print_agent_print,
 )
@@ -25,7 +26,7 @@ def register_warehouse_barcode_print_routes(app, require_warehouse_user) -> None
     async def api_barcode_print_config(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        return {"port": barcode_print_agent_port()}
+        return {"host": barcode_print_agent_host(), "port": barcode_print_agent_port()}
 
     @app.post("/api/warehouse/barcode-print/print")
     async def api_barcode_print_print(

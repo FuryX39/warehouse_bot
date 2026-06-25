@@ -20,8 +20,12 @@ def barcode_print_agent_port() -> int:
     return max(1, min(65535, n))
 
 
+def barcode_print_agent_host() -> str:
+    return (os.getenv("BARCODE_PRINT_AGENT_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+
+
 def barcode_print_agent_base_url() -> str:
-    host = (os.getenv("BARCODE_PRINT_AGENT_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    host = barcode_print_agent_host()
     return f"http://{host}:{barcode_print_agent_port()}"
 
 

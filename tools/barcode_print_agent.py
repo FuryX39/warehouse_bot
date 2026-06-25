@@ -37,10 +37,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("barcode_print_agent")
 
-_HOST = os.getenv("BARCODE_PRINT_AGENT_HOST", "127.0.0.1").strip() or "127.0.0.1"
-_PORT = int(os.getenv("BARCODE_PRINT_AGENT_PORT", "18766"))
-
-
 def _load_dotenv() -> None:
     for name in ("config.env", ".env"):
         env_path = _ROOT / name
@@ -54,6 +50,16 @@ def _load_dotenv() -> None:
             key = key.strip()
             if key and key not in os.environ:
                 os.environ[key] = val.strip().strip('"').strip("'")
+
+
+def _agent_host_port() -> tuple[str, int]:
+    host = os.getenv("BARCODE_PRINT_AGENT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    raw_port = os.getenv("BARCODE_PRINT_AGENT_PORT", "18766").strip()
+    try:
+        port = int(raw_port)
+    except ValueError:
+        port = 18766
+    return host, max(1, min(65535, port))
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -123,8 +129,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _load_dotenv()
-    server = ThreadingHTTPServer((_HOST, _PORT), _Handler)
-    logger.info("Агент печати штрихкодов: http://%s:%s (GET /health, POST /print)", _HOST, _PORT)
+    host, port = _agent_host_port()
+    server = ThreadingHTTPServer((host, port), _Handler)
+    logger.info("Агент печати штрихкодов: http://%s:%s (GET /health, POST /print)", host, port)
     if os.name == "nt":
         sumatra = os.getenv("BARCODE_PRINT_SUMATRA", "")
         printer = os.getenv("BARCODE_PRINT_PRINTER", "")

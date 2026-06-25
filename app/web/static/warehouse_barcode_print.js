@@ -1,8 +1,10 @@
 (function (global) {
   var DEFAULT_PORT = 18766;
+  var agentHost = "";
   var agentPort = DEFAULT_PORT;
   var agentRoute = null;
   var agentCheckedAt = 0;
+  var lastAgentError = "";
 
   function esc(s) {
     return String(s || "")
@@ -25,13 +27,22 @@
 
   function directBases() {
     var port = agentPort || DEFAULT_PORT;
-    return ["http://127.0.0.1:" + port, "http://localhost:" + port];
+    var bases = ["http://127.0.0.1:" + port, "http://localhost:" + port];
+    var host = String(agentHost || "").trim();
+    if (host && host !== "127.0.0.1" && host !== "localhost" && host !== "0.0.0.0") {
+      bases.push("http://" + host + ":" + port);
+    }
+    return bases;
   }
 
   function probeDirect(base) {
+    lastAgentError = "";
     return fetch(base + "/health", { method: "GET", mode: "cors" })
       .then(function (r) {
-        if (!r.ok) return null;
+        if (!r.ok) {
+          lastAgentError = base + " вернул HTTP " + r.status;
+          return null;
+        }
         return r
           .json()
           .then(function (json) {
@@ -41,7 +52,8 @@
             return r.ok ? base : null;
           });
       })
-      .catch(function () {
+      .catch(function (err) {
+        lastAgentError = base + ": " + (err && err.message ? err.message : "нет ответа");
         return null;
       });
   }
@@ -49,9 +61,12 @@
   function probeProxy() {
     return fetchJson("/api/warehouse/barcode-print/health")
       .then(function (json) {
-        return json && json.ok ? "proxy" : null;
+        if (json && json.ok) return "proxy";
+        if (json && json.error) lastAgentError = "Прокси: " + json.error;
+        return null;
       })
-      .catch(function () {
+      .catch(function (err) {
+        lastAgentError = "Прокси: " + (err && err.message ? err.message : "нет ответа");
         return null;
       });
   }
@@ -59,6 +74,8 @@
   function loadAgentPort() {
     return fetchJson("/api/warehouse/barcode-print/config")
       .then(function (json) {
+        var h = String((json && json.host) || "").trim();
+        if (h) agentHost = h;
         var p = parseInt(json && json.port, 10);
         if (p > 0 && p <= 65535) agentPort = p;
       })
@@ -324,6 +341,9 @@
         ". Запустите start.bat на ПК с принтером (порт " +
         (agentPort || DEFAULT_PORT) +
         ").";
+      if (lastAgentError) {
+        hint += " Детали: " + lastAgentError + ".";
+      }
       if (location.protocol === "https:") {
         hint += " Для HTTPS-сайта разрешите доступ к локальной сети в браузере.";
       }
