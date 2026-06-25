@@ -1525,6 +1525,28 @@ body.wh-body {
   font-size: 0.82rem;
 }
 
+.wh-admin-env-table input {
+  width: 100%;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+}
+
+.wh-admin-env-table th:first-child,
+.wh-admin-env-table td:first-child {
+  width: 18rem;
+}
+
+.wh-admin-env-comment {
+  max-width: 24rem;
+  white-space: pre-wrap;
+  color: var(--wh-muted);
+  font-size: 0.84rem;
+}
+
 @media (max-width: 768px) {
   .wh-workspace {
     flex-direction: column;

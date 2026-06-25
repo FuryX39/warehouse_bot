@@ -236,6 +236,10 @@
       window.WhTasks.renderTasks(tab, item);
       return;
     }
+    if (tab.id === "admin" && window.WhAdmin) {
+      window.WhAdmin.render(tab, item);
+      return;
+    }
     if (
       tab.id === "marketplaces" &&
       (item.id === "ozon-fbo-supplies" || item.id === "ozon-fbo-packing") &&

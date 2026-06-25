@@ -105,6 +105,7 @@ from app.web.warehouse_stock_routes import register_warehouse_stock_routes
 from app.ozon_fbo_supply_repository import OzonFboSupplyRepository
 from app.web.warehouse_ozon_fbo_routes import register_warehouse_ozon_fbo_routes
 from app.adapters.ozon import OzonAdapter
+from app.web.warehouse_admin_routes import register_warehouse_admin_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -494,6 +495,7 @@ def create_dashboard_app(
         warehouse_schedule_repo,
         require_warehouse_admin,
     )
+    register_warehouse_admin_routes(app, require_warehouse_admin)
     register_warehouse_crm_routes(app, crm_repo, require_warehouse_user)
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
     register_warehouse_barcode_print_routes(app, require_warehouse_user)

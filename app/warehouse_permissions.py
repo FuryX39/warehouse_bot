@@ -96,6 +96,14 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
             {"id": "roles", "title": "Роли"},
         ],
     },
+    {
+        "id": "admin",
+        "title": "Админ панель",
+        "admin_only": True,
+        "items": [
+            {"id": "env", "title": ".env настройки"},
+        ],
+    },
 ]
 
 EMPLOYEES_SECTION_ID = "employees"
