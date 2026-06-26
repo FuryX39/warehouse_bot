@@ -69,6 +69,9 @@ Desktop.ini
 *.bak
 *.orig
 
+# Separate packer desktop app repository
+warehouse_packing_app/
+
 # Local databases (SQLite and aux files)
 *.db
 *.db-journal

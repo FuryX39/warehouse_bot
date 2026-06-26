@@ -130,8 +130,8 @@ def load_settings() -> Settings:
     load_dotenv(_PROJECT_ROOT / ".env", override=False)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     interval = int(os.getenv("RESERVE_INTERVAL_SECONDS", "120"))
-    db_url = os.getenv("DB_URL", "sqlite:///crm_bot.db").strip()
-    movement_db_url = os.getenv("MOVEMENT_DB_URL", "sqlite:///movements.db").strip()
+    db_url = os.getenv("DB_URL", "sqlite:///crm_bot.db").strip() or "sqlite:///crm_bot.db"
+    movement_db_url = os.getenv("MOVEMENT_DB_URL", "sqlite:///movements.db").strip() or "sqlite:///movements.db"
     return Settings(
         telegram_bot_token=token,
         db_url=db_url,
