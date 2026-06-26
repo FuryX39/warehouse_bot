@@ -268,21 +268,52 @@
     return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   }
 
+  function normalizeBarcodesForLegacy(barcodes) {
+    return (barcodes || [])
+      .map(function (item) {
+        if (item && typeof item === "object") {
+          return {
+            barcode: String(item.barcode || "").trim(),
+            label: String(item.label || "").trim(),
+            group: String(item.group || "").trim(),
+          };
+        }
+        return { barcode: String(item || "").trim(), label: "", group: "" };
+      })
+      .filter(function (item) {
+        return item.barcode;
+      });
+  }
+
+  function barcodeDisplayTitle(item) {
+    return item.label || item.group || item.barcode;
+  }
+
   function formatBarcodesList(barcodes) {
-    var list = barcodes && barcodes.length ? barcodes : [];
+    var list = normalizeBarcodesForLegacy(barcodes).map(function (item) {
+      var title = barcodeDisplayTitle(item);
+      if (title !== item.barcode) return title + " (" + item.barcode + ")";
+      return title;
+    });
     if (!list.length) return "—";
     var text = list.join(", ");
     return text.length > 80 ? text.slice(0, 77) + "…" : text;
   }
 
+  function barcodeCode(item) {
+    if (item && typeof item === "object") return String(item.barcode || "").trim();
+    return String(item || "").trim();
+  }
+
   function buildBarcodePrintHtml(sku, name, barcodes) {
-    var list = barcodes && barcodes.length ? barcodes : [];
+    var list = normalizeBarcodesForLegacy(barcodes);
     if (!list.length) {
       return '<td class="barcode-print-col muted">—</td>';
     }
     var opts = list
-      .map(function (b) {
-        return '<option value="' + encodeAttr(b) + '">' + escapeHtml(b) + "</option>";
+      .map(function (item) {
+        var title = barcodeDisplayTitle(item);
+        return '<option value="' + encodeAttr(item.barcode) + '">' + escapeHtml(title) + "</option>";
       })
       .join("");
     return (
@@ -530,8 +561,16 @@
     var va;
     var vb;
     if (col === "barcodes") {
-      va = (a.barcodes || []).join(",");
-      vb = (b.barcodes || []).join(",");
+      va = normalizeBarcodesForLegacy(a.barcodes)
+        .map(function (x) {
+          return x.barcode;
+        })
+        .join(",");
+      vb = normalizeBarcodesForLegacy(b.barcodes)
+        .map(function (x) {
+          return x.barcode;
+        })
+        .join(",");
     } else {
       va = a[col];
       vb = b[col];
@@ -601,7 +640,7 @@
         "</td>" +
         linkCell +
         '<td class="barcodes-col" title="' +
-        encodeAttr((r.barcodes || []).join(", ")) +
+        encodeAttr(formatBarcodesList(r.barcodes)) +
         '">' +
         escapeHtml(formatBarcodesList(r.barcodes)) +
         "</td>" +

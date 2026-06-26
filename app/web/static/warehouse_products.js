@@ -398,6 +398,7 @@
           '<input type="search" id="whCatQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
           '<button type="button" class="wh-btn" id="whCatToggleFilter">Фильтр</button>' +
           '<button type="button" class="wh-btn" id="whCatBulkImport">Массовая загрузка</button>' +
+          '<button type="button" class="wh-btn" id="whCatBarcodeImport">Штрихкоды Excel</button>' +
           '<button type="button" class="wh-btn wh-btn-danger" id="whCatBulkDelete" disabled>Удалить выбранные</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whCatCreate">+ Товар</button>' +
           '<button type="button" class="wh-btn" id="whCatCreateKit">+ Комплект</button>' +
@@ -566,6 +567,125 @@
     });
   }
 
+  function openBarcodeImportModal() {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal wh-modal-wide" role="dialog">' +
+      '<div class="wh-modal-header"><h3>Массовая загрузка штрихкодов</h3>' +
+      '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      "<p>Загрузите Excel: для существующих ШК обновятся название и группа, новые ШК будут добавлены к товару.</p>" +
+      '<div class="wh-import-actions">' +
+      '<a class="wh-btn" id="whBcImportTemplate" href="/api/warehouse/catalog/barcodes/import/template">Скачать шаблон Excel</a>' +
+      "</div>" +
+      '<label class="wh-import-file-label">Файл для загрузки<input type="file" id="whBcImportFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
+      '<p class="wh-msg" id="whBcImportMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whBcImportSubmit">Загрузить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button>' +
+      "</div></div>";
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) close();
+    });
+
+    backdrop.querySelector("#whBcImportTemplate").addEventListener("click", function (e) {
+      e.preventDefault();
+      fetch("/api/warehouse/catalog/barcodes/import/template", { credentials: "include" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("Не удалось скачать шаблон");
+          return r.blob();
+        })
+        .then(function (blob) {
+          downloadBlob(blob, "catalog_barcodes_template.xlsx");
+        })
+        .catch(function (err) {
+          var msg = backdrop.querySelector("#whBcImportMsg");
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка скачивания шаблона";
+        });
+    });
+
+    backdrop.querySelector("#whBcImportSubmit").addEventListener("click", function () {
+      var fileInput = backdrop.querySelector("#whBcImportFile");
+      var msg = backdrop.querySelector("#whBcImportMsg");
+      var submitBtn = backdrop.querySelector("#whBcImportSubmit");
+      msg.textContent = "";
+      msg.className = "wh-msg";
+      if (!fileInput.files || !fileInput.files.length) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите файл Excel (.xlsx)";
+        return;
+      }
+      var formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      submitBtn.disabled = true;
+      msg.textContent = "Обработка файла…";
+      fetch("/api/warehouse/catalog/barcodes/import", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      })
+        .then(function (r) {
+          var ct = (r.headers.get("content-type") || "").toLowerCase();
+          if (ct.indexOf("spreadsheetml") !== -1 || ct.indexOf("octet-stream") !== -1) {
+            return r.blob().then(function (blob) {
+              return {
+                kind: "errors",
+                blob: blob,
+                created: r.headers.get("X-Import-Created") || "0",
+                updated: r.headers.get("X-Import-Updated") || "0",
+                failed: r.headers.get("X-Import-Failed") || "0",
+              };
+            });
+          }
+          return r.json().then(function (data) {
+            if (!r.ok) throw new Error((data && data.detail) || "HTTP " + r.status);
+            return { kind: "ok", data: data };
+          });
+        })
+        .then(function (result) {
+          if (result.kind === "errors") {
+            downloadBlob(result.blob, "catalog_barcodes_import_errors.xlsx");
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent =
+              "Добавлено: " +
+              result.created +
+              ", обновлено: " +
+              result.updated +
+              ", ошибок: " +
+              result.failed +
+              ". Скачан файл с описанием проблем.";
+            return;
+          }
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent =
+            "Добавлено штрихкодов: " +
+            (result.data.created || 0) +
+            ", обновлено: " +
+            (result.data.updated || 0) +
+            ".";
+          setTimeout(close, 1500);
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка загрузки";
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
+  }
+
   function openBulkImportModal() {
     var backdrop = document.createElement("div");
     backdrop.className = "wh-modal-backdrop";
@@ -701,6 +821,7 @@
       renderForm(null, true);
     });
     root.querySelector("#whCatBulkImport").addEventListener("click", openBulkImportModal);
+    root.querySelector("#whCatBarcodeImport").addEventListener("click", openBarcodeImportModal);
     var bulkDeleteBtn = root.querySelector("#whCatBulkDelete");
     if (bulkDeleteBtn) {
       bulkDeleteBtn.addEventListener("click", function () {
@@ -836,7 +957,11 @@
     return isNaN(n) ? 0 : n;
   }
 
-  function barcodeRow(value, productId, sku, name) {
+  function barcodeRow(bc, productId, sku, name) {
+    var item =
+      bc && typeof bc === "object"
+        ? { barcode: bc.barcode || "", label: bc.label || "", group: bc.group || "" }
+        : { barcode: bc || "", label: "", group: "" };
     var printOne = productId
       ? '<input type="number" class="wh-barcode-print-copies" min="1" max="9999" placeholder="1" title="Копий" aria-label="Копий" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-barcode-print-one" data-product-id="' +
@@ -849,7 +974,15 @@
       : "";
     return (
       '<div class="wh-crm-barcode-row">' +
-      '<input type="text" class="wh-crm-barcode-input" value="' + esc(value || "") + '" placeholder="Code128" />' +
+      '<input type="text" class="wh-crm-barcode-group-input" value="' +
+      esc(item.group || "") +
+      '" placeholder="Группа (Озон)" title="Группа штрихкода" />' +
+      '<input type="text" class="wh-crm-barcode-label-input" value="' +
+      esc(item.label || "") +
+      '" placeholder="Название (ШК ВБ)" title="Название штрихкода" />' +
+      '<input type="text" class="wh-crm-barcode-input" value="' +
+      esc(item.barcode || "") +
+      '" placeholder="Code128" title="Штрихкод" />' +
       printOne +
       '<button type="button" class="wh-btn wh-btn-sm wh-crm-barcode-remove" title="Удалить">&times;</button></div>'
     );
@@ -985,7 +1118,7 @@
         root.querySelector("#whPrAddBarcode").addEventListener("click", function () {
           root.querySelector("#whPrBarcodes").insertAdjacentHTML(
             "beforeend",
-            barcodeRow("", productId, p.sku, p.name)
+            barcodeRow({ barcode: "", label: "", group: "" }, productId, p.sku, p.name)
           );
         });
         root.querySelector("#whPrBarcodes").addEventListener("click", function (e) {
@@ -1102,9 +1235,12 @@
 
   function collectForm(root) {
     var barcodes = [];
-    root.querySelectorAll(".wh-crm-barcode-input").forEach(function (inp) {
-      var v = inp.value.trim();
-      if (v) barcodes.push(v);
+    root.querySelectorAll(".wh-crm-barcode-row").forEach(function (row) {
+      var code = row.querySelector(".wh-crm-barcode-input").value.trim();
+      if (!code) return;
+      var label = row.querySelector(".wh-crm-barcode-label-input").value.trim();
+      var group = row.querySelector(".wh-crm-barcode-group-input").value.trim();
+      barcodes.push({ barcode: code, label: label, group: group });
     });
     var components = [];
     if (formIsKit) {

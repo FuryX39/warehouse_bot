@@ -10,6 +10,7 @@ from fastapi import Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from app.catalog_bulk_import import build_import_template, import_products_from_xlsx
+from app.catalog_barcode_import import build_barcode_import_template, import_barcodes_from_xlsx
 from app.catalog_price_type_import import (
     build_price_type_prices_template,
     import_price_type_prices_from_xlsx,
@@ -247,6 +248,67 @@ def register_warehouse_catalog_routes(
             stock_repo.rebuild_all()
         return {"ok": True, "created": result.created, "total_rows": result.total_rows}
 
+    @app.get("/api/warehouse/catalog/barcodes/import/template")
+    async def api_catalog_barcodes_import_template(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        try:
+            content = await asyncio.to_thread(build_barcode_import_template, catalog_repo)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="catalog_barcodes_template.xlsx"',
+            },
+        )
+
+    @app.post("/api/warehouse/catalog/barcodes/import", response_model=None)
+    async def api_catalog_barcodes_import(
+        file: UploadFile = File(...),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ):
+        data = await file.read()
+        if len(data) > _IMPORT_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 10 МБ)")
+        if not data:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        filename = (file.filename or "").lower()
+        if not filename.endswith(".xlsx"):
+            raise HTTPException(status_code=400, detail="Нужен файл Excel в формате .xlsx")
+        try:
+            result = await asyncio.to_thread(import_barcodes_from_xlsx, catalog_repo, data)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if result.error_report:
+            return Response(
+                content=result.error_report,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": 'attachment; filename="catalog_barcodes_import_errors.xlsx"',
+                    "X-Import-Created": str(result.created),
+                    "X-Import-Updated": str(result.updated),
+                    "X-Import-Failed": str(result.failed),
+                    "X-Import-Total": str(result.total_rows),
+                },
+            )
+        return {
+            "ok": True,
+            "created": result.created,
+            "updated": result.updated,
+            "total_rows": result.total_rows,
+        }
+
     @app.get("/api/warehouse/catalog/products/next-code")
     async def api_catalog_next_product_code(
         _: WarehouseUserRow = Depends(require_warehouse_user),
@@ -298,7 +360,14 @@ def register_warehouse_catalog_routes(
         row = catalog_repo.get_product(product_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Товар не найден")
-        allowed = {str(b).strip() for b in (row.barcodes or []) if str(b).strip()}
+        allowed: set[str] = set()
+        for item in row.barcodes or []:
+            if isinstance(item, dict):
+                code = str(item.get("barcode") or "").strip()
+            else:
+                code = str(item or "").strip()
+            if code:
+                allowed.add(code)
         if barcode not in allowed:
             raise HTTPException(status_code=404, detail="Штрихкод не привязан к этому товару")
         try:

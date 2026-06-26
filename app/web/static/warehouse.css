@@ -1054,6 +1054,25 @@ body.wh-body {
 
 .wh-crm-barcode-input {
   flex: 1;
+  min-width: 8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.wh-crm-barcode-label-input {
+  width: 8rem;
+  flex: 0 0 8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.wh-crm-barcode-group-input {
+  width: 7rem;
+  flex: 0 0 7rem;
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--wh-border);
   border-radius: 6px;

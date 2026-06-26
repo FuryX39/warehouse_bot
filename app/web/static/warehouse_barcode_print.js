@@ -15,6 +15,44 @@
       .replace(/>/g, "&gt;");
   }
 
+  function normalizeBarcodes(raw) {
+    return (raw || [])
+      .map(function (item) {
+        if (item && typeof item === "object" && !Array.isArray(item)) {
+          return {
+            barcode: String(item.barcode || "").trim(),
+            label: String(item.label || "").trim(),
+            group: String(item.group || "").trim(),
+          };
+        }
+        return { barcode: String(item || "").trim(), label: "", group: "" };
+      })
+      .filter(function (item) {
+        return item.barcode;
+      });
+  }
+
+  function barcodePrintName(product, item) {
+    if (item && item.label) return item.label;
+    if (item && item.group) return item.group;
+    return (product && product.name) || "";
+  }
+
+  function parseBarcodeItem(item) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      return {
+        barcode: String(item.barcode || "").trim(),
+        label: String(item.label || "").trim(),
+        group: String(item.group || "").trim(),
+      };
+    }
+    return { barcode: String(item || "").trim(), label: "", group: "" };
+  }
+
+  function barcodePickTitle(item) {
+    return item.label || item.group || item.barcode;
+  }
+
   function fetchJson(url, options) {
     var shell = global.WH_SHELL || {};
     if (shell.fetchJson) return shell.fetchJson(url, options);
@@ -230,13 +268,21 @@
     return new Promise(function (resolve, reject) {
       var backdrop = document.createElement("div");
       backdrop.className = "wh-modal-backdrop";
-      var list = barcodes
-        .map(function (bc) {
+      var list = normalizeBarcodes(barcodes)
+        .map(function (item) {
+          var title = barcodePickTitle(item);
+          var subtitle = item.barcode;
+          if (title === subtitle) subtitle = "";
           return (
             '<button type="button" class="wh-btn wh-barcode-pick-item" data-barcode="' +
-            esc(bc) +
+            esc(item.barcode) +
+            '" data-label="' +
+            esc(item.label) +
+            '" data-group="' +
+            esc(item.group) +
             '">' +
-            esc(bc) +
+            esc(title) +
+            (subtitle ? '<span class="wh-muted"> · ' + esc(subtitle) + "</span>" : "") +
             "</button>"
           );
         })
@@ -263,9 +309,12 @@
       });
       backdrop.querySelectorAll(".wh-barcode-pick-item").forEach(function (btn) {
         btn.addEventListener("click", function () {
-          var bc = btn.getAttribute("data-barcode");
           close();
-          resolve(bc);
+          resolve({
+            barcode: btn.getAttribute("data-barcode") || "",
+            label: btn.getAttribute("data-label") || "",
+            group: btn.getAttribute("data-group") || "",
+          });
         });
       });
     });
@@ -308,24 +357,31 @@
 
     var copies = parseCopies(opts.copies);
 
-    function run(product, barcode) {
-      return sendPrint(productId, barcode, product.sku || sku, product.name || name, copies);
+    function run(product, barcodeItem) {
+      var item = parseBarcodeItem(barcodeItem);
+      return sendPrint(
+        productId,
+        item.barcode,
+        product.sku || sku,
+        barcodePrintName(product, item) || name,
+        copies
+      );
     }
 
     if (directBarcode) {
-      return run({ sku: sku, name: name }, directBarcode);
+      return run({ sku: sku, name: name }, { barcode: directBarcode, label: "" });
     }
 
     return loadProduct(productId).then(function (product) {
-      var barcodes = (product.barcodes || []).filter(Boolean);
+      var barcodes = normalizeBarcodes(product.barcodes);
       if (!barcodes.length) {
         throw new Error("У товара нет штрихкодов");
       }
       if (barcodes.length === 1) {
         return run(product, barcodes[0]);
       }
-      return openPickModal(barcodes, product).then(function (bc) {
-        return run(product, bc);
+      return openPickModal(barcodes, product).then(function (item) {
+        return run(product, item);
       });
     });
   }

@@ -103,6 +103,8 @@ class CatalogProductBarcode(_Base):
         Integer, ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
     )
     barcode: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    barcode_group: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -171,7 +173,7 @@ class CatalogProductRow:
     volume: str
     marking_type_id: Optional[int]
     marking_type_name: str
-    barcodes: list[str] = field(default_factory=list)
+    barcodes: list[dict[str, str]] = field(default_factory=list)
     components: list[KitComponentRow] = field(default_factory=list)
     prices: list[ProductPriceRow] = field(default_factory=list)
     barcode_count: int = 0
@@ -197,6 +199,35 @@ def _validate_code128(barcode: str) -> str:
     return code
 
 
+def _normalize_barcode_label(label: str) -> str:
+    return str(label or "").strip()[:128]
+
+
+def _normalize_barcode_group(group: str) -> str:
+    return str(group or "").strip()[:128]
+
+
+def barcode_display_name(item: Any) -> str:
+    if isinstance(item, dict):
+        label = _normalize_barcode_label(item.get("label"))
+        if label:
+            return label
+        return _normalize_barcode_group(item.get("group"))
+    return ""
+
+
+def _parse_barcode_item(item: Any) -> dict[str, str]:
+    if isinstance(item, dict):
+        code = _validate_code128(str(item.get("barcode") or ""))
+        return {
+            "barcode": code,
+            "label": _normalize_barcode_label(item.get("label")),
+            "group": _normalize_barcode_group(item.get("group")),
+        }
+    code = _validate_code128(str(item or ""))
+    return {"barcode": code, "label": "", "group": ""}
+
+
 class CatalogRepository:
     def __init__(self, db_url: str) -> None:
         from sqlalchemy import create_engine
@@ -207,7 +238,43 @@ class CatalogRepository:
         _Base.metadata.create_all(self.engine)
         self._migrate_product_group_comment()
         self._migrate_product_group_cost()
+        self._migrate_barcode_label()
+        self._migrate_barcode_group()
         self._seed_defaults()
+
+    def _migrate_barcode_group(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_product_barcodes" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_product_barcodes")}
+        if "barcode_group" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE catalog_product_barcodes "
+                    "ADD COLUMN barcode_group VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
+
+    def _migrate_barcode_label(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_product_barcodes" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_product_barcodes")}
+        if "label" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE catalog_product_barcodes "
+                    "ADD COLUMN label VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
 
     def _migrate_product_group_cost(self) -> None:
         from sqlalchemy import inspect, text
@@ -788,7 +855,13 @@ class CatalogRepository:
             )
             for i, bc in enumerate(barcodes):
                 session.add(
-                    CatalogProductBarcode(product_id=int(row.id), barcode=bc, sort_order=i)
+                    CatalogProductBarcode(
+                        product_id=int(row.id),
+                        barcode=bc["barcode"],
+                        label=bc.get("label", ""),
+                        barcode_group=bc.get("group", ""),
+                        sort_order=i,
+                    )
                 )
             if is_kit:
                 comps = self._normalize_components(components_raw)
@@ -835,21 +908,23 @@ class CatalogRepository:
         row.volume = str(data.get("volume") or "").strip()[:32]
         row.marking_type_id = _opt_int(data.get("marking_type_id"))
 
-    def _normalize_barcodes(self, raw: list) -> list[str]:
-        out: list[str] = []
+    def _normalize_barcodes(self, raw: list) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
         seen: set[str] = set()
         for item in raw:
-            code = _validate_code128(str(item or ""))
+            parsed = _parse_barcode_item(item)
+            code = parsed["barcode"]
             if code in seen:
                 raise ValueError(f"Дублирующийся штрихкод в карточке: «{code}»")
             seen.add(code)
-            out.append(code)
+            out.append(parsed)
         return out
 
     def _validate_barcodes_unique(
-        self, session: Session, barcodes: list[str], *, exclude_product_id: int
+        self, session: Session, barcodes: list[dict[str, str]], *, exclude_product_id: int
     ) -> None:
-        for code in barcodes:
+        for item in barcodes:
+            code = item["barcode"]
             other = session.scalar(
                 select(CatalogProductBarcode.product_id).where(
                     CatalogProductBarcode.barcode == code,
@@ -858,6 +933,58 @@ class CatalogRepository:
             )
             if other is not None:
                 raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+
+    def merge_product_barcode(
+        self,
+        *,
+        product_id: int,
+        barcode: str,
+        label: str | None = None,
+        group: str | None = None,
+        touch_label: bool = False,
+        touch_group: bool = False,
+    ) -> str:
+        code = _validate_code128(barcode)
+        with Session(self.engine) as session:
+            if session.get(CatalogProduct, int(product_id)) is None:
+                raise ValueError("Товар не найден")
+            existing = session.scalar(
+                select(CatalogProductBarcode).where(
+                    CatalogProductBarcode.product_id == int(product_id),
+                    CatalogProductBarcode.barcode == code,
+                )
+            )
+            if existing is not None:
+                if touch_label:
+                    existing.label = _normalize_barcode_label(label or "")
+                if touch_group:
+                    existing.barcode_group = _normalize_barcode_group(group or "")
+                session.commit()
+                return "updated"
+            other = session.scalar(
+                select(CatalogProductBarcode.product_id).where(
+                    CatalogProductBarcode.barcode == code,
+                )
+            )
+            if other is not None:
+                raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+            max_order = session.scalar(
+                select(func.max(CatalogProductBarcode.sort_order)).where(
+                    CatalogProductBarcode.product_id == int(product_id)
+                )
+            )
+            sort_order = int(max_order or -1) + 1
+            session.add(
+                CatalogProductBarcode(
+                    product_id=int(product_id),
+                    barcode=code,
+                    label=_normalize_barcode_label(label or ""),
+                    barcode_group=_normalize_barcode_group(group or ""),
+                    sort_order=sort_order,
+                )
+            )
+            session.commit()
+            return "created"
 
     def _normalize_components(self, raw: list) -> list[dict[str, int]]:
         out: list[dict[str, int]] = []
@@ -931,7 +1058,7 @@ class CatalogRepository:
             m = session.get(CatalogMarkingType, row.marking_type_id)
             if m:
                 marking_name = m.name
-        barcodes: list[str] = []
+        barcodes: list[dict[str, str]] = []
         components: list[KitComponentRow] = []
         barcode_count = int(
             session.scalar(
@@ -947,7 +1074,10 @@ class CatalogRepository:
                 .where(CatalogProductBarcode.product_id == row.id)
                 .order_by(CatalogProductBarcode.sort_order)
             ).all()
-            barcodes = [b.barcode for b in bc_rows]
+            barcodes = [
+                {"barcode": b.barcode, "label": b.label or "", "group": b.barcode_group or ""}
+                for b in bc_rows
+            ]
             if row.is_kit:
                 comp_rows = session.scalars(
                     select(CatalogKitComponent).where(CatalogKitComponent.kit_product_id == row.id)
