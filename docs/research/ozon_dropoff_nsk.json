@@ -1,0 +1,64 @@
+{
+  "search": [
+    {
+      "warehouse_id": 1020000386145000,
+      "warehouse_type": "WAREHOUSE_TYPE_ORDERS_RECEIVING_POINT",
+      "coordinates": {
+        "latitude": 55.023914,
+        "longitude": 82.979828
+      },
+      "address": "Россия, Новосибирск, улица Панфиловцев, 9",
+      "name": "НОВОСИБИРСК_АППЗ_2"
+    },
+    {
+      "warehouse_id": 1020005000298706,
+      "warehouse_type": "WAREHOUSE_TYPE_ORDERS_RECEIVING_POINT",
+      "coordinates": {
+        "latitude": 55.039371,
+        "longitude": 82.910049
+      },
+      "address": "Россия, Новосибирская, Новосибирск, Нарымская улица, 11",
+      "name": "НОВОСИБИРСК_АППЗ_5"
+    },
+    {
+      "warehouse_id": 21957447472000,
+      "warehouse_type": "WAREHOUSE_TYPE_SORTING_CENTER",
+      "coordinates": {
+        "latitude": 55.004916,
+        "longitude": 82.553622
+      },
+      "address": "Россия, 630301, обл. Новосибирская, г. Обь, населенный пункт 3307 км, дом 16, корпус 8",
+      "name": "НОВОСИБИРСК_РФЦ_Кроссдокинг"
+    },
+    {
+      "warehouse_id": 1020005004424570,
+      "warehouse_type": "WAREHOUSE_TYPE_SORTING_CENTER",
+      "coordinates": {
+        "latitude": 54.941902,
+        "longitude": 82.916458
+      },
+      "address": "Россия, 630088, обл. Новосибирская, г. Новосибирск, Россия, Новосибирск, улица Петухова, 71",
+      "name": "НОВОСИБИРСК_ДО_ПЕТУХОВА_БЛОК_3"
+    },
+    {
+      "warehouse_id": 1020005000291638,
+      "warehouse_type": "WAREHOUSE_TYPE_ORDERS_RECEIVING_POINT",
+      "coordinates": {
+        "latitude": 54.844679,
+        "longitude": 83.059112
+      },
+      "address": "Россия, Новосибирская, Новосибирск, Русская улица, 40",
+      "name": "НОВОСИБИРСК_АППЗ_3"
+    },
+    {
+      "warehouse_id": 1020000142982000,
+      "warehouse_type": "WAREHOUSE_TYPE_ORDERS_RECEIVING_POINT",
+      "coordinates": {
+        "latitude": 55.05714,
+        "longitude": 82.910645
+      },
+      "address": "Россия, Новосибирск, улица Дуси Ковальчук, 260/2",
+      "name": "НОВОСИБИРСК_АППЗ_1"
+    }
+  ]
+}

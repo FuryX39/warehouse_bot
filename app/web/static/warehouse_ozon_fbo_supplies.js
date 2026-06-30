@@ -1,6 +1,6 @@
 /** Поставки FBO — менеджер: потребность, пакеты заявок, грузоместа, этикетки. */
 (function (global) {
-  var meta = { delivery_types: [], supply_kinds: [], batch_statuses: [] };
+  var meta = { delivery_types: [], supply_kinds: [], batch_statuses: [], dropoff_presets: [] };
   var macrolocalClusters = [];
   var demandRows = [];
   var createItems = [];
@@ -422,9 +422,15 @@
             .join("") +
           "</select></div>" +
           '<div class="wh-fbo-row wh-fbo-dropoff-row" id="whFboDropoffRow" hidden>' +
-          '<input type="text" id="whFboDropoffSearch" placeholder="Поиск точки отгрузки (мин. 4 символа)" class="wh-fbo-input wh-fbo-input--wide" />' +
+          '<p class="wh-muted">Точка отгрузки (кросс-док)</p>' +
+          '<div class="wh-fbo-chips" id="whFboDropoffPresets"></div>' +
+          '<span id="whFboDropoffPicked" class="wh-muted"></span>' +
+          '<details class="wh-fbo-dropoff-search" id="whFboDropoffSearchBlock">' +
+          '<summary class="wh-muted">Поиск другой точки</summary>' +
+          '<div class="wh-fbo-row">' +
+          '<input type="text" id="whFboDropoffSearch" placeholder="Мин. 4 символа" class="wh-fbo-input wh-fbo-input--wide" />' +
           '<button type="button" class="wh-btn" id="whFboSearchDropoff">Найти</button>' +
-          '<span id="whFboDropoffPicked" class="wh-muted"></span></div>' +
+          "</div></details></div>" +
           '<div id="whFboDropoffList"></div></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">5. Таймслот</h4>' +
           '<div class="wh-fbo-row">' +
@@ -442,6 +448,55 @@
       });
   }
 
+  function setDropoffPick(root, pick) {
+    dropoffPick = pick;
+    var pickedEl = root.querySelector("#whFboDropoffPicked");
+    if (pickedEl) {
+      pickedEl.textContent = pick ? "Выбрано: " + pick.name : "";
+    }
+    var presets = root.querySelector("#whFboDropoffPresets");
+    if (presets) {
+      presets.querySelectorAll(".wh-fbo-chip").forEach(function (btn) {
+        var on = pick && btn.getAttribute("data-id") === pick.id;
+        btn.classList.toggle("wh-fbo-chip--on", !!on);
+      });
+    }
+  }
+
+  function renderDropoffPresets() {
+    var presets = meta.dropoff_presets || [];
+    if (!presets.length) {
+      return '<p class="wh-muted">Пресеты не заданы — используйте поиск</p>';
+    }
+    return presets
+      .map(function (p) {
+        return (
+          '<button type="button" class="wh-fbo-chip wh-fbo-dropoff-preset" data-id="' +
+          esc(p.warehouse_id) +
+          '" data-name="' +
+          esc(p.name) +
+          '">' +
+          esc(p.name) +
+          "</button>"
+        );
+      })
+      .join("");
+  }
+
+  function bindDropoffPresets(root) {
+    var presets = root.querySelector("#whFboDropoffPresets");
+    if (!presets) return;
+    presets.innerHTML = renderDropoffPresets();
+    presets.querySelectorAll(".wh-fbo-dropoff-preset").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setDropoffPick(root, {
+          id: btn.getAttribute("data-id"),
+          name: btn.getAttribute("data-name"),
+        });
+      });
+    });
+  }
+
   function bindCreateEvents(tab, item, root) {
     var msg = root.querySelector("#whFboCreateMsg");
     root.querySelector("#whFboCreateBack").addEventListener("click", function () {
@@ -450,7 +505,11 @@
     root.querySelector("#whFboDeliveryType").addEventListener("change", function () {
       var isCross = root.querySelector("#whFboDeliveryType").value === "crossdock";
       root.querySelector("#whFboDropoffRow").hidden = !isCross;
+      if (!isCross) {
+        setDropoffPick(root, null);
+      }
     });
+    bindDropoffPresets(root);
     root.querySelector("#whFboLoadDemand").addEventListener("click", function () {
       var sku = root.querySelector("#whFboDemandSku").value.trim();
       if (!sku) return setMsg(msg, "Введите артикул", true);
@@ -498,24 +557,18 @@
         body: JSON.stringify({ search: q }),
       }).then(function (resp) {
         var list = root.querySelector("#whFboDropoffList");
-        var rows = [];
-        function walk(x) {
-          if (!x) return;
-          if (Array.isArray(x)) return x.forEach(walk);
-          if (typeof x !== "object") return;
-          var wid = x.warehouse_id || x.id;
-          var name = x.name || x.warehouse_name;
-          if (wid && name) rows.push({ id: String(wid), name: String(name) });
-          Object.keys(x).forEach(function (k) { walk(x[k]); });
-        }
-        walk(resp.data);
+        var rows = (resp.items || []).map(function (r) {
+          return { id: String(r.warehouse_id), name: String(r.name) };
+        });
         list.innerHTML = rows.slice(0, 30).map(function (r) {
           return '<button type="button" class="wh-fbo-dropoff-pick wh-btn wh-btn-sm" data-id="' + esc(r.id) + '" data-name="' + esc(r.name) + '">' + esc(r.name) + "</button> ";
         }).join("") || '<p class="wh-muted">Ничего не найдено</p>';
         list.querySelectorAll(".wh-fbo-dropoff-pick").forEach(function (btn) {
           btn.addEventListener("click", function () {
-            dropoffPick = { id: btn.getAttribute("data-id"), name: btn.getAttribute("data-name") };
-            root.querySelector("#whFboDropoffPicked").textContent = "Выбрано: " + dropoffPick.name;
+            setDropoffPick(root, {
+              id: btn.getAttribute("data-id"),
+              name: btn.getAttribute("data-name"),
+            });
           });
         });
       }).catch(function (err) { setMsg(msg, err.message, true); });

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from typing import Any
 
@@ -18,6 +20,20 @@ SUPPLY_TYPE_DIRECT = "DIRECT"
 SUPPLY_TYPE_CROSSDOCK = "CROSSDOCK"
 
 DEMAND_HORIZON_DAYS = 60
+
+DROPOFF_SUPPLY_TYPE_FILTER = ["CREATE_TYPE_CROSSDOCK"]
+
+# Частые точки отгрузки (кросс-док); переопределяется через OZON_FBO_DROPOFF_PRESETS в .env.
+DEFAULT_DROPOFF_PRESETS: list[dict[str, Any]] = [
+    {
+        "warehouse_id": "1020005004424570",
+        "name": "НОВОСИБИРСК_ДО_ПЕТУХОВА_БЛОК_3",
+    },
+    {
+        "warehouse_id": "21957447472000",
+        "name": "НОВОСИБИРСК_РФЦ_НОВЫЙ",
+    },
+]
 
 
 def _walk(obj: Any):
@@ -151,11 +167,62 @@ def list_macrolocal_clusters(adapter: OzonAdapter) -> list[dict[str, Any]]:
     return out
 
 
+def dropoff_presets_from_env() -> list[dict[str, str]]:
+    raw = (os.getenv("OZON_FBO_DROPOFF_PRESETS") or "").strip()
+    if not raw:
+        return [
+            {"warehouse_id": str(p["warehouse_id"]), "name": str(p["name"])}
+            for p in DEFAULT_DROPOFF_PRESETS
+        ]
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OZON_FBO_DROPOFF_PRESETS: невалидный JSON") from exc
+    if not isinstance(parsed, list) or not parsed:
+        raise ValueError("OZON_FBO_DROPOFF_PRESETS: ожидается непустой JSON-массив")
+    out: list[dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        wid = str(item.get("warehouse_id") or item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if wid and name:
+            out.append({"warehouse_id": wid, "name": name})
+    if not out:
+        raise ValueError("OZON_FBO_DROPOFF_PRESETS: нет валидных записей")
+    return out
+
+
+def normalize_dropoff_search(data: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in data.get("search") or []:
+        if not isinstance(item, dict):
+            continue
+        wid = item.get("warehouse_id") or item.get("id")
+        name = item.get("name") or item.get("warehouse_name")
+        if wid is None or not name:
+            continue
+        rows.append(
+            {
+                "warehouse_id": str(wid),
+                "name": str(name),
+                "address": str(item.get("address") or ""),
+                "warehouse_type": item.get("warehouse_type"),
+            }
+        )
+    return rows
+
+
 def search_dropoff_warehouses(adapter: OzonAdapter, query: str) -> dict[str, Any]:
     q = str(query or "").strip()
     if len(q) < 4:
         raise ValueError("Введите минимум 4 символа для поиска точки отгрузки")
-    return _post(adapter, "/v1/warehouse/fbo/list", {"search": q}, timeout=120)
+    payload = {
+        "search": q,
+        "filter_by_supply_type": DROPOFF_SUPPLY_TYPE_FILTER,
+    }
+    data = _post(adapter, "/v1/warehouse/fbo/list", payload, timeout=120)
+    return {"raw": data, "items": normalize_dropoff_search(data)}
 
 
 def _draft_items(ozon_sku: int, quantity: int) -> list[dict[str, Any]]:

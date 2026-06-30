@@ -1631,7 +1631,27 @@ body.wh-body {
   color: #1a4f9c;
 }
 
-.wh-fbo-slot-select {
+.wh-fbo-dropoff-search {
+  margin-top: 0.5rem;
+}
+
+.wh-fbo-dropoff-search summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.wh-fbo-dropoff-search .wh-fbo-row {
+  margin-top: 0.5rem;
+}
+
+#whFboDropoffList {
+  margin-top: 0.5rem;
+}
+
+#whFboDropoffList .wh-btn-sm {
+  margin: 0.15rem 0.25rem 0.15rem 0;
+}
+
   min-width: 14rem;
   padding: 0.4rem;
 }

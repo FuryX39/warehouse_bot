@@ -27,6 +27,7 @@ from app.ozon_fbo_api import (
     poll_supply_create_status,
     rank_demand_by_clusters,
     resolve_offer_ids,
+    dropoff_presets_from_env,
     search_dropoff_warehouses,
     top_warehouse_from_draft_info,
 )
@@ -88,6 +89,7 @@ def register_warehouse_ozon_fbo_routes(
                 {"id": "labels_ready", "name": "Этикетки готовы"},
                 {"id": "done", "name": "Завершена"},
             ],
+            "dropoff_presets": dropoff_presets_from_env(),
         }
 
     def _ozon() -> OzonAdapter:
@@ -553,7 +555,7 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"ok": True, "data": data}
+        return {"ok": True, "data": data.get("raw") or data, "items": data.get("items") or []}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/ozon/draft-info")
     async def api_ozon_fbo_draft_info(
