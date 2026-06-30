@@ -236,6 +236,9 @@
       .then(function (data) {
         var rows = (data.supplies || [])
           .map(function (s) {
+            var labels = s.labels_url
+              ? '<a href="' + esc(s.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
+              : '<span class="wh-muted">—</span>';
             return (
               '<tr data-id="' + esc(s.id) + '">' +
               "<td>#" + esc(s.id) + "</td>" +
@@ -244,6 +247,7 @@
               "<td>" + esc(s.status_label || statusName(s.status)) + "</td>" +
               "<td>" + esc(s.ozon_cluster_name || s.ozon_cluster_id || "—") + "</td>" +
               "<td>" + esc(s.assigned_user_name || "—") + "</td>" +
+              "<td>" + labels + "</td>" +
               "<td>" + esc(formatTs(s.updated_at_ts)) + "</td></tr>"
             );
           })
@@ -257,7 +261,7 @@
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboCreate">+ FBO-заявка</button>' +
           "</div>" +
           (rows
-            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>Кластер/склад</th><th>Упаковщик</th><th>Обновлено</th></tr></thead><tbody>' +
+            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>Кластер/склад</th><th>Упаковщик</th><th>Этикетки</th><th>Обновлено</th></tr></thead><tbody>' +
               rows +
               "</tbody></table>"
             : '<p class="wh-msg">FBO-заявки не найдены.</p>');
@@ -736,20 +740,24 @@
       .then(function (data) {
         var rows = (data.supplies || [])
           .map(function (s) {
+            var labels = s.labels_url
+              ? '<a href="' + esc(s.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
+              : '<span class="wh-muted">—</span>';
             return (
               '<tr data-id="' + esc(s.id) + '">' +
               "<td>#" + esc(s.id) + "</td>" +
               "<td>" + esc(s.title) + "</td>" +
               "<td>" + esc(s.supply_kind_label || kindName(s.supply_kind)) + "</td>" +
               "<td>" + esc(s.status_label || statusName(s.status)) + "</td>" +
-              "<td>" + esc(s.cargo_count || 0) + "</td></tr>"
+              "<td>" + esc(s.cargo_count || 0) + "</td>" +
+              "<td>" + labels + "</td></tr>"
             );
           })
           .join("");
         root.innerHTML =
           '<div class="wh-crm-toolbar"><button type="button" class="wh-btn" id="whFboPackRefresh">Обновить</button></div>' +
           (rows
-            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>ГМ</th></tr></thead><tbody>' +
+            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>ГМ</th><th>Этикетки</th></tr></thead><tbody>' +
               rows +
               "</tbody></table>"
             : '<p class="wh-msg">Назначенных FBO-заданий нет.</p>');
@@ -758,7 +766,8 @@
         });
         root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
-          tr.addEventListener("click", function () {
+          tr.addEventListener("click", function (e) {
+            if (e.target && e.target.closest("a")) return;
             renderPackingForm(tab, item, parseInt(tr.getAttribute("data-id"), 10));
           });
         });
@@ -799,10 +808,8 @@
           '<button type="button" class="wh-btn" id="whFboCargoStatus">Статус ГМ</button>' +
           '<button type="button" class="wh-btn" id="whFboMakeLabels">Этикетки</button>' +
           '<button type="button" class="wh-btn" id="whFboLabelStatus">Статус этикеток</button>' +
-          (currentSupply.labels_file_guid
-            ? '<a class="wh-btn" href="/api/warehouse/marketplaces/ozon-fbo/supplies/' +
-              esc(supplyId) +
-              '/labels.pdf" target="_blank">Скачать PDF</a>'
+          (currentSupply.labels_url
+            ? '<a class="wh-btn" href="' + esc(currentSupply.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
             : "") +
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboSaveCargoes">Сохранить</button></div>' +
           '<p class="wh-msg" id="whFboPackMsg"></p>' +

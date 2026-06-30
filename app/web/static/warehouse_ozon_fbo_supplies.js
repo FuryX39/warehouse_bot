@@ -262,6 +262,50 @@
       });
   }
 
+  function labelsCell(s) {
+    return s.labels_url
+      ? '<a href="' + esc(s.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
+      : '<span class="wh-muted">—</span>';
+  }
+
+  function renderSystemSuppliesList(supplies, tab, item) {
+    if (!supplies || !supplies.length) {
+      return '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Поставки в системе</h4><p class="wh-msg">Поставок пока нет.</p></section>';
+    }
+    var rows = supplies
+      .map(function (s) {
+        return (
+          '<tr data-id="' + esc(s.id) + '" data-batch-id="' + esc(s.batch_id || "") + '">' +
+          "<td>#" + esc(s.id) + "</td>" +
+          "<td>" + esc(s.ozon_cluster_name || s.title || "—") + "</td>" +
+          "<td>" + esc(s.ozon_supply_id || "—") + "</td>" +
+          "<td>" + (s.batch_id ? "Пакет #" + esc(s.batch_id) : "—") + "</td>" +
+          "<td>" + esc(s.status_label || s.status || "—") + "</td>" +
+          "<td>" + labelsCell(s) + "</td>" +
+          "<td>" + esc(formatTs(s.updated_at_ts)) + "</td></tr>"
+        );
+      })
+      .join("");
+    return (
+      '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Поставки в системе</h4>' +
+      '<p class="wh-muted">Объединённый PDF этикеток по всем грузоместам поставки. Ссылка появляется после загрузки из Ozon.</p>' +
+      '<table class="wh-employees-table wh-crm-table wh-fbo-supplies-table"><thead><tr>' +
+      "<th>№</th><th>Кластер</th><th>Ozon</th><th>Пакет</th><th>Статус</th><th>Этикетки</th><th>Обновлено</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table></section>"
+    );
+  }
+
+  function bindSystemSuppliesList(tab, item, root) {
+    root.querySelectorAll(".wh-fbo-supplies-table tbody tr[data-id]").forEach(function (tr) {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", function (e) {
+        if (e.target && e.target.closest("a")) return;
+        var batchId = parseInt(tr.getAttribute("data-batch-id"), 10);
+        if (batchId) renderBatchDetail(tab, item, batchId);
+      });
+    });
+  }
+
   function renderBatchList(tab, item, opts) {
     opts = opts || {};
     currentBatchId = null;
@@ -269,9 +313,14 @@
     preparePanel(tab, item);
     var root = panelEl();
     root.innerHTML = '<p class="wh-msg">Загрузка локальных пакетов…</p>';
-    Promise.all([loadMeta(), fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches")])
+    Promise.all([
+      loadMeta(),
+      fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches"),
+      fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies"),
+    ])
       .then(function (parts) {
         var batches = (parts[1].batches || []);
+        var supplies = (parts[2].supplies || []);
         var batchRows = batches
           .map(function (b) {
             return (
@@ -300,6 +349,7 @@
               "</tr></thead><tbody>" + batchRows + "</tbody></table>"
             : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
           "</section>" +
+          renderSystemSuppliesList(supplies, tab, item) +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Заявки в Ozon <span class="wh-muted" id="whFboOzonCount">(' +
           esc(ozonOrdersLoaded ? ozonOrdersCount : "—") +
           ")</span></h4>" +
@@ -313,6 +363,7 @@
           renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
         });
         bindOzonListEvents(tab, item, root);
+        bindSystemSuppliesList(tab, item, root);
         root.querySelectorAll(".wh-fbo-batch-table tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
           tr.addEventListener("click", function (e) {
@@ -1015,9 +1066,7 @@
     if (!supplies || !supplies.length) return "";
     var rows = supplies
       .map(function (s) {
-        var labelCell = s.labels_url
-          ? '<a href="' + esc(s.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
-          : '<span class="wh-muted">—</span>';
+        var labelCell = labelsCell(s);
         return (
           "<tr><td>" + esc(s.ozon_cluster_name || s.title) + "</td>" +
           "<td>" + esc(s.ozon_supply_id || "—") + "</td>" +
@@ -1190,10 +1239,11 @@
           '<button type="button" class="wh-btn" id="whFboBatchBack">&larr; К списку</button>' +
           '<button type="button" class="wh-btn" id="whFboSyncAllCargoes" title="Подтянуть грузоместа и состав из Ozon">Обновить из Ozon</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboSendAllCargoes" title="Сохранить черновик и отправить все грузоместа в Ozon">Сохранить и отправить в Ozon</button>' +
+          '<button type="button" class="wh-btn wh-btn-primary" id="whFboLoadAllLabels" title="Загрузить объединённые PDF этикеток из Ozon для всех заявок пакета">Загрузить этикетки из Ozon</button>' +
           '<button type="button" class="wh-btn" id="whFboAllLabelsPdf" title="Скачать объединённый PDF сохранённых этикеток">Скачать этикетки (PDF)</button>' +
           '<button type="button" class="wh-btn wh-btn-danger" id="whFboDeleteBatch">Удалить пакет</button>' +
           "</div>" +
-          '<p class="wh-muted wh-fbo-batch-hint">Сначала распределите товары по грузоместам. «Обновить из Ozon» — по кнопке. Этикетки — в меню «Ещё» у заявки. Долгие операции идут в фоне.</p>' +
+          '<p class="wh-muted wh-fbo-batch-hint">Сначала распределите товары по грузоместам и отправьте в Ozon. «Загрузить этикетки из Ozon» — один PDF на поставку со всеми грузоместами. Долгие операции идут в фоне.</p>' +
           '<p class="wh-msg" id="whFboBatchMsg"></p>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">' + esc(batch.title) + "</h4>" +
           "<p>" + esc(batch.delivery_type_label) + " · " + esc(batch.timeslot_label || "—") + " · " + esc(batch.supply_count) + " заявок</p></section>" +
@@ -1274,6 +1324,40 @@
                 );
               } else {
                 setMsg(msg, "Грузоместа отправлены в Ozon (" + oks.length + ").", false);
+              }
+              return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
+            })
+            .then(function (fresh) {
+              if (fresh && fresh.batch) paintBatchDetail(tab, item, batchId, root, fresh.batch);
+            })
+            .catch(function (err) { setMsg(msg, err.message, true); });
+        });
+        root.querySelector("#whFboLoadAllLabels").addEventListener("click", function () {
+          var msg = root.querySelector("#whFboBatchMsg");
+          setMsg(msg, "Загрузка этикеток из Ozon для всех заявок пакета…", false);
+          fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId + "/labels/generate", {
+            method: "POST",
+            body: "{}",
+          })
+            .then(function (data) {
+              if (!data.job_id) throw new Error("Сервер не вернул job_id");
+              return pollOzonFboJob(data.job_id, function (job) {
+                setMsg(msg, "Загрузка этикеток… (" + (job.status || "running") + ")", false);
+              });
+            })
+            .then(function (result) {
+              var rows = (result && result.results) || [];
+              var ok = rows.filter(function (r) { return r.ok_count; }).length;
+              var failed = rows.filter(function (r) { return r.error; });
+              if (failed.length) {
+                setMsg(
+                  msg,
+                  "Загружено: " + ok + " из " + rows.length + ". Ошибки: " +
+                    failed.map(function (r) { return "#" + r.supply_id + ": " + r.error; }).join("; "),
+                  true
+                );
+              } else {
+                setMsg(msg, "Этикетки сохранены для " + ok + " поставок.", false);
               }
               return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
             })
