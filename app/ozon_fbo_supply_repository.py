@@ -10,7 +10,7 @@ from sqlalchemy import ForeignKey, Integer, String, delete, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
-from app.ozon_fbo_labels_storage import supply_labels_url
+from app.ozon_fbo_labels_storage import batch_labels_url, supply_labels_url
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 SUPPLY_KIND_PALLET = "pallet"
@@ -190,6 +190,7 @@ class FboBatchRow:
     created_at_ts: int
     updated_at_ts: int
     supply_count: int = 0
+    labels_url: str = ""
     supplies: list["FboSupplyRow"] = field(default_factory=list)
 
 
@@ -847,6 +848,12 @@ class OzonFboSupplyRepository:
             .select_from(OzonFboSupply)
             .where(OzonFboSupply.batch_id == int(row.id))
         )
+        labels_count = session.scalar(
+            select(func.count())
+            .select_from(OzonFboSupply)
+            .where(OzonFboSupply.batch_id == int(row.id))
+            .where(OzonFboSupply.labels_file != "")
+        )
         supplies: list[FboSupplyRow] = []
         if include_details:
             supply_rows = session.scalars(
@@ -870,6 +877,7 @@ class OzonFboSupplyRepository:
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
             supply_count=int(supply_count or 0),
+            labels_url=batch_labels_url(int(row.id)) if int(labels_count or 0) > 0 else "",
             supplies=supplies,
         )
 
@@ -997,6 +1005,7 @@ def batch_to_dict(
         "created_at_ts": row.created_at_ts,
         "updated_at_ts": row.updated_at_ts,
         "supply_count": row.supply_count,
+        "labels_url": row.labels_url,
     }
     if include_details:
         data["supplies"] = [

@@ -23,6 +23,10 @@ def supply_labels_url(supply_id: int) -> str:
     return f"/api/warehouse/marketplaces/ozon-fbo/supplies/{int(supply_id)}/labels.pdf"
 
 
+def batch_labels_url(batch_id: int) -> str:
+    return f"/api/warehouse/marketplaces/ozon-fbo/batches/{int(batch_id)}/labels.pdf"
+
+
 def resolve_label_path(relpath: str) -> Path | None:
     rel = str(relpath or "").strip().replace("\\", "/")
     if not rel or ".." in rel.split("/"):

@@ -1094,7 +1094,7 @@ def register_warehouse_ozon_fbo_routes(
         return Response(
             content=merged,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
         )
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}/cargoes/send-all")
