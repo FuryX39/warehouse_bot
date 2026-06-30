@@ -10,6 +10,7 @@ from sqlalchemy import ForeignKey, Integer, String, delete, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
+from app.ozon_fbo_labels_storage import cargo_labels_url
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 SUPPLY_KIND_PALLET = "pallet"
@@ -121,6 +122,7 @@ class OzonFboCargo(_Base):
     )
     cargo_number: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_cargo_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    labels_file: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -166,6 +168,7 @@ class FboCargoRow:
     id: int
     cargo_number: str
     ozon_cargo_id: str
+    labels_file: str
     comment: str
     sort_order: int
     items: list[FboCargoItemRow] = field(default_factory=list)
@@ -319,6 +322,14 @@ class OzonFboSupplyRepository:
             for name, ddl in migrations:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE ozon_fbo_supplies ADD COLUMN {name} {ddl}"))
+            cargo_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_cargoes)")).all()
+            }
+            if "labels_file" not in cargo_cols:
+                conn.execute(
+                    text("ALTER TABLE ozon_fbo_cargoes ADD COLUMN labels_file VARCHAR(256) NOT NULL DEFAULT ''")
+                )
 
     def list_batches(self, filters: dict[str, str] | None = None) -> list[FboBatchRow]:
         filters = filters or {}
@@ -526,7 +537,46 @@ class OzonFboSupplyRepository:
             session.refresh(row)
             return self._row(session, row, include_details=True)
 
+    def get_cargo(self, cargo_id: int) -> FboCargoRow | None:
+        with Session(self.engine) as session:
+            row = session.get(OzonFboCargo, int(cargo_id))
+            if row is None:
+                return None
+            return self._cargo_row(session, row)
+
+    def set_cargo_labels_file(self, cargo_id: int, labels_file: str) -> None:
+        with Session(self.engine) as session:
+            row = session.get(OzonFboCargo, int(cargo_id))
+            if row is None:
+                return
+            old = str(row.labels_file or "").strip()
+            new = str(labels_file or "").strip()
+            if old and old != new:
+                from app.ozon_fbo_labels_storage import delete_cargo_label
+
+                delete_cargo_label(old)
+            row.labels_file = new[:256]
+            session.commit()
+
+    def clear_supply_cargo_labels(self, supply_id: int) -> None:
+        from app.ozon_fbo_labels_storage import delete_cargo_label, delete_supply_labels
+
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(OzonFboCargo).where(OzonFboCargo.supply_id == int(supply_id))
+            ).all()
+            for row in rows:
+                old = str(row.labels_file or "").strip()
+                if old:
+                    delete_cargo_label(old)
+                row.labels_file = ""
+            session.commit()
+        delete_supply_labels(supply_id)
+
     def delete_supply(self, supply_id: int) -> bool:
+        from app.ozon_fbo_labels_storage import delete_supply_labels
+
+        delete_supply_labels(supply_id)
         with Session(self.engine) as session:
             row = session.get(OzonFboSupply, int(supply_id))
             if row is None:
@@ -567,6 +617,7 @@ class OzonFboSupplyRepository:
             return True
 
     def save_cargoes(self, supply_id: int, cargoes: list[dict[str, Any]]) -> FboSupplyRow | None:
+        self.clear_supply_cargo_labels(supply_id)
         with Session(self.engine) as session:
             supply = session.get(OzonFboSupply, int(supply_id))
             if supply is None:
@@ -682,6 +733,33 @@ class OzonFboSupplyRepository:
             raise ValueError("Упаковщик не найден")
         return user_id
 
+    def _cargo_row(self, session: Session, cargo: OzonFboCargo) -> FboCargoRow:
+        ci_rows = session.scalars(
+            select(OzonFboCargoItem)
+            .where(OzonFboCargoItem.cargo_id == int(cargo.id))
+            .order_by(OzonFboCargoItem.sort_order, OzonFboCargoItem.id)
+        ).all()
+        return FboCargoRow(
+            id=int(cargo.id),
+            cargo_number=str(cargo.cargo_number or ""),
+            ozon_cargo_id=str(cargo.ozon_cargo_id or ""),
+            labels_file=str(cargo.labels_file or ""),
+            comment=str(cargo.comment or ""),
+            sort_order=int(cargo.sort_order),
+            items=[
+                FboCargoItemRow(
+                    id=int(i.id),
+                    product_id=int(i.product_id) if i.product_id is not None else None,
+                    sku=str(i.sku),
+                    name=str(i.name or ""),
+                    quantity=int(i.quantity or 0),
+                    expiration_date=str(i.expiration_date or ""),
+                    sort_order=int(i.sort_order),
+                )
+                for i in ci_rows
+            ],
+        )
+
     def _row(self, session: Session, row: OzonFboSupply, *, include_details: bool) -> FboSupplyRow:
         assigned_name = ""
         if row.assigned_user_id:
@@ -718,33 +796,7 @@ class OzonFboSupplyRepository:
                 .where(OzonFboCargo.supply_id == int(row.id))
                 .order_by(OzonFboCargo.sort_order, OzonFboCargo.id)
             ).all()
-            for cargo in cargo_rows:
-                ci_rows = session.scalars(
-                    select(OzonFboCargoItem)
-                    .where(OzonFboCargoItem.cargo_id == int(cargo.id))
-                    .order_by(OzonFboCargoItem.sort_order, OzonFboCargoItem.id)
-                ).all()
-                cargoes.append(
-                    FboCargoRow(
-                        id=int(cargo.id),
-                        cargo_number=str(cargo.cargo_number or ""),
-                        ozon_cargo_id=str(cargo.ozon_cargo_id or ""),
-                        comment=str(cargo.comment or ""),
-                        sort_order=int(cargo.sort_order),
-                        items=[
-                            FboCargoItemRow(
-                                id=int(i.id),
-                                product_id=int(i.product_id) if i.product_id is not None else None,
-                                sku=str(i.sku),
-                                name=str(i.name or ""),
-                                quantity=int(i.quantity or 0),
-                                expiration_date=str(i.expiration_date or ""),
-                                sort_order=int(i.sort_order),
-                            )
-                            for i in ci_rows
-                        ],
-                    )
-                )
+            cargoes = [self._cargo_row(session, cargo) for cargo in cargo_rows]
 
         return FboSupplyRow(
             id=int(row.id),
@@ -873,6 +925,7 @@ def supply_to_dict(
                 "ozon_cargo_id": c.ozon_cargo_id,
                 "comment": c.comment,
                 "sort_order": c.sort_order,
+                "labels_url": cargo_labels_url(c.id) if str(c.labels_file or "").strip() else "",
                 "items": [
                     _cargo_item_dict(i, catalog_map)
                     for i in c.items

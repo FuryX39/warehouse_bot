@@ -9,8 +9,11 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from app.adapters.ozon import OzonAdapter
-from app.fbs_labels_common import merge_label_pdfs
+from app.fbs_labels_common import merge_label_pdfs, split_pdf_into_pages
+from app.ozon_fbo_jobs import get_job, start_job
+from app.ozon_fbo_labels_storage import read_cargo_label, save_cargo_label
 from app.ozon_fbo_api import (
+    CLUSTER_PAUSE_SEC,
     DELIVERY_CROSSDOCK,
     build_cargoes_create_payload,
     create_draft,
@@ -23,7 +26,6 @@ from app.ozon_fbo_api import (
     extract_draft_id,
     fetch_analytics_stocks,
     fetch_cargo_labels_pdf,
-    fetch_batch_cargo_labels_pdfs,
     fetch_ozon_cargoes,
     fetch_supply_orders_overview,
     get_bundle_items,
@@ -226,6 +228,56 @@ def register_warehouse_ozon_fbo_routes(
 
     def _inner_supply_id_for_labels(supply: dict[str, Any]) -> int:
         return resolve_inner_supply_id(_ozon(), supply)
+
+    def _stored_label_pdfs_for_supply(supply_id: int) -> list[bytes]:
+        row = fbo_repo.get_supply(supply_id)
+        if row is None:
+            return []
+        pdfs: list[bytes] = []
+        for cargo in row.cargoes:
+            rel = str(cargo.labels_file or "").strip()
+            if not rel:
+                continue
+            data = read_cargo_label(rel)
+            if data:
+                pdfs.append(data)
+        return pdfs
+
+    def _refresh_supply_cargo_labels(supply_id: int) -> dict[str, Any]:
+        ozon = _ozon()
+        row = fbo_repo.get_supply(supply_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
+        catalog_map = fbo_repo.catalog_map_for_supply(row)
+        supply = supply_to_dict(row, include_details=True, catalog_map=catalog_map)
+        pairs: list[tuple[int, int]] = []
+        for cargo in supply.get("cargoes") or []:
+            local_id = cargo.get("id")
+            ozon_cid = str(cargo.get("ozon_cargo_id") or "").strip()
+            if local_id and ozon_cid.isdigit():
+                pairs.append((int(local_id), int(ozon_cid)))
+        results: list[dict[str, Any]] = []
+        if not pairs:
+            return {"supply_id": supply_id, "results": results, "ok_count": 0}
+        try:
+            pdf = fetch_cargo_labels_pdf(
+                ozon,
+                supply,
+                ozon_cargo_ids=[ozon_cid for _, ozon_cid in pairs],
+            )
+            pages = split_pdf_into_pages(pdf)
+            for idx, (local_id, _) in enumerate(pairs):
+                page_pdf = pages[idx] if idx < len(pages) else pdf
+                relpath = save_cargo_label(supply_id, local_id, page_pdf)
+                fbo_repo.set_cargo_labels_file(local_id, relpath)
+                results.append({"cargo_id": local_id, "ok": True})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"supply_id": supply_id, "error": str(exc)})
+        return {
+            "supply_id": supply_id,
+            "results": results,
+            "ok_count": sum(1 for r in results if r.get("ok")),
+        }
 
     def _sync_cargoes_from_ozon(supply_id: int) -> dict[str, Any]:
         row = fbo_repo.get_supply(supply_id)
@@ -485,50 +537,50 @@ def register_warehouse_ozon_fbo_routes(
         supply_id: int,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        row = fbo_repo.get_supply(supply_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
-        supply = supply_to_dict(row, include_details=True)
         try:
-            inner_id = _inner_supply_id_for_labels(supply)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        cargo_ids = [
-            str(c.get("ozon_cargo_id") or "").strip()
-            for c in supply.get("cargoes") or []
-            if str(c.get("ozon_cargo_id") or "").strip()
-        ]
-        payload: dict[str, Any] = {"supply_id": inner_id}
-        if cargo_ids:
-            payload["cargo_ids"] = cargo_ids
-        try:
-            data = _ozon().fbo_cargo_labels_create(payload)
+            result = _refresh_supply_cargo_labels(supply_id)
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        file_guid = _extract_first_id(data, ("file_guid", "fileGuid", "guid"))
-        operation_id = _extract_first_id(data, ("operation_id", "operationId", "task_id", "taskId"))
-        if file_guid:
-            fbo_repo.update_supply(
-                supply_id,
-                {
-                    "labels_file_guid": file_guid,
-                    "labels_operation_id": operation_id,
-                    "labels_filename": f"ozon_fbo_cargo_labels_{inner_id}.pdf",
-                    "status": STATUS_LABELS_READY,
-                },
-            )
-        else:
-            fbo_repo.update_supply(
-                supply_id,
-                {"status": STATUS_READY, "labels_operation_id": operation_id},
-            )
-        return {
-            "ok": True,
-            "payload": payload,
-            "data": data,
-            "file_guid": file_guid,
-            "operation_id": operation_id,
-        }
+        row = fbo_repo.get_supply(supply_id)
+        if row and result.get("ok_count"):
+            fbo_repo.update_supply(supply_id, {"status": STATUS_LABELS_READY})
+        return {"ok": True, **result}
+
+    @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/labels/refresh")
+    async def api_ozon_fbo_refresh_labels(
+        supply_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            result = _refresh_supply_cargo_labels(supply_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        row = fbo_repo.get_supply(supply_id)
+        catalog_map = fbo_repo.catalog_map_for_supply(row) if row else None
+        supply = supply_to_dict(row, include_details=True, catalog_map=catalog_map) if row else None
+        return {"ok": True, **result, "supply": supply}
+
+    @app.get("/api/warehouse/marketplaces/ozon-fbo/cargoes/{cargo_id}/labels.pdf")
+    async def api_ozon_fbo_cargo_labels_file(
+        cargo_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        cargo = fbo_repo.get_cargo(cargo_id)
+        if cargo is None or not str(cargo.labels_file or "").strip():
+            raise HTTPException(status_code=404, detail="Этикетка не найдена")
+        pdf = read_cargo_label(cargo.labels_file)
+        if not pdf:
+            raise HTTPException(status_code=404, detail="Файл этикетки отсутствует на сервере")
+        filename = f"ozon_fbo_gm_{cargo.cargo_number or cargo_id}.pdf"
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/ozon/labels/status")
     async def api_ozon_fbo_labels_status(
@@ -567,17 +619,17 @@ def register_warehouse_ozon_fbo_routes(
         supply_id: int,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> Response:
-        supply = _supply_dict_for_ozon(supply_id)
-        try:
-            pdf = fetch_cargo_labels_pdf(_ozon(), supply)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        inner_id = str(supply.get("ozon_supply_id") or supply_id)
+        pdfs = _stored_label_pdfs_for_supply(supply_id)
+        if not pdfs:
+            raise HTTPException(status_code=404, detail="Нет сохранённых этикеток грузомест")
+        merged = merge_label_pdfs(pdfs) if len(pdfs) > 1 else pdfs[0]
+        if not merged:
+            raise HTTPException(status_code=500, detail="Не удалось объединить PDF (pypdf)")
+        row = fbo_repo.get_supply(supply_id)
+        inner_id = str(row.ozon_supply_id if row else supply_id)
         filename = f"ozon_fbo_labels_{inner_id}.pdf"
         return Response(
-            content=pdf,
+            content=merged,
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
@@ -732,7 +784,6 @@ def register_warehouse_ozon_fbo_routes(
             warehouse = top_warehouse_from_draft_info(info)
             if not warehouse:
                 raise HTTPException(status_code=502, detail=draft_warehouse_error_detail(info))
-            time.sleep(5)
             data = draft_timeslots(
                 ozon,
                 draft_id=draft_id,
@@ -789,22 +840,170 @@ def register_warehouse_ozon_fbo_routes(
         supplies = fbo_repo.list_supplies_for_batch(batch_id)
         if not supplies:
             raise HTTPException(status_code=404, detail="В пакете нет заявок")
+
+        def worker() -> dict[str, Any]:
+            results: list[dict[str, Any]] = []
+            for idx, supply in enumerate(supplies):
+                if idx:
+                    time.sleep(CLUSTER_PAUSE_SEC)
+                try:
+                    results.append(_sync_cargoes_from_ozon(supply.id))
+                except HTTPException as exc:
+                    results.append({"supply_id": supply.id, "error": str(exc.detail)})
+                except Exception as exc:  # noqa: BLE001
+                    results.append({"supply_id": supply.id, "error": str(exc)})
+            return {"ok": True, "batch_id": batch_id, "results": results}
+
+        job_id = start_job("batch_sync_cargoes", worker)
+        return {"ok": True, "job_id": job_id, "status": "running"}
+
+    def _execute_batch_submit(
+        *,
+        user_id: int,
+        delivery_type: str,
+        dropoff_id: str,
+        dropoff_type: str,
+        dropoff_name: str,
+        ts_from: str,
+        ts_to: str,
+        clusters: list[dict[str, Any]],
+        supply_kind: str,
+        title: str,
+        draft_items: list[dict[str, Any]],
+        local_items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        ozon = _ozon()
+        batch = fbo_repo.create_batch(
+            {
+                "title": title,
+                "delivery_type": delivery_type,
+                "dropoff_warehouse_id": dropoff_id,
+                "dropoff_warehouse_name": dropoff_name,
+                "timeslot_from": ts_from,
+                "timeslot_to": ts_to,
+                "status": BATCH_STATUS_PLANNING,
+            },
+            manager_user_id=user_id,
+        )
         results: list[dict[str, Any]] = []
-        for supply in supplies:
+        dropoff_int = int(dropoff_id) if dropoff_id else None
+        for cluster_idx, cluster in enumerate(clusters):
+            if cluster_idx:
+                time.sleep(CLUSTER_PAUSE_SEC)
+            macro_id = cluster.get("macrolocal_cluster_id") or cluster.get("id")
+            cluster_name = str(cluster.get("name") or cluster.get("cluster_name") or "")
+            if macro_id is None:
+                results.append({"cluster_name": cluster_name, "error": "Нет macrolocal_cluster_id"})
+                continue
+            row: dict[str, Any] = {"cluster_name": cluster_name, "macrolocal_cluster_id": macro_id}
             try:
-                results.append(_sync_cargoes_from_ozon(supply.id))
-            except HTTPException as exc:
-                results.append({"supply_id": supply.id, "error": str(exc.detail)})
+                created = create_draft(
+                    ozon,
+                    delivery_type=delivery_type,
+                    macrolocal_cluster_id=int(macro_id),
+                    items=draft_items,
+                    dropoff_warehouse_id=dropoff_int,
+                    dropoff_warehouse_type=dropoff_type or None,
+                    dropoff_warehouse_name=dropoff_name or None,
+                )
+                draft_id = extract_draft_id(created.get("response") or {})
+                row["draft_id"] = draft_id
+                if not draft_id:
+                    row["error"] = "Ozon не вернул draft_id"
+                    results.append(row)
+                    continue
+                info = poll_draft_create_info(ozon, draft_id)
+                warehouse = top_warehouse_from_draft_info(info)
+                if not warehouse:
+                    row["error"] = draft_warehouse_error_detail(info)
+                    results.append(row)
+                    continue
+                row["warehouse"] = warehouse
+                create_supply_from_draft(
+                    ozon,
+                    draft_id=draft_id,
+                    warehouse=warehouse,
+                    delivery_type=delivery_type,
+                    timeslot={"from_in_timezone": ts_from, "to_in_timezone": ts_to},
+                )
+                st = poll_supply_create_status(ozon, draft_id)
+                order_id = st.get("order_id")
+                row["supply_order_id"] = order_id
+                row["ozon_status"] = st.get("status")
+                if not order_id:
+                    row["error"] = f"Заявка не создана: {st}"
+                    results.append(row)
+                    continue
+                inner_supply_id = order_id
+                try:
+                    oz_orders = get_supply_orders(ozon, [int(order_id)])
+                    if oz_orders:
+                        resolved = inner_supply_id_from_order(
+                            oz_orders[0],
+                            bundle_id=str(warehouse.get("bundle_id") or ""),
+                        )
+                        if resolved is not None:
+                            inner_supply_id = resolved
+                except Exception:
+                    pass
+                supply = fbo_repo.create_supply(
+                    {
+                        "batch_id": batch.id,
+                        "title": f"{title} — {cluster_name}",
+                        "supply_kind": supply_kind,
+                        "delivery_type": delivery_type,
+                        "status": STATUS_ASSIGNED,
+                        "ozon_order_id": str(order_id),
+                        "ozon_supply_id": str(inner_supply_id),
+                        "ozon_draft_id": str(draft_id),
+                        "ozon_bundle_id": str(warehouse.get("bundle_id") or ""),
+                        "ozon_cluster_id": str(macro_id),
+                        "ozon_cluster_name": cluster_name or str(warehouse.get("cluster_name") or ""),
+                        "ozon_warehouse_id": str(warehouse.get("storage_warehouse_id") or ""),
+                        "ozon_warehouse_name": str(warehouse.get("warehouse_name") or ""),
+                        "dropoff_warehouse_id": dropoff_id,
+                        "dropoff_warehouse_name": dropoff_name,
+                        "timeslot_from": ts_from,
+                        "timeslot_to": ts_to,
+                        "items": local_items,
+                    },
+                    manager_user_id=user_id,
+                )
+                row["local_supply_id"] = supply.id
             except Exception as exc:  # noqa: BLE001
-                results.append({"supply_id": supply.id, "error": str(exc)})
-        return {"ok": True, "results": results}
+                row["error"] = str(exc)
+            results.append(row)
+
+        ok_count = sum(1 for r in results if r.get("local_supply_id"))
+        fbo_repo.update_batch(
+            batch.id,
+            {"status": BATCH_STATUS_SUBMITTED if ok_count else BATCH_STATUS_PLANNING},
+        )
+        batch_row = fbo_repo.get_batch(batch.id)
+        return {
+            "ok": ok_count > 0,
+            "batch": batch_to_dict(batch_row, include_details=True) if batch_row else None,
+            "results": results,
+            "created": ok_count,
+            "errors": sum(1 for r in results if r.get("error")),
+        }
+
+    @app.get("/api/warehouse/marketplaces/ozon-fbo/jobs/{job_id}")
+    async def api_ozon_fbo_job_status(
+        job_id: str,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        row = get_job(job_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Задача не найдена")
+        return {"ok": True, "job": row}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/submit")
     async def api_ozon_fbo_batch_submit(
         body: dict,
         user: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        """Создать пакет заявок в Ozon: N кластеров × один таймслот."""
+        """Создать пакет заявок в Ozon: N кластеров × один таймслот (фоновая задача)."""
         delivery_type = str(body.get("delivery_type") or "direct").lower()
         dropoff_id = str(body.get("dropoff_warehouse_id") or "").strip()
         dropoff_type = str(body.get("dropoff_warehouse_type") or "").strip()
@@ -856,122 +1055,26 @@ def register_warehouse_ozon_fbo_routes(
         if not draft_items:
             raise HTTPException(status_code=400, detail="Нет валидных товаров")
 
-        batch = fbo_repo.create_batch(
-            {
-                "title": title,
-                "delivery_type": delivery_type,
-                "dropoff_warehouse_id": dropoff_id,
-                "dropoff_warehouse_name": dropoff_name,
-                "timeslot_from": ts_from,
-                "timeslot_to": ts_to,
-                "status": BATCH_STATUS_PLANNING,
-            },
-            manager_user_id=user.id,
-        )
-
-        results: list[dict[str, Any]] = []
-        dropoff_int = int(dropoff_id) if dropoff_id else None
-        for cluster in clusters:
-            macro_id = cluster.get("macrolocal_cluster_id") or cluster.get("id")
-            cluster_name = str(cluster.get("name") or cluster.get("cluster_name") or "")
-            if macro_id is None:
-                results.append({"cluster_name": cluster_name, "error": "Нет macrolocal_cluster_id"})
-                continue
-            row: dict[str, Any] = {"cluster_name": cluster_name, "macrolocal_cluster_id": macro_id}
-            try:
-                time.sleep(5)
-                created = create_draft(
-                    ozon,
-                    delivery_type=delivery_type,
-                    macrolocal_cluster_id=int(macro_id),
-                    items=draft_items,
-                    dropoff_warehouse_id=dropoff_int,
-                    dropoff_warehouse_type=dropoff_type or None,
-                    dropoff_warehouse_name=dropoff_name or None,
-                )
-                draft_id = extract_draft_id(created.get("response") or {})
-                row["draft_id"] = draft_id
-                if not draft_id:
-                    row["error"] = "Ozon не вернул draft_id"
-                    results.append(row)
-                    continue
-                info = poll_draft_create_info(ozon, draft_id)
-                warehouse = top_warehouse_from_draft_info(info)
-                if not warehouse:
-                    row["error"] = draft_warehouse_error_detail(info)
-                    results.append(row)
-                    continue
-                row["warehouse"] = warehouse
-                time.sleep(5)
-                create_supply_from_draft(
-                    ozon,
-                    draft_id=draft_id,
-                    warehouse=warehouse,
-                    delivery_type=delivery_type,
-                    timeslot={"from_in_timezone": ts_from, "to_in_timezone": ts_to},
-                )
-                time.sleep(5)
-                st = poll_supply_create_status(ozon, draft_id)
-                order_id = st.get("order_id")
-                row["supply_order_id"] = order_id
-                row["ozon_status"] = st.get("status")
-                if not order_id:
-                    row["error"] = f"Заявка не создана: {st}"
-                    results.append(row)
-                    continue
-                inner_supply_id = order_id
-                try:
-                    oz_orders = get_supply_orders(ozon, [int(order_id)])
-                    if oz_orders:
-                        resolved = inner_supply_id_from_order(
-                            oz_orders[0],
-                            bundle_id=str(warehouse.get("bundle_id") or ""),
-                        )
-                        if resolved is not None:
-                            inner_supply_id = resolved
-                except Exception:
-                    pass
-                supply = fbo_repo.create_supply(
-                    {
-                        "batch_id": batch.id,
-                        "title": f"{title} — {cluster_name}",
-                        "supply_kind": supply_kind,
-                        "delivery_type": delivery_type,
-                        "status": STATUS_ASSIGNED,
-                        "ozon_order_id": str(order_id),
-                        "ozon_supply_id": str(inner_supply_id),
-                        "ozon_draft_id": str(draft_id),
-                        "ozon_bundle_id": str(warehouse.get("bundle_id") or ""),
-                        "ozon_cluster_id": str(macro_id),
-                        "ozon_cluster_name": cluster_name or str(warehouse.get("cluster_name") or ""),
-                        "ozon_warehouse_id": str(warehouse.get("storage_warehouse_id") or ""),
-                        "ozon_warehouse_name": str(warehouse.get("warehouse_name") or ""),
-                        "dropoff_warehouse_id": dropoff_id,
-                        "dropoff_warehouse_name": dropoff_name,
-                        "timeslot_from": ts_from,
-                        "timeslot_to": ts_to,
-                        "items": local_items,
-                    },
-                    manager_user_id=user.id,
-                )
-                row["local_supply_id"] = supply.id
-            except Exception as exc:  # noqa: BLE001
-                row["error"] = str(exc)
-            results.append(row)
-
-        ok_count = sum(1 for r in results if r.get("local_supply_id"))
-        fbo_repo.update_batch(
-            batch.id,
-            {"status": BATCH_STATUS_SUBMITTED if ok_count else BATCH_STATUS_PLANNING},
-        )
-        batch_row = fbo_repo.get_batch(batch.id)
-        return {
-            "ok": ok_count > 0,
-            "batch": batch_to_dict(batch_row, include_details=True) if batch_row else None,
-            "results": results,
-            "created": ok_count,
-            "errors": sum(1 for r in results if r.get("error")),
+        payload = {
+            "user_id": user.id,
+            "delivery_type": delivery_type,
+            "dropoff_id": dropoff_id,
+            "dropoff_type": dropoff_type,
+            "dropoff_name": dropoff_name,
+            "ts_from": ts_from,
+            "ts_to": ts_to,
+            "clusters": clusters,
+            "supply_kind": supply_kind,
+            "title": title,
+            "draft_items": draft_items,
+            "local_items": local_items,
         }
+
+        def worker() -> dict[str, Any]:
+            return _execute_batch_submit(**payload)
+
+        job_id = start_job("batch_submit", worker)
+        return {"ok": True, "job_id": job_id, "status": "running"}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}/labels/generate")
     async def api_ozon_fbo_batch_labels_generate(
@@ -981,46 +1084,23 @@ def register_warehouse_ozon_fbo_routes(
         supplies = fbo_repo.list_supplies_for_batch(batch_id)
         if not supplies:
             raise HTTPException(status_code=404, detail="В пакете нет заявок")
-        ozon = _ozon()
-        out: list[dict[str, Any]] = []
-        for supply in supplies:
-            supply_dict = supply_to_dict(supply, include_details=True)
-            try:
-                inner_id = resolve_inner_supply_id(ozon, supply_dict)
-            except ValueError as exc:
-                out.append({"supply_id": supply.id, "error": str(exc)})
-                continue
-            try:
-                payload: dict[str, Any] = {"supply_id": inner_id}
-                cargo_ids = [
-                    str(c.get("ozon_cargo_id") or "").strip()
-                    for c in supply_dict.get("cargoes") or []
-                    if str(c.get("ozon_cargo_id") or "").strip()
-                ]
-                if cargo_ids:
-                    payload["cargo_ids"] = cargo_ids
-                data = ozon.fbo_cargo_labels_create(payload)
-                file_guid = _extract_first_id(data, ("file_guid", "fileGuid", "guid"))
-                operation_id = _extract_first_id(data, ("operation_id", "operationId", "task_id", "taskId"))
-                if file_guid:
-                    fbo_repo.update_supply(
-                        supply.id,
-                        {
-                            "labels_file_guid": file_guid,
-                            "labels_operation_id": operation_id,
-                            "labels_filename": f"ozon_fbo_labels_{inner_id}.pdf",
-                            "status": STATUS_LABELS_READY,
-                        },
-                    )
-                else:
-                    fbo_repo.update_supply(
-                        supply.id,
-                        {"labels_operation_id": operation_id, "status": STATUS_READY},
-                    )
-                out.append({"supply_id": supply.id, "file_guid": file_guid, "operation_id": operation_id})
-            except Exception as exc:  # noqa: BLE001
-                out.append({"supply_id": supply.id, "error": str(exc)})
-        return {"ok": True, "results": out}
+
+        def worker() -> dict[str, Any]:
+            out: list[dict[str, Any]] = []
+            for idx, supply in enumerate(supplies):
+                if idx:
+                    time.sleep(CLUSTER_PAUSE_SEC)
+                try:
+                    result = _refresh_supply_cargo_labels(supply.id)
+                    if result.get("ok_count"):
+                        fbo_repo.update_supply(supply.id, {"status": STATUS_LABELS_READY})
+                    out.append({"supply_id": supply.id, **result})
+                except Exception as exc:  # noqa: BLE001
+                    out.append({"supply_id": supply.id, "error": str(exc)})
+            return {"ok": True, "batch_id": batch_id, "results": out}
+
+        job_id = start_job("batch_labels_generate", worker)
+        return {"ok": True, "job_id": job_id, "status": "running"}
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}/labels.pdf")
     async def api_ozon_fbo_batch_labels_pdf(
@@ -1030,38 +1110,26 @@ def register_warehouse_ozon_fbo_routes(
         supplies = fbo_repo.list_supplies_for_batch(batch_id)
         if not supplies:
             raise HTTPException(status_code=404, detail="В пакете нет заявок")
-        ozon = _ozon()
-        supply_dicts: list[dict[str, Any]] = []
-        for supply in supplies:
-            catalog_map = fbo_repo.catalog_map_for_supply(supply)
-            supply_dict = supply_to_dict(supply, include_details=True, catalog_map=catalog_map)
-            try:
-                inner_id = resolve_inner_supply_id(ozon, supply_dict)
-                patch: dict[str, str] = {}
-                if str(inner_id) != str(supply.ozon_supply_id or "").strip():
-                    patch["ozon_supply_id"] = str(inner_id)
-                order_raw = str(supply.ozon_order_id or "").strip()
-                if not order_raw and str(supply.ozon_supply_id or "").strip():
-                    patch["ozon_order_id"] = str(supply.ozon_supply_id)
-                elif order_raw:
-                    patch.setdefault("ozon_order_id", order_raw)
-                if patch:
-                    fbo_repo.update_supply(supply.id, patch)
-                    supply_dict.update(patch)
-            except Exception:
-                pass
-            supply_dicts.append(supply_dict)
-        pdfs, errors = fetch_batch_cargo_labels_pdfs(ozon, supply_dicts)
-        total = len(supply_dicts)
-        if errors:
-            if len(pdfs) < total:
-                detail = (
-                    f"Этикетки получены только для {len(pdfs)} из {total} заявок. "
-                    + "; ".join(errors)
-                )
-                raise HTTPException(status_code=400, detail=detail)
+        pdfs: list[bytes] = []
+        errors: list[str] = []
+        for idx, supply in enumerate(supplies):
+            if idx:
+                time.sleep(CLUSTER_PAUSE_SEC)
+            stored = _stored_label_pdfs_for_supply(supply.id)
+            if not stored:
+                try:
+                    refreshed = _refresh_supply_cargo_labels(supply.id)
+                    if not refreshed.get("ok_count"):
+                        errs = [r.get("error") for r in refreshed.get("results") or [] if r.get("error")]
+                        errors.append(f"#{supply.id}: " + ("; ".join(errs) if errs else "нет этикеток"))
+                        continue
+                    stored = _stored_label_pdfs_for_supply(supply.id)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"#{supply.id}: {exc}")
+                    continue
+            pdfs.extend(stored)
         if not pdfs:
-            detail = "Не удалось получить этикетки из Ozon."
+            detail = "Нет сохранённых этикеток грузомест."
             if errors:
                 detail += " " + "; ".join(errors)
             raise HTTPException(status_code=400, detail=detail)
@@ -1083,24 +1151,33 @@ def register_warehouse_ozon_fbo_routes(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         supplies = fbo_repo.list_supplies_for_batch(batch_id)
-        results: list[dict[str, Any]] = []
-        for supply in supplies:
-            supply_dict = supply_to_dict(supply, include_details=True)
-            try:
-                result = _send_supply_cargoes_to_ozon(supply.id, supply_dict)
-                results.append(
-                    {
-                        "supply_id": supply.id,
-                        "operation_id": result.get("operation_id"),
-                        "inner_supply_id": result.get("inner_supply_id"),
-                        "ok": True,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                results.append({"supply_id": supply.id, "error": str(exc)})
-        if any(r.get("ok") for r in results):
-            fbo_repo.update_batch(batch_id, {"status": BATCH_STATUS_PACKING})
-        return {"ok": True, "results": results}
+        if not supplies:
+            raise HTTPException(status_code=404, detail="В пакете нет заявок")
+
+        def worker() -> dict[str, Any]:
+            results: list[dict[str, Any]] = []
+            for idx, supply in enumerate(supplies):
+                if idx:
+                    time.sleep(CLUSTER_PAUSE_SEC)
+                supply_dict = supply_to_dict(supply, include_details=True)
+                try:
+                    result = _send_supply_cargoes_to_ozon(supply.id, supply_dict)
+                    results.append(
+                        {
+                            "supply_id": supply.id,
+                            "operation_id": result.get("operation_id"),
+                            "inner_supply_id": result.get("inner_supply_id"),
+                            "ok": True,
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    results.append({"supply_id": supply.id, "error": str(exc)})
+            if any(r.get("ok") for r in results):
+                fbo_repo.update_batch(batch_id, {"status": BATCH_STATUS_PACKING})
+            return {"ok": True, "batch_id": batch_id, "results": results}
+
+        job_id = start_job("batch_send_cargoes", worker)
+        return {"ok": True, "job_id": job_id, "status": "running"}
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/ozon/supply-orders")
     async def api_ozon_fbo_supply_orders(

@@ -11,6 +11,23 @@ from app.adapters.ozon import OzonAdapter
 
 DRAFT_DELETE_SKU_MODE = 1
 API_PAUSE_SEC = 5.0
+POLL_PAUSE_MIN_SEC = 1.0
+POLL_PAUSE_MAX_SEC = 5.0
+CLUSTER_PAUSE_SEC = 2.0
+BUNDLE_IDS_CHUNK = 25
+
+
+def poll_pause_sec(attempt: int) -> float:
+    """Пауза перед следующим опросом Ozon (attempt 0 → сразу после 1-го запроса)."""
+    if attempt <= 0:
+        return POLL_PAUSE_MIN_SEC
+    return min(POLL_PAUSE_MAX_SEC, POLL_PAUSE_MIN_SEC + 0.5 * attempt)
+
+
+def _poll_wait(attempt: int, *, max_attempt: int) -> None:
+    if attempt + 1 >= max_attempt:
+        return
+    time.sleep(poll_pause_sec(attempt))
 
 DELIVERY_DIRECT = "direct"
 DELIVERY_CROSSDOCK = "crossdock"
@@ -332,17 +349,19 @@ def poll_draft_create_info(
     adapter: OzonAdapter,
     draft_id: int,
     *,
-    attempts: int = 12,
+    attempts: int = 20,
     delay: float | None = None,
 ) -> dict[str, Any]:
-    pause = API_PAUSE_SEC if delay is None else delay
     last: dict[str, Any] = {}
-    for _ in range(attempts):
+    for attempt in range(attempts):
         last = draft_create_info(adapter, draft_id)
         status = str(last.get("status") or "").upper()
         if status in {"SUCCESS", "FAILED", "ERROR"}:
             return last
-        time.sleep(pause)
+        if delay is not None:
+            time.sleep(delay)
+        else:
+            _poll_wait(attempt, max_attempt=attempts)
     return last
 
 
@@ -483,14 +502,14 @@ def create_supply_from_draft(
     return _post(adapter, "/v2/draft/supply/create", payload, timeout=180)
 
 
-def poll_supply_create_status(adapter: OzonAdapter, draft_id: int, *, attempts: int = 15) -> dict[str, Any]:
+def poll_supply_create_status(adapter: OzonAdapter, draft_id: int, *, attempts: int = 20) -> dict[str, Any]:
     last: dict[str, Any] = {}
-    for _ in range(attempts):
+    for attempt in range(attempts):
         last = _post(adapter, "/v2/draft/supply/create/status", {"draft_id": int(draft_id)}, timeout=120)
         status = str(last.get("status") or "").upper()
         if status in {"SUCCESS", "FAILED", "ERROR"}:
             return last
-        time.sleep(API_PAUSE_SEC)
+        _poll_wait(attempt, max_attempt=attempts)
     return last
 
 
@@ -550,27 +569,47 @@ def list_supply_order_ids(
     states: tuple[str, ...] | list[str],
     limit: int = 100,
 ) -> list[int]:
+    state_list = [str(s) for s in states if str(s).strip()]
+    if not state_list:
+        return []
     seen: set[int] = set()
     out: list[int] = []
-    for state in states:
-        body = {
-            "filter": {"states": [state]},
-            "limit": int(limit),
-            "offset": 0,
-            "sort_by": "ORDER_CREATION",
-            "sort_dir": "DESC",
-        }
-        try:
-            data = _post(adapter, "/v3/supply-order/list", body, timeout=120)
-        except Exception:
-            continue
+    body = {
+        "filter": {"states": state_list},
+        "limit": int(limit),
+        "offset": 0,
+        "sort_by": "ORDER_CREATION",
+        "sort_dir": "DESC",
+    }
+    try:
+        data = _post(adapter, "/v3/supply-order/list", body, timeout=120)
         for raw_id in data.get("order_ids") or []:
             oid = int(raw_id)
-            if oid in seen:
+            if oid not in seen:
+                seen.add(oid)
+                out.append(oid)
+    except Exception:
+        for state in state_list:
+            try:
+                single = _post(
+                    adapter,
+                    "/v3/supply-order/list",
+                    {
+                        "filter": {"states": [state]},
+                        "limit": int(limit),
+                        "offset": 0,
+                        "sort_by": "ORDER_CREATION",
+                        "sort_dir": "DESC",
+                    },
+                    timeout=120,
+                )
+            except Exception:
                 continue
-            seen.add(oid)
-            out.append(oid)
-        time.sleep(1.5)
+            for raw_id in single.get("order_ids") or []:
+                oid = int(raw_id)
+                if oid not in seen:
+                    seen.add(oid)
+                    out.append(oid)
     out.sort(reverse=True)
     return out
 
@@ -585,13 +624,57 @@ def get_supply_orders(adapter: OzonAdapter, order_ids: list[int]) -> list[dict[s
 def get_bundle_items(adapter: OzonAdapter, bundle_id: str) -> list[dict[str, Any]]:
     if not bundle_id:
         return []
-    data = _post(
-        adapter,
-        "/v1/supply-order/bundle",
-        {"bundle_ids": [str(bundle_id)], "limit": 100, "offset": 0},
-        timeout=120,
-    )
-    return list(data.get("items") or [])
+    return get_bundle_items_map(adapter, [str(bundle_id)]).get(str(bundle_id), [])
+
+
+def get_bundle_items_map(adapter: OzonAdapter, bundle_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    unique = list(dict.fromkeys(str(b).strip() for b in bundle_ids if str(b).strip()))
+    out: dict[str, list[dict[str, Any]]] = {bid: [] for bid in unique}
+    if not unique:
+        return out
+    for i in range(0, len(unique), BUNDLE_IDS_CHUNK):
+        chunk = unique[i : i + BUNDLE_IDS_CHUNK]
+        try:
+            data = _post(
+                adapter,
+                "/v1/supply-order/bundle",
+                {"bundle_ids": chunk, "limit": 100, "offset": 0},
+                timeout=120,
+            )
+        except Exception:
+            for bid in chunk:
+                try:
+                    single = _post(
+                        adapter,
+                        "/v1/supply-order/bundle",
+                        {"bundle_ids": [bid], "limit": 100, "offset": 0},
+                        timeout=120,
+                    )
+                    out[bid] = list(single.get("items") or [])
+                except Exception:
+                    out[bid] = []
+            continue
+        items = list(data.get("items") or [])
+        if len(chunk) == 1:
+            out[chunk[0]] = items
+            continue
+        for item in items:
+            bid = str(item.get("bundle_id") or item.get("bundleId") or "").strip()
+            if bid and bid in out:
+                out[bid].append(item)
+        for bid in chunk:
+            if not out[bid]:
+                try:
+                    single = _post(
+                        adapter,
+                        "/v1/supply-order/bundle",
+                        {"bundle_ids": [bid], "limit": 100, "offset": 0},
+                        timeout=120,
+                    )
+                    out[bid] = list(single.get("items") or [])
+                except Exception:
+                    out[bid] = []
+    return out
 
 
 def _format_ozon_datetime(raw: Any) -> str:
@@ -771,12 +854,13 @@ def poll_cargoes_create_info(adapter: OzonAdapter, operation_id: str) -> dict[st
     if not op:
         raise ValueError("Нет operation_id")
     last: dict[str, Any] = {}
-    for _ in range(20):
+    attempts = 25
+    for attempt in range(attempts):
         last = adapter.fbo_cargoes_create_info({"operation_id": op})
         status = str(last.get("status") or "").upper()
         if status in {"SUCCESS", "FAILED", "ERROR"}:
             return last
-        time.sleep(API_PAUSE_SEC)
+        _poll_wait(attempt, max_attempt=attempts)
     return last
 
 
@@ -804,27 +888,32 @@ def fetch_ozon_cargoes(
                 break
 
     out: list[dict[str, Any]] = []
+    bundle_ids: list[str] = []
+    for sup in supplies:
+        for cargo in sup.get("cargoes") or []:
+            bundle_id = str(cargo.get("bundle_id") or "").strip()
+            if bundle_id:
+                bundle_ids.append(bundle_id)
+    bundle_map = get_bundle_items_map(adapter, bundle_ids)
+
     for sup in supplies:
         for idx, cargo in enumerate(sup.get("cargoes") or []):
             cargo_id = str(cargo.get("cargo_id") or "").strip()
             bundle_id = str(cargo.get("bundle_id") or "").strip()
             items: list[dict[str, Any]] = []
             if bundle_id:
-                try:
-                    for bi in get_bundle_items(adapter, bundle_id):
-                        offer = str(bi.get("offer_id") or bi.get("sku") or "").strip()
-                        qty = int(bi.get("quantity") or 0)
-                        if not offer or qty <= 0:
-                            continue
-                        items.append(
-                            {
-                                "sku": offer,
-                                "name": str(bi.get("name") or ""),
-                                "quantity": qty,
-                            }
-                        )
-                except Exception:
-                    pass
+                for bi in bundle_map.get(bundle_id, []):
+                    offer = str(bi.get("offer_id") or bi.get("sku") or "").strip()
+                    qty = int(bi.get("quantity") or 0)
+                    if not offer or qty <= 0:
+                        continue
+                    items.append(
+                        {
+                            "sku": offer,
+                            "name": str(bi.get("name") or ""),
+                            "quantity": qty,
+                        }
+                    )
             if not cargo_id and not items:
                 continue
             out.append(
@@ -861,12 +950,20 @@ def _cargo_ids_for_labels(
     return cargo_ids
 
 
-def fetch_cargo_labels_pdf(adapter: OzonAdapter, supply: dict[str, Any]) -> bytes:
+def fetch_cargo_labels_pdf(
+    adapter: OzonAdapter,
+    supply: dict[str, Any],
+    *,
+    ozon_cargo_ids: list[int] | None = None,
+) -> bytes:
     """Запросить этикетки в Ozon и скачать PDF (через file_url из ответа API)."""
     import requests
 
     inner_id = resolve_inner_supply_id(adapter, supply)
-    cargo_ids = _cargo_ids_for_labels(adapter, supply, inner_id)
+    if ozon_cargo_ids is not None:
+        cargo_ids = [int(x) for x in ozon_cargo_ids if int(x) > 0]
+    else:
+        cargo_ids = _cargo_ids_for_labels(adapter, supply, inner_id)
     payload: dict[str, Any] = {"supply_id": int(inner_id)}
     if cargo_ids:
         payload["cargo_ids"] = cargo_ids
@@ -877,7 +974,8 @@ def fetch_cargo_labels_pdf(adapter: OzonAdapter, supply: dict[str, Any]) -> byte
     if not operation_id:
         raise ValueError("Ozon не вернул operation_id для этикеток")
     last: dict[str, Any] = {}
-    for _ in range(25):
+    attempts = 30
+    for attempt in range(attempts):
         last = _post(adapter, "/v1/cargoes-label/get", {"operation_id": operation_id})
         status = str(last.get("status") or "").upper()
         if status == "SUCCESS":
@@ -896,7 +994,7 @@ def fetch_cargo_labels_pdf(adapter: OzonAdapter, supply: dict[str, Any]) -> byte
             raise ValueError("Ozon не вернул ссылку на PDF этикеток")
         if status in {"FAILED", "ERROR"}:
             raise ValueError(f"Ozon не сгенерировал этикетки: {last}")
-        time.sleep(API_PAUSE_SEC)
+        _poll_wait(attempt, max_attempt=attempts)
     raise ValueError(f"Таймаут ожидания этикеток Ozon: {last}")
 
 
@@ -908,7 +1006,7 @@ def fetch_batch_cargo_labels_pdfs(
     attempts_per_supply: int = 3,
 ) -> tuple[list[bytes], list[str]]:
     """Скачать этикетки по списку заявок с паузами и повторами (лимиты Ozon)."""
-    pause = API_PAUSE_SEC if pause_between is None else pause_between
+    pause = CLUSTER_PAUSE_SEC if pause_between is None else pause_between
     pdfs: list[bytes] = []
     errors: list[str] = []
     for idx, supply in enumerate(supplies):

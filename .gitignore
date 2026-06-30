@@ -72,7 +72,9 @@ Desktop.ini
 # Separate packer desktop app repository
 warehouse_packing_app/
 
-# Local databases (SQLite and aux files)
+# Local runtime data
+data/ozon_fbo_labels/
+
 *.db
 *.db-journal
 *.db-wal
