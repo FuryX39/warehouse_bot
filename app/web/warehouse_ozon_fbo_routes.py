@@ -23,6 +23,7 @@ from app.ozon_fbo_api import (
     extract_draft_id,
     fetch_analytics_stocks,
     fetch_cargo_labels_pdf,
+    fetch_batch_cargo_labels_pdfs,
     fetch_ozon_cargoes,
     fetch_supply_orders_overview,
     get_bundle_items,
@@ -1030,19 +1031,39 @@ def register_warehouse_ozon_fbo_routes(
         if not supplies:
             raise HTTPException(status_code=404, detail="В пакете нет заявок")
         ozon = _ozon()
-        pdfs: list[bytes] = []
-        errors: list[str] = []
+        supply_dicts: list[dict[str, Any]] = []
         for supply in supplies:
             catalog_map = fbo_repo.catalog_map_for_supply(supply)
             supply_dict = supply_to_dict(supply, include_details=True, catalog_map=catalog_map)
             try:
-                pdfs.append(fetch_cargo_labels_pdf(ozon, supply_dict))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"#{supply.id}: {exc}")
+                inner_id = resolve_inner_supply_id(ozon, supply_dict)
+                patch: dict[str, str] = {}
+                if str(inner_id) != str(supply.ozon_supply_id or "").strip():
+                    patch["ozon_supply_id"] = str(inner_id)
+                order_raw = str(supply.ozon_order_id or "").strip()
+                if not order_raw and str(supply.ozon_supply_id or "").strip():
+                    patch["ozon_order_id"] = str(supply.ozon_supply_id)
+                elif order_raw:
+                    patch.setdefault("ozon_order_id", order_raw)
+                if patch:
+                    fbo_repo.update_supply(supply.id, patch)
+                    supply_dict.update(patch)
+            except Exception:
+                pass
+            supply_dicts.append(supply_dict)
+        pdfs, errors = fetch_batch_cargo_labels_pdfs(ozon, supply_dicts)
+        total = len(supply_dicts)
+        if errors:
+            if len(pdfs) < total:
+                detail = (
+                    f"Этикетки получены только для {len(pdfs)} из {total} заявок. "
+                    + "; ".join(errors)
+                )
+                raise HTTPException(status_code=400, detail=detail)
         if not pdfs:
             detail = "Не удалось получить этикетки из Ozon."
             if errors:
-                detail += " " + "; ".join(errors[:3])
+                detail += " " + "; ".join(errors)
             raise HTTPException(status_code=400, detail=detail)
         merged = merge_label_pdfs(pdfs)
         if not merged:

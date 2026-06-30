@@ -664,12 +664,25 @@ def _looks_like_inner_supply_id(raw: str) -> bool:
     return bool(raw.isdigit() and len(raw) >= 12)
 
 
-def inner_supply_id_from_order(order: dict[str, Any], *, bundle_id: str = "") -> int | None:
+def inner_supply_id_from_order(
+    order: dict[str, Any],
+    *,
+    bundle_id: str = "",
+    warehouse_id: str = "",
+) -> int | None:
     supplies = order.get("supplies") or []
     bundle_id = str(bundle_id or "").strip()
+    warehouse_id = str(warehouse_id or "").strip()
     if bundle_id:
         for sup in supplies:
             if str(sup.get("bundle_id") or "") == bundle_id:
+                sid = sup.get("supply_id")
+                return int(sid) if sid is not None else None
+    if warehouse_id:
+        for sup in supplies:
+            storage = sup.get("storage_warehouse") or {}
+            wid = str(storage.get("warehouse_id") or sup.get("storage_warehouse_id") or "").strip()
+            if wid and wid == warehouse_id:
                 sid = sup.get("supply_id")
                 return int(sid) if sid is not None else None
     if len(supplies) == 1:
@@ -682,6 +695,7 @@ def resolve_inner_supply_id(adapter: OzonAdapter, supply: dict[str, Any]) -> int
     inner_raw = str(supply.get("ozon_supply_id") or "").strip()
     order_raw = str(supply.get("ozon_order_id") or "").strip()
     bundle_id = str(supply.get("ozon_bundle_id") or "").strip()
+    warehouse_id = str(supply.get("ozon_warehouse_id") or "").strip()
 
     if inner_raw and _looks_like_inner_supply_id(inner_raw):
         if not order_raw or inner_raw != order_raw:
@@ -691,7 +705,11 @@ def resolve_inner_supply_id(adapter: OzonAdapter, supply: dict[str, Any]) -> int
     orders = get_supply_orders(adapter, [order_id])
     if not orders:
         raise ValueError(f"Заявка Ozon {order_id} не найдена")
-    inner = inner_supply_id_from_order(orders[0], bundle_id=bundle_id)
+    inner = inner_supply_id_from_order(
+        orders[0],
+        bundle_id=bundle_id,
+        warehouse_id=warehouse_id,
+    )
     if inner is None:
         raise ValueError(
             "В заявке Ozon несколько поставок — импортируйте каждую отдельно или укажите bundle_id"
@@ -821,31 +839,46 @@ def fetch_ozon_cargoes(
     return out
 
 
+def _cargo_ids_for_labels(
+    adapter: OzonAdapter,
+    supply: dict[str, Any],
+    inner_supply_id: int,
+) -> list[int]:
+    """Актуальные cargo_id из Ozon (локальная БД может быть неполной)."""
+    cargo_ids: list[int] = []
+    try:
+        for cargo in fetch_ozon_cargoes(adapter, supply, inner_supply_id=inner_supply_id):
+            cid = str(cargo.get("ozon_cargo_id") or "").strip()
+            if cid.isdigit():
+                cargo_ids.append(int(cid))
+    except Exception:
+        pass
+    if not cargo_ids:
+        for cargo in supply.get("cargoes") or []:
+            cid = str(cargo.get("ozon_cargo_id") or "").strip()
+            if cid.isdigit():
+                cargo_ids.append(int(cid))
+    return cargo_ids
+
+
 def fetch_cargo_labels_pdf(adapter: OzonAdapter, supply: dict[str, Any]) -> bytes:
     """Запросить этикетки в Ozon и скачать PDF (через file_url из ответа API)."""
     import requests
 
     inner_id = resolve_inner_supply_id(adapter, supply)
-    cargo_ids: list[int] = []
-    for cargo in supply.get("cargoes") or []:
-        cid = str(cargo.get("ozon_cargo_id") or "").strip()
-        if cid.isdigit():
-            cargo_ids.append(int(cid))
-    if not cargo_ids:
-        for cargo in fetch_ozon_cargoes(adapter, supply, inner_supply_id=inner_id):
-            cid = str(cargo.get("ozon_cargo_id") or "").strip()
-            if cid.isdigit():
-                cargo_ids.append(int(cid))
+    cargo_ids = _cargo_ids_for_labels(adapter, supply, inner_id)
     payload: dict[str, Any] = {"supply_id": int(inner_id)}
     if cargo_ids:
         payload["cargo_ids"] = cargo_ids
-    created = adapter.fbo_cargo_labels_create(payload)
-    operation_id = str(created.get("operation_id") or "").strip()
+    created = _post(adapter, "/v1/cargoes-label/create", payload, timeout=90)
+    operation_id = str(
+        created.get("operation_id") or (created.get("result") or {}).get("operation_id") or ""
+    ).strip()
     if not operation_id:
         raise ValueError("Ozon не вернул operation_id для этикеток")
     last: dict[str, Any] = {}
     for _ in range(25):
-        last = adapter.fbo_cargo_labels_get({"operation_id": operation_id})
+        last = _post(adapter, "/v1/cargoes-label/get", {"operation_id": operation_id})
         status = str(last.get("status") or "").upper()
         if status == "SUCCESS":
             result = last.get("result") or {}
@@ -865,6 +898,39 @@ def fetch_cargo_labels_pdf(adapter: OzonAdapter, supply: dict[str, Any]) -> byte
             raise ValueError(f"Ozon не сгенерировал этикетки: {last}")
         time.sleep(API_PAUSE_SEC)
     raise ValueError(f"Таймаут ожидания этикеток Ozon: {last}")
+
+
+def fetch_batch_cargo_labels_pdfs(
+    adapter: OzonAdapter,
+    supplies: list[dict[str, Any]],
+    *,
+    pause_between: float | None = None,
+    attempts_per_supply: int = 3,
+) -> tuple[list[bytes], list[str]]:
+    """Скачать этикетки по списку заявок с паузами и повторами (лимиты Ozon)."""
+    pause = API_PAUSE_SEC if pause_between is None else pause_between
+    pdfs: list[bytes] = []
+    errors: list[str] = []
+    for idx, supply in enumerate(supplies):
+        if idx:
+            time.sleep(pause)
+        local_id = supply.get("id") or supply.get("ozon_supply_id") or "?"
+        last_exc: Exception | None = None
+        for attempt in range(attempts_per_supply):
+            if attempt:
+                time.sleep(pause * (attempt + 1))
+            try:
+                pdfs.append(fetch_cargo_labels_pdf(adapter, supply))
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                msg = str(exc)
+                if "429" not in msg and "500" not in msg and "Connection" not in msg:
+                    break
+        if last_exc is not None:
+            errors.append(f"#{local_id}: {last_exc}")
+    return pdfs, errors
 
 
 def fetch_supply_orders_overview(

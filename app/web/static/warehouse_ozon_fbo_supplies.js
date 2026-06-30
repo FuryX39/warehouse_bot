@@ -1239,9 +1239,29 @@
         });
         root.querySelector("#whFboAllLabelsPdf").addEventListener("click", function () {
           var msg = root.querySelector("#whFboBatchMsg");
-          setMsg(msg, "Запрос этикеток в Ozon, подождите…", false);
-          window.open("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId + "/labels.pdf", "_blank");
-          setTimeout(function () { setMsg(msg, "Если PDF не открылся — проверьте блокировку всплывающих окон.", false); }, 1500);
+          setMsg(msg, "Запрос этикеток в Ozon для всех заявок, подождите…", false);
+          fetch("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId + "/labels.pdf")
+            .then(function (r) {
+              if (!r.ok) {
+                return r.json().then(function (j) {
+                  var d = j.detail;
+                  throw new Error(typeof d === "string" ? d : JSON.stringify(d));
+                });
+              }
+              return r.blob();
+            })
+            .then(function (blob) {
+              var url = URL.createObjectURL(blob);
+              var a = document.createElement("a");
+              a.href = url;
+              a.download = "ozon_fbo_labels_batch_" + batchId + ".pdf";
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+              setMsg(msg, "PDF этикеток скачан (" + (batch.supplies || []).length + " заявок).", false);
+            })
+            .catch(function (err) { setMsg(msg, err.message, true); });
         });
         bindCargoBoard(root, batch, tab, item, batchId);
   }
