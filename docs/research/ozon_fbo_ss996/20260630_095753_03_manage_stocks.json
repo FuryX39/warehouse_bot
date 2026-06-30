@@ -1,0 +1,7 @@
+{
+  "errors": [
+    "{'filter': {'skus': ['355923856'], 'stock_types': ['FBO']}}: 400 Client Error: Bad Request for url: https://api-seller.ozon.ru/v1/analytics/manage/stocks; body={\"code\":9,\"message\":\"obsolete method cannot be used\"}",
+    "{'filter': {'skus': ['355923856']}}: 400 Client Error: Bad Request for url: https://api-seller.ozon.ru/v1/analytics/manage/stocks; body={\"code\":9,\"message\":\"obsolete method cannot be used\"}",
+    "{'filter': {'skus': ['355923856'], 'stock_types': ['ALL']}}: 400 Client Error: Bad Request for url: https://api-seller.ozon.ru/v1/analytics/manage/stocks; body={\"code\":9,\"message\":\"obsolete method cannot be used\"}"
+  ]
+}

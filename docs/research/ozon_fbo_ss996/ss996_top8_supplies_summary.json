@@ -1,0 +1,69 @@
+{
+  "slot": "2026-07-01 18:00-19:00 MSK",
+  "supplies": [
+    {
+      "cluster": "Москва, МО и Дальние регионы",
+      "draft_id": 116482070,
+      "supply_order_id": 114315728,
+      "status": "SUCCESS",
+      "warehouse": "НОГИНСК_РФЦ",
+      "qty": 150
+    },
+    {
+      "cluster": "Красноярск",
+      "draft_id": 116482088,
+      "supply_order_id": 114315746,
+      "status": "SUCCESS",
+      "warehouse": "КРАСНОЯРСК_СТАРЦЕВО_РФЦ",
+      "qty": 150
+    },
+    {
+      "cluster": "Санкт-Петербург и СЗО",
+      "draft_id": 116482138,
+      "supply_order_id": 114315787,
+      "status": "SUCCESS",
+      "warehouse": "СПБ_ШУШАРЫ_РФЦ",
+      "qty": 150
+    },
+    {
+      "cluster": "Уфа",
+      "draft_id": 116482154,
+      "supply_order_id": 114315824,
+      "status": "SUCCESS",
+      "warehouse": "УФА_РФЦ",
+      "qty": 150
+    },
+    {
+      "cluster": "Ростов",
+      "draft_id": 116482178,
+      "supply_order_id": 114315867,
+      "status": "SUCCESS",
+      "warehouse": "Ростов_на_Дону_РФЦ",
+      "qty": 150
+    },
+    {
+      "cluster": "Краснодар",
+      "draft_id": 116482225,
+      "supply_order_id": 114315915,
+      "status": "SUCCESS",
+      "warehouse": "АДЫГЕЙСК_РФЦ",
+      "qty": 150
+    },
+    {
+      "cluster": "Казань",
+      "draft_id": 116482252,
+      "supply_order_id": 114315945,
+      "status": "SUCCESS",
+      "warehouse": "Казань_РФЦ_НОВЫЙ",
+      "qty": 150
+    },
+    {
+      "cluster": "Дальний Восток",
+      "draft_id": 116482287,
+      "supply_order_id": 114315960,
+      "status": "SUCCESS",
+      "warehouse": "ХАБАРОВСК_2_РФЦ",
+      "qty": 150
+    }
+  ]
+}

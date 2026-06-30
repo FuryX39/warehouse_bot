@@ -1,0 +1,103 @@
+{
+  "offer_id": "SS996",
+  "qty": 150,
+  "selected": [
+    {
+      "cluster_name": "Москва, МО и Дальние регионы",
+      "cluster_id_analytics": 154,
+      "macrolocal_cluster_id": 4039,
+      "ads_cluster": 4.565217391304348,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 4.565217391304348
+    },
+    {
+      "cluster_name": "Красноярск",
+      "cluster_id_analytics": 155,
+      "macrolocal_cluster_id": 4043,
+      "ads_cluster": 1.5217391304347827,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 1.5217391304347827
+    },
+    {
+      "cluster_name": "Санкт-Петербург и СЗО",
+      "cluster_id_analytics": 2,
+      "macrolocal_cluster_id": 4007,
+      "ads_cluster": 1.434782608695652,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_POPULAR"
+      ],
+      "demand_score": 1.434782608695652
+    },
+    {
+      "cluster_name": "Уфа",
+      "cluster_id_analytics": 148,
+      "macrolocal_cluster_id": 4040,
+      "ads_cluster": 1.2173913043478262,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 1.2173913043478262
+    },
+    {
+      "cluster_name": "Ростов",
+      "cluster_id_analytics": 147,
+      "macrolocal_cluster_id": 4071,
+      "ads_cluster": 1.1304347826086956,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 1.1304347826086956
+    },
+    {
+      "cluster_name": "Краснодар",
+      "cluster_id_analytics": 17,
+      "macrolocal_cluster_id": 4065,
+      "ads_cluster": 0.8695652173913043,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 0.8695652173913043
+    },
+    {
+      "cluster_name": "Казань",
+      "cluster_id_analytics": 149,
+      "macrolocal_cluster_id": 4041,
+      "ads_cluster": 0.8260869565217391,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 0.8260869565217391
+    },
+    {
+      "cluster_name": "Дальний Восток",
+      "cluster_id_analytics": 7,
+      "macrolocal_cluster_id": 4002,
+      "ads_cluster": 0.7391304347826086,
+      "ads_total": 16.304347826086957,
+      "available_stock_count": 0,
+      "turnover_grades": [
+        "WAS_DEFICIT"
+      ],
+      "demand_score": 0.7391304347826086
+    }
+  ],
+  "mode": "direct"
+}

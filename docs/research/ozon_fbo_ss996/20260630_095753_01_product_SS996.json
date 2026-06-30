@@ -1,0 +1,171 @@
+{
+  "offer_id": "SS996",
+  "product_id": 143590505,
+  "ozon_sku": 355923856,
+  "name": "Микрофибра без оверлока Shine Systems Edgeless Towel Blue, 40*40см, 400гр/м2, голубая SS996",
+  "raw": {
+    "id": 143590505,
+    "name": "Микрофибра без оверлока Shine Systems Edgeless Towel Blue, 40*40см, 400гр/м2, голубая SS996",
+    "offer_id": "SS996",
+    "is_archived": false,
+    "is_autoarchived": false,
+    "barcodes": [
+      "4673746971772",
+      "OZN355923856"
+    ],
+    "description_category_id": 17027945,
+    "type_id": 269166265,
+    "created_at": "2021-10-19T03:51:46.412864Z",
+    "images": [
+      "https://ir.ozone.ru/s3/multimedia-u/6737431062.jpg",
+      "https://ir.ozone.ru/s3/multimedia-w/6737431064.jpg",
+      "https://ir.ozone.ru/s3/multimedia-p/6128909185.jpg",
+      "https://ir.ozone.ru/s3/multimedia-r/6128909187.jpg",
+      "https://ir.ozone.ru/s3/multimedia-u/6128909190.jpg"
+    ],
+    "currency_code": "RUB",
+    "min_price": "",
+    "old_price": "505.00",
+    "price": "421.00",
+    "sources": [
+      {
+        "sku": 355923856,
+        "source": "sds",
+        "created_at": "2021-10-19T03:52:27.075743Z",
+        "shipment_type": "SHIPMENT_TYPE_GENERAL",
+        "quant_code": ""
+      },
+      {
+        "sku": 355923855,
+        "source": "fbs",
+        "created_at": "2021-10-19T03:52:27.021652Z",
+        "shipment_type": "SHIPMENT_TYPE_GENERAL",
+        "quant_code": ""
+      }
+    ],
+    "model_info": {
+      "model_id": 255535430,
+      "count": 10
+    },
+    "commissions": [
+      {
+        "delivery_amount": 25,
+        "percent": 31,
+        "return_amount": 81,
+        "sale_schema": "FBO",
+        "value": 130.51
+      },
+      {
+        "delivery_amount": 25,
+        "percent": 31,
+        "return_amount": 168,
+        "sale_schema": "FBS",
+        "value": 130.51
+      },
+      {
+        "percent": 31,
+        "sale_schema": "RFBS",
+        "value": 130.51
+      },
+      {
+        "percent": 44,
+        "sale_schema": "FBP",
+        "value": 185.24
+      }
+    ],
+    "is_prepayment_allowed": true,
+    "volume_weight": 0.2,
+    "has_discounted_fbo_item": false,
+    "is_discounted": false,
+    "discounted_fbo_stocks": 0,
+    "stocks": {
+      "has_stock": false,
+      "stocks": [
+        {
+          "present": 1,
+          "reserved": 1,
+          "sku": 355923856,
+          "source": "fbo"
+        },
+        {
+          "present": 0,
+          "reserved": 0,
+          "sku": 355923856,
+          "source": "fbs"
+        }
+      ]
+    },
+    "errors": [],
+    "updated_at": "2026-05-25T13:12:04.721970Z",
+    "vat": "0.22",
+    "visibility_details": {
+      "has_price": true,
+      "has_stock": false
+    },
+    "price_indexes": {
+      "color_index": "COLOR_INDEX_SUPER",
+      "external_index_data": {
+        "minimal_price": "198.00",
+        "minimal_price_currency": "RUB",
+        "price_index_value": 0.88
+      },
+      "ozon_index_data": {
+        "minimal_price": "258.00",
+        "minimal_price_currency": "RUB",
+        "price_index_value": 0.67
+      },
+      "self_marketplaces_index_data": {
+        "minimal_price": "206.00",
+        "minimal_price_currency": "RUB",
+        "price_index_value": 0.84
+      }
+    },
+    "images360": [],
+    "is_kgt": false,
+    "color_image": [],
+    "primary_image": [
+      "https://ir.ozone.ru/s3/multimedia-p/6737431057.jpg"
+    ],
+    "statuses": {
+      "status": "price_sent",
+      "status_failed": "",
+      "moderate_status": "approved",
+      "validation_status": "success",
+      "status_name": "Продается",
+      "status_description": "",
+      "is_created": true,
+      "status_tooltip": "",
+      "status_updated_at": "2025-10-09T04:36:33.514477Z"
+    },
+    "is_super": false,
+    "is_seasonal": false,
+    "promotions": [
+      {
+        "is_enabled": false,
+        "type": "REVIEWS_PROMO"
+      }
+    ],
+    "sku": 355923856,
+    "availabilities": [
+      {
+        "availability": "AVAILABLE",
+        "reasons": [],
+        "sku": 355923856,
+        "source": "sds"
+      },
+      {
+        "availability": "HIDDEN",
+        "reasons": [
+          {
+            "id": 109,
+            "human_text": {
+              "text": "У товара будет единый SKU на всех схемах работы"
+            }
+          }
+        ],
+        "sku": 355923855,
+        "source": "fbs"
+      }
+    ]
+  }
+}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import ForeignKey, Integer, String, delete, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
@@ -34,25 +34,60 @@ STATUSES = {
 }
 
 
+DELIVERY_DIRECT = "direct"
+DELIVERY_CROSSDOCK = "crossdock"
+DELIVERY_TYPES = {DELIVERY_DIRECT, DELIVERY_CROSSDOCK}
+
+BATCH_STATUS_PLANNING = "planning"
+BATCH_STATUS_SUBMITTED = "submitted"
+BATCH_STATUS_PACKING = "packing"
+BATCH_STATUS_DONE = "done"
+BATCH_STATUSES = {BATCH_STATUS_PLANNING, BATCH_STATUS_SUBMITTED, BATCH_STATUS_PACKING, BATCH_STATUS_DONE}
+
+
 class _Base(DeclarativeBase):
     pass
+
+
+class OzonFboBatch(_Base):
+    __tablename__ = "ozon_fbo_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    delivery_type: Mapped[str] = mapped_column(String(16), nullable=False, default=DELIVERY_DIRECT)
+    dropoff_warehouse_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    dropoff_warehouse_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    timeslot_from: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    timeslot_to: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=BATCH_STATUS_PLANNING)
+    manager_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class OzonFboSupply(_Base):
     __tablename__ = "ozon_fbo_supplies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     supply_kind: Mapped[str] = mapped_column(String(16), nullable=False, default=SUPPLY_KIND_PALLET)
+    delivery_type: Mapped[str] = mapped_column(String(16), nullable=False, default=DELIVERY_DIRECT)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=STATUS_DRAFT)
     ozon_supply_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_draft_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ozon_bundle_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_cluster_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_cluster_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     ozon_warehouse_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_warehouse_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
-    assigned_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    manager_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dropoff_warehouse_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    dropoff_warehouse_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    timeslot_from: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    timeslot_to: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    assigned_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    manager_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cargoes_operation_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     labels_operation_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     labels_file_guid: Mapped[str] = mapped_column(String(128), nullable=False, default="")
@@ -69,7 +104,7 @@ class OzonFboSupplyItem(_Base):
     supply_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("ozon_fbo_supplies.id", ondelete="CASCADE"), nullable=False
     )
-    product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sku: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -96,7 +131,7 @@ class OzonFboCargoItem(_Base):
     cargo_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("ozon_fbo_cargoes.id", ondelete="CASCADE"), nullable=False
     )
-    product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    product_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sku: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -136,17 +171,43 @@ class FboCargoRow:
 
 
 @dataclass
-class FboSupplyRow:
+class FboBatchRow:
     id: int
     title: str
+    delivery_type: str
+    dropoff_warehouse_id: str
+    dropoff_warehouse_name: str
+    timeslot_from: str
+    timeslot_to: str
+    status: str
+    manager_user_id: int | None
+    manager_user_name: str
+    comment: str
+    created_at_ts: int
+    updated_at_ts: int
+    supply_count: int = 0
+    supplies: list["FboSupplyRow"] = field(default_factory=list)
+
+
+@dataclass
+class FboSupplyRow:
+    id: int
+    batch_id: int | None
+    title: str
     supply_kind: str
+    delivery_type: str
     status: str
     ozon_supply_id: str
     ozon_draft_id: str
+    ozon_bundle_id: str
     ozon_cluster_id: str
     ozon_cluster_name: str
     ozon_warehouse_id: str
     ozon_warehouse_name: str
+    dropoff_warehouse_id: str
+    dropoff_warehouse_name: str
+    timeslot_from: str
+    timeslot_to: str
     assigned_user_id: int | None
     assigned_user_name: str
     manager_user_id: int | None
@@ -200,6 +261,24 @@ def _normalize_status(raw: Any, *, default: str = STATUS_DRAFT) -> str:
     return val
 
 
+def _normalize_delivery_type(raw: Any, *, default: str = DELIVERY_DIRECT) -> str:
+    val = _str(raw, 16).lower()
+    if not val:
+        return default
+    if val not in DELIVERY_TYPES:
+        raise ValueError("Способ доставки: direct или crossdock")
+    return val
+
+
+def _normalize_batch_status(raw: Any, *, default: str = BATCH_STATUS_PLANNING) -> str:
+    val = _str(raw, 32).lower()
+    if not val:
+        return default
+    if val not in BATCH_STATUSES:
+        raise ValueError("Некорректный статус пакета FBO")
+    return val
+
+
 class OzonFboSupplyRepository:
     def __init__(
         self,
@@ -223,20 +302,92 @@ class OzonFboSupplyRepository:
                 row[1]
                 for row in conn.execute(text("PRAGMA table_info(ozon_fbo_supplies)")).all()
             }
-            if "cargoes_operation_id" not in cols:
-                conn.execute(
-                    text(
-                        "ALTER TABLE ozon_fbo_supplies ADD COLUMN cargoes_operation_id "
-                        "VARCHAR(128) NOT NULL DEFAULT ''"
-                    )
-                )
-            if "labels_operation_id" not in cols:
-                conn.execute(
-                    text(
-                        "ALTER TABLE ozon_fbo_supplies ADD COLUMN labels_operation_id "
-                        "VARCHAR(128) NOT NULL DEFAULT ''"
-                    )
-                )
+            migrations = (
+                ("cargoes_operation_id", "VARCHAR(128) NOT NULL DEFAULT ''"),
+                ("labels_operation_id", "VARCHAR(128) NOT NULL DEFAULT ''"),
+                ("batch_id", "INTEGER"),
+                ("delivery_type", "VARCHAR(16) NOT NULL DEFAULT 'direct'"),
+                ("ozon_bundle_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
+                ("dropoff_warehouse_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
+                ("dropoff_warehouse_name", "VARCHAR(256) NOT NULL DEFAULT ''"),
+                ("timeslot_from", "VARCHAR(32) NOT NULL DEFAULT ''"),
+                ("timeslot_to", "VARCHAR(32) NOT NULL DEFAULT ''"),
+            )
+            for name, ddl in migrations:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE ozon_fbo_supplies ADD COLUMN {name} {ddl}"))
+
+    def list_batches(self, filters: dict[str, str] | None = None) -> list[FboBatchRow]:
+        filters = filters or {}
+        with Session(self.engine) as session:
+            q = select(OzonFboBatch).order_by(OzonFboBatch.updated_at_ts.desc(), OzonFboBatch.id.desc())
+            status = _str(filters.get("status"), 32)
+            if status:
+                q = q.where(OzonFboBatch.status == status)
+            rows = session.scalars(q.limit(200)).all()
+            return [self._batch_row(session, r, include_details=False) for r in rows]
+
+    def get_batch(self, batch_id: int) -> FboBatchRow | None:
+        with Session(self.engine) as session:
+            row = session.get(OzonFboBatch, int(batch_id))
+            if row is None:
+                return None
+            return self._batch_row(session, row, include_details=True)
+
+    def create_batch(self, data: dict[str, Any], *, manager_user_id: int | None = None) -> FboBatchRow:
+        now = int(time.time())
+        with Session(self.engine) as session:
+            row = OzonFboBatch(
+                title=_str(data.get("title"), 256) or "Пакет FBO",
+                delivery_type=_normalize_delivery_type(data.get("delivery_type")),
+                dropoff_warehouse_id=_str(data.get("dropoff_warehouse_id"), 64),
+                dropoff_warehouse_name=_str(data.get("dropoff_warehouse_name"), 256),
+                timeslot_from=_str(data.get("timeslot_from"), 32),
+                timeslot_to=_str(data.get("timeslot_to"), 32),
+                status=_normalize_batch_status(data.get("status")),
+                manager_user_id=int(manager_user_id) if manager_user_id else None,
+                comment=_str(data.get("comment"), 2048),
+                created_at_ts=now,
+                updated_at_ts=now,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._batch_row(session, row, include_details=True)
+
+    def update_batch(self, batch_id: int, data: dict[str, Any]) -> FboBatchRow | None:
+        now = int(time.time())
+        with Session(self.engine) as session:
+            row = session.get(OzonFboBatch, int(batch_id))
+            if row is None:
+                return None
+            for key, limit in (
+                ("title", 256),
+                ("dropoff_warehouse_id", 64),
+                ("dropoff_warehouse_name", 256),
+                ("timeslot_from", 32),
+                ("timeslot_to", 32),
+                ("comment", 2048),
+            ):
+                if key in data:
+                    setattr(row, key, _str(data.get(key), limit))
+            if "delivery_type" in data:
+                row.delivery_type = _normalize_delivery_type(data.get("delivery_type"))
+            if "status" in data:
+                row.status = _normalize_batch_status(data.get("status"), default=row.status)
+            row.updated_at_ts = now
+            session.commit()
+            session.refresh(row)
+            return self._batch_row(session, row, include_details=True)
+
+    def list_supplies_for_batch(self, batch_id: int) -> list[FboSupplyRow]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(OzonFboSupply)
+                .where(OzonFboSupply.batch_id == int(batch_id))
+                .order_by(OzonFboSupply.id)
+            ).all()
+            return [self._row(session, r, include_details=True) for r in rows]
 
     def list_supplies(self, filters: dict[str, str] | None = None) -> list[FboSupplyRow]:
         filters = filters or {}
@@ -250,6 +401,9 @@ class OzonFboSupplyRepository:
             assigned_id = _int_or_none(assigned_raw)
             if assigned_id:
                 conds.append(OzonFboSupply.assigned_user_id == assigned_id)
+            batch_id = _int_or_none(filters.get("batch_id"))
+            if batch_id:
+                conds.append(OzonFboSupply.batch_id == batch_id)
             q_text = _str(filters.get("q"), 128)
             if q_text:
                 pat = f"%{q_text}%"
@@ -280,15 +434,22 @@ class OzonFboSupplyRepository:
         title = _str(data.get("title"), 256) or "FBO-поставка"
         with Session(self.engine) as session:
             row = OzonFboSupply(
+                batch_id=_int_or_none(data.get("batch_id")),
                 title=title,
                 supply_kind=_normalize_supply_kind(data.get("supply_kind") or SUPPLY_KIND_PALLET),
+                delivery_type=_normalize_delivery_type(data.get("delivery_type")),
                 status=_normalize_status(data.get("status"), default=STATUS_DRAFT),
                 ozon_supply_id=_str(data.get("ozon_supply_id"), 64),
                 ozon_draft_id=_str(data.get("ozon_draft_id"), 64),
+                ozon_bundle_id=_str(data.get("ozon_bundle_id"), 64),
                 ozon_cluster_id=_str(data.get("ozon_cluster_id"), 64),
                 ozon_cluster_name=_str(data.get("ozon_cluster_name"), 256),
                 ozon_warehouse_id=_str(data.get("ozon_warehouse_id"), 64),
                 ozon_warehouse_name=_str(data.get("ozon_warehouse_name"), 256),
+                dropoff_warehouse_id=_str(data.get("dropoff_warehouse_id"), 64),
+                dropoff_warehouse_name=_str(data.get("dropoff_warehouse_name"), 256),
+                timeslot_from=_str(data.get("timeslot_from"), 32),
+                timeslot_to=_str(data.get("timeslot_to"), 32),
                 assigned_user_id=self._validate_user_id(data.get("assigned_user_id")),
                 manager_user_id=int(manager_user_id) if manager_user_id else None,
                 comment=_str(data.get("comment"), 2048),
@@ -312,10 +473,15 @@ class OzonFboSupplyRepository:
                 ("title", 256),
                 ("ozon_supply_id", 64),
                 ("ozon_draft_id", 64),
+                ("ozon_bundle_id", 64),
                 ("ozon_cluster_id", 64),
                 ("ozon_cluster_name", 256),
                 ("ozon_warehouse_id", 64),
                 ("ozon_warehouse_name", 256),
+                ("dropoff_warehouse_id", 64),
+                ("dropoff_warehouse_name", 256),
+                ("timeslot_from", 32),
+                ("timeslot_to", 32),
                 ("cargoes_operation_id", 128),
                 ("labels_operation_id", 128),
                 ("labels_file_guid", 128),
@@ -324,8 +490,12 @@ class OzonFboSupplyRepository:
             ):
                 if key in data:
                     setattr(row, key, _str(data.get(key), limit))
+            if "batch_id" in data:
+                row.batch_id = _int_or_none(data.get("batch_id"))
             if "supply_kind" in data:
                 row.supply_kind = _normalize_supply_kind(data.get("supply_kind"))
+            if "delivery_type" in data:
+                row.delivery_type = _normalize_delivery_type(data.get("delivery_type"))
             if "status" in data:
                 row.status = _normalize_status(data.get("status"), default=row.status)
             if "assigned_user_id" in data:
@@ -493,15 +663,22 @@ class OzonFboSupplyRepository:
 
         return FboSupplyRow(
             id=int(row.id),
+            batch_id=int(row.batch_id) if row.batch_id is not None else None,
             title=str(row.title or ""),
             supply_kind=str(row.supply_kind or SUPPLY_KIND_PALLET),
+            delivery_type=str(row.delivery_type or DELIVERY_DIRECT),
             status=str(row.status or STATUS_DRAFT),
             ozon_supply_id=str(row.ozon_supply_id or ""),
             ozon_draft_id=str(row.ozon_draft_id or ""),
+            ozon_bundle_id=str(row.ozon_bundle_id or ""),
             ozon_cluster_id=str(row.ozon_cluster_id or ""),
             ozon_cluster_name=str(row.ozon_cluster_name or ""),
             ozon_warehouse_id=str(row.ozon_warehouse_id or ""),
             ozon_warehouse_name=str(row.ozon_warehouse_name or ""),
+            dropoff_warehouse_id=str(row.dropoff_warehouse_id or ""),
+            dropoff_warehouse_name=str(row.dropoff_warehouse_name or ""),
+            timeslot_from=str(row.timeslot_from or ""),
+            timeslot_to=str(row.timeslot_to or ""),
             assigned_user_id=int(row.assigned_user_id) if row.assigned_user_id else None,
             assigned_user_name=assigned_name,
             manager_user_id=int(row.manager_user_id) if row.manager_user_id else None,
@@ -517,21 +694,67 @@ class OzonFboSupplyRepository:
             cargoes=cargoes,
         )
 
+    def _batch_row(self, session: Session, row: OzonFboBatch, *, include_details: bool) -> FboBatchRow:
+        manager_name = ""
+        if row.manager_user_id:
+            user = self.users_repo.get_by_id(int(row.manager_user_id))
+            if user:
+                manager_name = user.display_name or user.login
+        supply_count = session.scalar(
+            select(func.count())
+            .select_from(OzonFboSupply)
+            .where(OzonFboSupply.batch_id == int(row.id))
+        )
+        supplies: list[FboSupplyRow] = []
+        if include_details:
+            supply_rows = session.scalars(
+                select(OzonFboSupply)
+                .where(OzonFboSupply.batch_id == int(row.id))
+                .order_by(OzonFboSupply.id)
+            ).all()
+            supplies = [self._row(session, s, include_details=True) for s in supply_rows]
+        return FboBatchRow(
+            id=int(row.id),
+            title=str(row.title or ""),
+            delivery_type=str(row.delivery_type or DELIVERY_DIRECT),
+            dropoff_warehouse_id=str(row.dropoff_warehouse_id or ""),
+            dropoff_warehouse_name=str(row.dropoff_warehouse_name or ""),
+            timeslot_from=str(row.timeslot_from or ""),
+            timeslot_to=str(row.timeslot_to or ""),
+            status=str(row.status or BATCH_STATUS_PLANNING),
+            manager_user_id=int(row.manager_user_id) if row.manager_user_id else None,
+            manager_user_name=manager_name,
+            comment=str(row.comment or ""),
+            created_at_ts=int(row.created_at_ts or 0),
+            updated_at_ts=int(row.updated_at_ts or 0),
+            supply_count=int(supply_count or 0),
+            supplies=supplies,
+        )
+
 
 def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[str, Any]:
     data = {
         "id": row.id,
+        "batch_id": row.batch_id,
         "title": row.title,
         "supply_kind": row.supply_kind,
         "supply_kind_label": "Паллеты" if row.supply_kind == SUPPLY_KIND_PALLET else "Короба",
+        "delivery_type": row.delivery_type,
+        "delivery_type_label": delivery_type_label(row.delivery_type),
         "status": row.status,
         "status_label": status_label(row.status),
         "ozon_supply_id": row.ozon_supply_id,
         "ozon_draft_id": row.ozon_draft_id,
+        "ozon_bundle_id": row.ozon_bundle_id,
         "ozon_cluster_id": row.ozon_cluster_id,
         "ozon_cluster_name": row.ozon_cluster_name,
         "ozon_warehouse_id": row.ozon_warehouse_id,
         "ozon_warehouse_name": row.ozon_warehouse_name,
+        "dropoff_warehouse_id": row.dropoff_warehouse_id,
+        "dropoff_warehouse_name": row.dropoff_warehouse_name,
+        "timeslot_from": row.timeslot_from,
+        "timeslot_to": row.timeslot_to,
+        "timeslot_label": format_timeslot(row.timeslot_from, row.timeslot_to),
         "assigned_user_id": row.assigned_user_id,
         "assigned_user_name": row.assigned_user_name,
         "manager_user_id": row.manager_user_id,
@@ -581,6 +804,57 @@ def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[s
             for c in row.cargoes
         ]
     return data
+
+
+def batch_to_dict(row: FboBatchRow, *, include_details: bool = True) -> dict[str, Any]:
+    data = {
+        "id": row.id,
+        "title": row.title,
+        "delivery_type": row.delivery_type,
+        "delivery_type_label": delivery_type_label(row.delivery_type),
+        "dropoff_warehouse_id": row.dropoff_warehouse_id,
+        "dropoff_warehouse_name": row.dropoff_warehouse_name,
+        "timeslot_from": row.timeslot_from,
+        "timeslot_to": row.timeslot_to,
+        "timeslot_label": format_timeslot(row.timeslot_from, row.timeslot_to),
+        "status": row.status,
+        "status_label": batch_status_label(row.status),
+        "manager_user_id": row.manager_user_id,
+        "manager_user_name": row.manager_user_name,
+        "comment": row.comment,
+        "created_at_ts": row.created_at_ts,
+        "updated_at_ts": row.updated_at_ts,
+        "supply_count": row.supply_count,
+    }
+    if include_details:
+        data["supplies"] = [supply_to_dict(s, include_details=True) for s in row.supplies]
+    return data
+
+
+def format_timeslot(from_ts: str, to_ts: str) -> str:
+    f = str(from_ts or "").strip()
+    t = str(to_ts or "").strip()
+    if not f and not t:
+        return ""
+    if len(f) >= 16 and len(t) >= 16:
+        return f"{f[11:16]}–{t[11:16]} ({f[:10]})"
+    return f"{f} – {t}".strip(" –")
+
+
+def delivery_type_label(delivery_type: str) -> str:
+    return {
+        DELIVERY_DIRECT: "Самостоятельно",
+        DELIVERY_CROSSDOCK: "Кросс-док",
+    }.get(delivery_type, delivery_type)
+
+
+def batch_status_label(status: str) -> str:
+    return {
+        BATCH_STATUS_PLANNING: "Планирование",
+        BATCH_STATUS_SUBMITTED: "Создано в Ozon",
+        BATCH_STATUS_PACKING: "Сборка грузомест",
+        BATCH_STATUS_DONE: "Завершён",
+    }.get(status, status)
 
 
 def status_label(status: str) -> str:

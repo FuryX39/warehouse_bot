@@ -1,0 +1,15 @@
+{
+  "request": {
+    "skus": [
+      355923856
+    ]
+  },
+  "response": {
+    "products_placement": [
+      {
+        "sku": 355923856,
+        "placement_zone": "SORT"
+      }
+    ]
+  }
+}

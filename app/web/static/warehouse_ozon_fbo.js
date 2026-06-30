@@ -1116,6 +1116,8 @@
       .then(function () {
         if (item.id === "ozon-fbo-packing") {
           renderPackingList(tab, item);
+        } else if (item.id === "ozon-fbo-supplies" && global.WhOzonFboSupplies) {
+          global.WhOzonFboSupplies.render(tab, item);
         } else {
           renderManagerList(tab, item);
         }

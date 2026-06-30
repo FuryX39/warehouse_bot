@@ -1,0 +1,24 @@
+{
+  "offer_id": "SS996",
+  "ozon_sku": 355923856,
+  "product_id": 143590505,
+  "qty_per_cluster": 150,
+  "total_qty": 1200,
+  "created_at": "2026-06-30",
+  "status": "drafts_created",
+  "demand_source": "/v1/analytics/stocks sorted by ads_cluster DESC",
+  "draft_api": "/v1/draft/direct/create",
+  "draft_info_api": "/v2/draft/create/info",
+  "required_field": "deletion_sku_mode: 1",
+  "clusters": [
+    {"rank": 1, "cluster_name": "Москва, МО и Дальние регионы", "macrolocal_cluster_id": 4039, "ads_cluster": 4.57, "draft_id": 116482070, "warehouse": "НОГИНСК_РФЦ", "bundle_id": "019f167b-c6bb-704c-97d9-335c116465fb"},
+    {"rank": 2, "cluster_name": "Красноярск", "macrolocal_cluster_id": 4043, "ads_cluster": 1.52, "draft_id": 116482088, "warehouse": "КРАСНОЯРСК_СТАРЦЕВО_РФЦ", "bundle_id": "019f167b-f434-7e54-9c0f-53410dac7851"},
+    {"rank": 3, "cluster_name": "Санкт-Петербург и СЗО", "macrolocal_cluster_id": 4007, "ads_cluster": 1.43, "draft_id": 116482138, "warehouse": "СПБ_ШУШАРЫ_РФЦ", "bundle_id": "019f167c-8d56-7c77-962d-0d16cf21f414"},
+    {"rank": 4, "cluster_name": "Уфа", "macrolocal_cluster_id": 4040, "ads_cluster": 1.22, "draft_id": 116482154, "warehouse": "УФА_РФЦ", "bundle_id": "019f167c-e586-7c65-9414-d000898c9b1e"},
+    {"rank": 5, "cluster_name": "Ростов", "macrolocal_cluster_id": 4071, "ads_cluster": 1.13, "draft_id": 116482178, "warehouse": "Ростов_на_Дону_РФЦ", "bundle_id": "019f167d-4412-70f2-bef6-2af1a271d1ec"},
+    {"rank": 6, "cluster_name": "Краснодар", "macrolocal_cluster_id": 4065, "ads_cluster": 0.87, "draft_id": 116482225, "warehouse": "АДЫГЕЙСК_РФЦ", "bundle_id": "019f167d-d361-70b3-badb-a6e41ca09df7"},
+    {"rank": 7, "cluster_name": "Казань", "macrolocal_cluster_id": 4041, "ads_cluster": 0.83, "draft_id": 116482252, "warehouse": "Казань_РФЦ_НОВЫЙ", "bundle_id": "019f167e-2cfc-792f-b6dd-1bff6d101d01"},
+    {"rank": 8, "cluster_name": "Дальний Восток", "macrolocal_cluster_id": 4002, "ads_cluster": 0.74, "draft_id": 116482287, "warehouse": "ХАБАРОВСК_2_РФЦ", "bundle_id": "019f167e-bf01-716d-88ce-c8a3c4df3bb0"}
+  ],
+  "next_step": "POST /v2/draft/timeslot/info + POST /v2/draft/supply/create для каждого draft_id"
+}

@@ -1,0 +1,47 @@
+{
+  "offer_id": "SS996",
+  "qty": 150,
+  "selected": [
+    {
+      "macrolocal_cluster_id": "4066",
+      "cluster_name": "Екатеринбург",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4069",
+      "cluster_name": "Оренбург",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4076",
+      "cluster_name": "Невинномысск",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4042",
+      "cluster_name": "Самара",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4067",
+      "cluster_name": "Новосибирск",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4039",
+      "cluster_name": "Москва, МО и Дальние регионы",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4070",
+      "cluster_name": "Пермь",
+      "demand_score": 0.0
+    },
+    {
+      "macrolocal_cluster_id": "4077",
+      "cluster_name": "Махачкала",
+      "demand_score": 0.0
+    }
+  ],
+  "mode": "direct"
+}

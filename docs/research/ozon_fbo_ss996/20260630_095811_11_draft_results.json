@@ -1,0 +1,83 @@
+{
+  "offer_id": "SS996",
+  "ozon_sku": 355923856,
+  "product_id": 143590505,
+  "qty_per_cluster": 150,
+  "clusters_requested": 8,
+  "create_supplies": false,
+  "dropoff_warehouse_id": null,
+  "results": [
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4066",
+        "cluster_name": "Екатеринбург",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "400 Client Error: Bad Request for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":3,\"message\":\"Request validation error: invalid DraftDirectCreateRequest.DeletionSkuMode: value must not be in list [0]\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4069",
+        "cluster_name": "Оренбург",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "400 Client Error: Bad Request for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":3,\"message\":\"Request validation error: invalid DraftDirectCreateRequest.DeletionSkuMode: value must not be in list [0]\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4076",
+        "cluster_name": "Невинномысск",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "429 Client Error: Too Many Requests for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":8,\"message\":\"You have reached request rate limit per second\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4042",
+        "cluster_name": "Самара",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "429 Client Error: Too Many Requests for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":8,\"message\":\"You have reached request rate limit per second\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4067",
+        "cluster_name": "Новосибирск",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "429 Client Error: Too Many Requests for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":8,\"message\":\"You have reached request rate limit per second\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4039",
+        "cluster_name": "Москва, МО и Дальние регионы",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "429 Client Error: Too Many Requests for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":8,\"message\":\"You have reached request rate limit per second\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4070",
+        "cluster_name": "Пермь",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "429 Client Error: Too Many Requests for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":8,\"message\":\"You have reached request rate limit per second\"}"
+    },
+    {
+      "cluster": {
+        "macrolocal_cluster_id": "4077",
+        "cluster_name": "Махачкала",
+        "demand_score": 0.0
+      },
+      "qty": 150,
+      "error": "429 Client Error: Too Many Requests for url: https://api-seller.ozon.ru/v1/draft/direct/create; body={\"code\":8,\"message\":\"You have reached request rate limit per second\"}"
+    }
+  ]
+}

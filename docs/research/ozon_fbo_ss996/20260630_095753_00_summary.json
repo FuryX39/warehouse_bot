@@ -1,0 +1,15 @@
+{
+  "offer_id": "SS996",
+  "product_id": 143590505,
+  "ozon_sku": 355923856,
+  "cluster_count": 740,
+  "demand_rows": 0,
+  "top8": [],
+  "files": [
+    "20260630_095753_01_product_SS996.json",
+    "20260630_095753_02_clusters.json",
+    "20260630_095753_03_manage_stocks.json",
+    "20260630_095753_04_placement_zone.json",
+    "20260630_095753_05_cluster_demand_ranked.json"
+  ]
+}

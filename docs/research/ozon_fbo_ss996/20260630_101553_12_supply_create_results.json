@@ -1,0 +1,1871 @@
+{
+  "source_summary": "C:\\3d\\warehouse_bot\\docs\\research\\ozon_fbo_ss996\\ss996_top8_drafts_summary.json",
+  "slot_date": "2026-07-01",
+  "slot_hours": "18:00-19:00",
+  "results": [
+    {
+      "cluster_name": "Москва, МО и Дальние регионы",
+      "draft_id": 116482070,
+      "macrolocal_cluster_id": 4039,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4039,
+        "cluster_name": "Москва, МО и Дальние регионы",
+        "storage_warehouse_id": 1020000759116000,
+        "bundle_id": "019f167b-c6bb-704c-97d9-335c116465fb",
+        "warehouse_name": "НОГИНСК_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482070,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4039,
+              "storage_warehouse_id": 1020000759116000,
+              "bundle_id": "019f167b-c6bb-704c-97d9-335c116465fb"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T12:00:00",
+                      "to_in_timezone": "2026-07-01T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T06:16:06",
+              "warehouse_timezone": "Europe/Moscow"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482070,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4039,
+              "storage_warehouse_id": 1020000759116000,
+              "bundle_id": "019f167b-c6bb-704c-97d9-335c116465fb"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482070
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Красноярск",
+      "draft_id": 116482088,
+      "macrolocal_cluster_id": 4043,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4043,
+        "cluster_name": "Красноярск",
+        "storage_warehouse_id": 1020002690706000,
+        "bundle_id": "019f167b-f434-7e54-9c0f-53410dac7851",
+        "warehouse_name": "КРАСНОЯРСК_СТАРЦЕВО_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482088,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4043,
+              "storage_warehouse_id": 1020002690706000,
+              "bundle_id": "019f167b-f434-7e54-9c0f-53410dac7851"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T07:00:00",
+                      "to_in_timezone": "2026-07-01T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T12:00:00",
+                      "to_in_timezone": "2026-07-01T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T19:00:00",
+                      "to_in_timezone": "2026-07-01T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                },
+                {
+                  "date_in_timezone": "2026-07-02",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-02T00:00:00",
+                      "to_in_timezone": "2026-07-02T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T01:00:00",
+                      "to_in_timezone": "2026-07-02T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T02:00:00",
+                      "to_in_timezone": "2026-07-02T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T03:00:00",
+                      "to_in_timezone": "2026-07-02T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T04:00:00",
+                      "to_in_timezone": "2026-07-02T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T05:00:00",
+                      "to_in_timezone": "2026-07-02T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T06:00:00",
+                      "to_in_timezone": "2026-07-02T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T07:00:00",
+                      "to_in_timezone": "2026-07-02T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T09:00:00",
+                      "to_in_timezone": "2026-07-02T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T10:00:00",
+                      "to_in_timezone": "2026-07-02T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T11:00:00",
+                      "to_in_timezone": "2026-07-02T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T12:00:00",
+                      "to_in_timezone": "2026-07-02T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T13:00:00",
+                      "to_in_timezone": "2026-07-02T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T14:00:00",
+                      "to_in_timezone": "2026-07-02T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T15:00:00",
+                      "to_in_timezone": "2026-07-02T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T16:00:00",
+                      "to_in_timezone": "2026-07-02T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T17:00:00",
+                      "to_in_timezone": "2026-07-02T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T18:00:00",
+                      "to_in_timezone": "2026-07-02T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T19:00:00",
+                      "to_in_timezone": "2026-07-02T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T21:00:00",
+                      "to_in_timezone": "2026-07-02T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T22:00:00",
+                      "to_in_timezone": "2026-07-02T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T23:00:00",
+                      "to_in_timezone": "2026-07-03T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T10:16:21",
+              "warehouse_timezone": "Asia/Novosibirsk"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482088,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4043,
+              "storage_warehouse_id": 1020002690706000,
+              "bundle_id": "019f167b-f434-7e54-9c0f-53410dac7851"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482088
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Санкт-Петербург и СЗО",
+      "draft_id": 116482138,
+      "macrolocal_cluster_id": 4007,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4007,
+        "cluster_name": "Санкт-Петербург и СЗО",
+        "storage_warehouse_id": 1020000613861000,
+        "bundle_id": "019f167c-8d56-7c77-962d-0d16cf21f414",
+        "warehouse_name": "СПБ_ШУШАРЫ_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482138,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4007,
+              "storage_warehouse_id": 1020000613861000,
+              "bundle_id": "019f167c-8d56-7c77-962d-0d16cf21f414"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T12:00:00",
+                      "to_in_timezone": "2026-07-01T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T06:16:39",
+              "warehouse_timezone": "Europe/Moscow"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482138,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4007,
+              "storage_warehouse_id": 1020000613861000,
+              "bundle_id": "019f167c-8d56-7c77-962d-0d16cf21f414"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482138
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Уфа",
+      "draft_id": 116482154,
+      "macrolocal_cluster_id": 4040,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4040,
+        "cluster_name": "Уфа",
+        "storage_warehouse_id": 1020001836298000,
+        "bundle_id": "019f167c-e586-7c65-9414-d000898c9b1e",
+        "warehouse_name": "УФА_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482154,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4040,
+              "storage_warehouse_id": 1020001836298000,
+              "bundle_id": "019f167c-e586-7c65-9414-d000898c9b1e"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T07:00:00",
+                      "to_in_timezone": "2026-07-01T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T12:00:00",
+                      "to_in_timezone": "2026-07-01T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T19:00:00",
+                      "to_in_timezone": "2026-07-01T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                },
+                {
+                  "date_in_timezone": "2026-07-02",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-02T00:00:00",
+                      "to_in_timezone": "2026-07-02T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T01:00:00",
+                      "to_in_timezone": "2026-07-02T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T02:00:00",
+                      "to_in_timezone": "2026-07-02T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T03:00:00",
+                      "to_in_timezone": "2026-07-02T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T04:00:00",
+                      "to_in_timezone": "2026-07-02T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T05:00:00",
+                      "to_in_timezone": "2026-07-02T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T06:00:00",
+                      "to_in_timezone": "2026-07-02T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T07:00:00",
+                      "to_in_timezone": "2026-07-02T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T08:00:00",
+                      "to_in_timezone": "2026-07-02T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T09:00:00",
+                      "to_in_timezone": "2026-07-02T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T10:00:00",
+                      "to_in_timezone": "2026-07-02T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T11:00:00",
+                      "to_in_timezone": "2026-07-02T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T12:00:00",
+                      "to_in_timezone": "2026-07-02T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T13:00:00",
+                      "to_in_timezone": "2026-07-02T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T14:00:00",
+                      "to_in_timezone": "2026-07-02T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T15:00:00",
+                      "to_in_timezone": "2026-07-02T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T16:00:00",
+                      "to_in_timezone": "2026-07-02T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T17:00:00",
+                      "to_in_timezone": "2026-07-02T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T18:00:00",
+                      "to_in_timezone": "2026-07-02T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T19:00:00",
+                      "to_in_timezone": "2026-07-02T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T20:00:00",
+                      "to_in_timezone": "2026-07-02T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T21:00:00",
+                      "to_in_timezone": "2026-07-02T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T22:00:00",
+                      "to_in_timezone": "2026-07-02T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T23:00:00",
+                      "to_in_timezone": "2026-07-03T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T08:17:13",
+              "warehouse_timezone": "Asia/Yekaterinburg"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482154,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4040,
+              "storage_warehouse_id": 1020001836298000,
+              "bundle_id": "019f167c-e586-7c65-9414-d000898c9b1e"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482154
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Ростов",
+      "draft_id": 116482178,
+      "macrolocal_cluster_id": 4071,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4071,
+        "cluster_name": "Ростов",
+        "storage_warehouse_id": 17717042026000,
+        "bundle_id": "019f167d-4412-70f2-bef6-2af1a271d1ec",
+        "warehouse_name": "Ростов_на_Дону_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482178,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4071,
+              "storage_warehouse_id": 17717042026000,
+              "bundle_id": "019f167d-4412-70f2-bef6-2af1a271d1ec"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T07:00:00",
+                      "to_in_timezone": "2026-07-01T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T12:00:00",
+                      "to_in_timezone": "2026-07-01T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T19:00:00",
+                      "to_in_timezone": "2026-07-01T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                },
+                {
+                  "date_in_timezone": "2026-07-02",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-02T00:00:00",
+                      "to_in_timezone": "2026-07-02T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T01:00:00",
+                      "to_in_timezone": "2026-07-02T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T02:00:00",
+                      "to_in_timezone": "2026-07-02T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T03:00:00",
+                      "to_in_timezone": "2026-07-02T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T04:00:00",
+                      "to_in_timezone": "2026-07-02T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T05:00:00",
+                      "to_in_timezone": "2026-07-02T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T06:00:00",
+                      "to_in_timezone": "2026-07-02T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T07:00:00",
+                      "to_in_timezone": "2026-07-02T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T08:00:00",
+                      "to_in_timezone": "2026-07-02T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T09:00:00",
+                      "to_in_timezone": "2026-07-02T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T10:00:00",
+                      "to_in_timezone": "2026-07-02T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T11:00:00",
+                      "to_in_timezone": "2026-07-02T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T12:00:00",
+                      "to_in_timezone": "2026-07-02T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T13:00:00",
+                      "to_in_timezone": "2026-07-02T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T14:00:00",
+                      "to_in_timezone": "2026-07-02T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T15:00:00",
+                      "to_in_timezone": "2026-07-02T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T16:00:00",
+                      "to_in_timezone": "2026-07-02T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T17:00:00",
+                      "to_in_timezone": "2026-07-02T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T18:00:00",
+                      "to_in_timezone": "2026-07-02T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T19:00:00",
+                      "to_in_timezone": "2026-07-02T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T20:00:00",
+                      "to_in_timezone": "2026-07-02T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T21:00:00",
+                      "to_in_timezone": "2026-07-02T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T22:00:00",
+                      "to_in_timezone": "2026-07-02T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T23:00:00",
+                      "to_in_timezone": "2026-07-03T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T06:17:37",
+              "warehouse_timezone": "Europe/Moscow"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482178,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4071,
+              "storage_warehouse_id": 17717042026000,
+              "bundle_id": "019f167d-4412-70f2-bef6-2af1a271d1ec"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482178
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Краснодар",
+      "draft_id": 116482225,
+      "macrolocal_cluster_id": 4065,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4065,
+        "cluster_name": "Краснодар",
+        "storage_warehouse_id": 1020000267736000,
+        "bundle_id": "019f167d-d361-70b3-badb-a6e41ca09df7",
+        "warehouse_name": "АДЫГЕЙСК_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482225,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4065,
+              "storage_warehouse_id": 1020000267736000,
+              "bundle_id": "019f167d-d361-70b3-badb-a6e41ca09df7"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T07:00:00",
+                      "to_in_timezone": "2026-07-01T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T12:00:00",
+                      "to_in_timezone": "2026-07-01T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T19:00:00",
+                      "to_in_timezone": "2026-07-01T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                },
+                {
+                  "date_in_timezone": "2026-07-02",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-02T00:00:00",
+                      "to_in_timezone": "2026-07-02T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T01:00:00",
+                      "to_in_timezone": "2026-07-02T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T02:00:00",
+                      "to_in_timezone": "2026-07-02T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T03:00:00",
+                      "to_in_timezone": "2026-07-02T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T04:00:00",
+                      "to_in_timezone": "2026-07-02T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T05:00:00",
+                      "to_in_timezone": "2026-07-02T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T06:00:00",
+                      "to_in_timezone": "2026-07-02T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T07:00:00",
+                      "to_in_timezone": "2026-07-02T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T08:00:00",
+                      "to_in_timezone": "2026-07-02T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T09:00:00",
+                      "to_in_timezone": "2026-07-02T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T10:00:00",
+                      "to_in_timezone": "2026-07-02T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T11:00:00",
+                      "to_in_timezone": "2026-07-02T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T12:00:00",
+                      "to_in_timezone": "2026-07-02T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T13:00:00",
+                      "to_in_timezone": "2026-07-02T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T14:00:00",
+                      "to_in_timezone": "2026-07-02T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T15:00:00",
+                      "to_in_timezone": "2026-07-02T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T16:00:00",
+                      "to_in_timezone": "2026-07-02T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T17:00:00",
+                      "to_in_timezone": "2026-07-02T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T18:00:00",
+                      "to_in_timezone": "2026-07-02T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T19:00:00",
+                      "to_in_timezone": "2026-07-02T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T20:00:00",
+                      "to_in_timezone": "2026-07-02T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T21:00:00",
+                      "to_in_timezone": "2026-07-02T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T22:00:00",
+                      "to_in_timezone": "2026-07-02T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T23:00:00",
+                      "to_in_timezone": "2026-07-03T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T06:18:14",
+              "warehouse_timezone": "Europe/Moscow"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482225,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4065,
+              "storage_warehouse_id": 1020000267736000,
+              "bundle_id": "019f167d-d361-70b3-badb-a6e41ca09df7"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482225
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Казань",
+      "draft_id": 116482252,
+      "macrolocal_cluster_id": 4041,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4041,
+        "cluster_name": "Казань",
+        "storage_warehouse_id": 18044494830000,
+        "bundle_id": "019f167e-2cfc-792f-b6dd-1bff6d101d01",
+        "warehouse_name": "Казань_РФЦ_НОВЫЙ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482252,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4041,
+              "storage_warehouse_id": 18044494830000,
+              "bundle_id": "019f167e-2cfc-792f-b6dd-1bff6d101d01"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T14:00:00",
+                      "to_in_timezone": "2026-07-01T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    }
+                  ]
+                },
+                {
+                  "date_in_timezone": "2026-07-02",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-02T01:00:00",
+                      "to_in_timezone": "2026-07-02T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T02:00:00",
+                      "to_in_timezone": "2026-07-02T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T03:00:00",
+                      "to_in_timezone": "2026-07-02T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T04:00:00",
+                      "to_in_timezone": "2026-07-02T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T05:00:00",
+                      "to_in_timezone": "2026-07-02T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T06:00:00",
+                      "to_in_timezone": "2026-07-02T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T08:00:00",
+                      "to_in_timezone": "2026-07-02T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T09:00:00",
+                      "to_in_timezone": "2026-07-02T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T10:00:00",
+                      "to_in_timezone": "2026-07-02T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T11:00:00",
+                      "to_in_timezone": "2026-07-02T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T14:00:00",
+                      "to_in_timezone": "2026-07-02T15:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T15:00:00",
+                      "to_in_timezone": "2026-07-02T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T16:00:00",
+                      "to_in_timezone": "2026-07-02T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T17:00:00",
+                      "to_in_timezone": "2026-07-02T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T18:00:00",
+                      "to_in_timezone": "2026-07-02T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T20:00:00",
+                      "to_in_timezone": "2026-07-02T21:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T06:18:43",
+              "warehouse_timezone": "Europe/Moscow"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482252,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4041,
+              "storage_warehouse_id": 18044494830000,
+              "bundle_id": "019f167e-2cfc-792f-b6dd-1bff6d101d01"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482252
+        }
+      },
+      "operation_id": null
+    },
+    {
+      "cluster_name": "Дальний Восток",
+      "draft_id": 116482287,
+      "macrolocal_cluster_id": 4002,
+      "draft_info_status": "SUCCESS",
+      "warehouse": {
+        "macrolocal_cluster_id": 4002,
+        "cluster_name": "Дальний Восток",
+        "storage_warehouse_id": 1020000890160000,
+        "bundle_id": "019f167e-bf01-716d-88ce-c8a3c4df3bb0",
+        "warehouse_name": "ХАБАРОВСК_2_РФЦ"
+      },
+      "timeslots": {
+        "path": "/v2/draft/timeslot/info",
+        "request": {
+          "draft_id": 116482287,
+          "date_from": "2026-07-01",
+          "date_to": "2026-07-01",
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4002,
+              "storage_warehouse_id": 1020000890160000,
+              "bundle_id": "019f167e-bf01-716d-88ce-c8a3c4df3bb0"
+            }
+          ]
+        },
+        "response": {
+          "result": {
+            "drop_off_warehouse_timeslots": {
+              "days": [
+                {
+                  "date_in_timezone": "2026-07-01",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-01T00:00:00",
+                      "to_in_timezone": "2026-07-01T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T01:00:00",
+                      "to_in_timezone": "2026-07-01T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T02:00:00",
+                      "to_in_timezone": "2026-07-01T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T03:00:00",
+                      "to_in_timezone": "2026-07-01T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T04:00:00",
+                      "to_in_timezone": "2026-07-01T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T05:00:00",
+                      "to_in_timezone": "2026-07-01T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T06:00:00",
+                      "to_in_timezone": "2026-07-01T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T07:00:00",
+                      "to_in_timezone": "2026-07-01T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T08:00:00",
+                      "to_in_timezone": "2026-07-01T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T09:00:00",
+                      "to_in_timezone": "2026-07-01T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T10:00:00",
+                      "to_in_timezone": "2026-07-01T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T11:00:00",
+                      "to_in_timezone": "2026-07-01T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T13:00:00",
+                      "to_in_timezone": "2026-07-01T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T15:00:00",
+                      "to_in_timezone": "2026-07-01T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T16:00:00",
+                      "to_in_timezone": "2026-07-01T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T17:00:00",
+                      "to_in_timezone": "2026-07-01T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T18:00:00",
+                      "to_in_timezone": "2026-07-01T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T19:00:00",
+                      "to_in_timezone": "2026-07-01T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T20:00:00",
+                      "to_in_timezone": "2026-07-01T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T21:00:00",
+                      "to_in_timezone": "2026-07-01T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T22:00:00",
+                      "to_in_timezone": "2026-07-01T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-01T23:00:00",
+                      "to_in_timezone": "2026-07-02T00:00:00"
+                    }
+                  ]
+                },
+                {
+                  "date_in_timezone": "2026-07-02",
+                  "timeslots": [
+                    {
+                      "from_in_timezone": "2026-07-02T00:00:00",
+                      "to_in_timezone": "2026-07-02T01:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T01:00:00",
+                      "to_in_timezone": "2026-07-02T02:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T02:00:00",
+                      "to_in_timezone": "2026-07-02T03:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T03:00:00",
+                      "to_in_timezone": "2026-07-02T04:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T04:00:00",
+                      "to_in_timezone": "2026-07-02T05:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T05:00:00",
+                      "to_in_timezone": "2026-07-02T06:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T06:00:00",
+                      "to_in_timezone": "2026-07-02T07:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T07:00:00",
+                      "to_in_timezone": "2026-07-02T08:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T08:00:00",
+                      "to_in_timezone": "2026-07-02T09:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T09:00:00",
+                      "to_in_timezone": "2026-07-02T10:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T10:00:00",
+                      "to_in_timezone": "2026-07-02T11:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T11:00:00",
+                      "to_in_timezone": "2026-07-02T12:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T12:00:00",
+                      "to_in_timezone": "2026-07-02T13:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T13:00:00",
+                      "to_in_timezone": "2026-07-02T14:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T15:00:00",
+                      "to_in_timezone": "2026-07-02T16:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T16:00:00",
+                      "to_in_timezone": "2026-07-02T17:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T17:00:00",
+                      "to_in_timezone": "2026-07-02T18:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T18:00:00",
+                      "to_in_timezone": "2026-07-02T19:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T19:00:00",
+                      "to_in_timezone": "2026-07-02T20:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T20:00:00",
+                      "to_in_timezone": "2026-07-02T21:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T21:00:00",
+                      "to_in_timezone": "2026-07-02T22:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T22:00:00",
+                      "to_in_timezone": "2026-07-02T23:00:00"
+                    },
+                    {
+                      "from_in_timezone": "2026-07-02T23:00:00",
+                      "to_in_timezone": "2026-07-03T00:00:00"
+                    }
+                  ]
+                }
+              ],
+              "current_time_in_timezone": "2026-06-30T13:19:06",
+              "warehouse_timezone": "Asia/Vladivostok"
+            },
+            "requested_date_from": "2026-07-01",
+            "requested_date_to": "2026-07-02"
+          },
+          "error_reason": "UNSPECIFIED"
+        }
+      },
+      "timeslot": {
+        "from_in_timezone": "2026-07-01T18:00:00",
+        "to_in_timezone": "2026-07-01T19:00:00"
+      },
+      "supply_create": {
+        "path": "/v2/draft/supply/create",
+        "request": {
+          "draft_id": 116482287,
+          "supply_type": "DIRECT",
+          "selected_cluster_warehouses": [
+            {
+              "macrolocal_cluster_id": 4002,
+              "storage_warehouse_id": 1020000890160000,
+              "bundle_id": "019f167e-bf01-716d-88ce-c8a3c4df3bb0"
+            }
+          ],
+          "timeslot": {
+            "from_in_timezone": "2026-07-01T18:00:00",
+            "to_in_timezone": "2026-07-01T19:00:00"
+          }
+        },
+        "response": {
+          "error_reasons": [],
+          "draft_id": 116482287
+        }
+      },
+      "operation_id": null
+    }
+  ],
+  "created": 0,
+  "errors": 0
+}
