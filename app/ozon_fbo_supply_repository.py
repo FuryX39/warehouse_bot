@@ -10,7 +10,7 @@ from sqlalchemy import ForeignKey, Integer, String, delete, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
-from app.ozon_fbo_labels_storage import cargo_labels_url
+from app.ozon_fbo_labels_storage import supply_labels_url
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 SUPPLY_KIND_PALLET = "pallet"
@@ -94,6 +94,7 @@ class OzonFboSupply(_Base):
     labels_operation_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     labels_file_guid: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     labels_filename: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    labels_file: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -173,7 +174,6 @@ class FboCargoRow:
     sort_order: int
     items: list[FboCargoItemRow] = field(default_factory=list)
 
-
 @dataclass
 class FboBatchRow:
     id: int
@@ -221,6 +221,7 @@ class FboSupplyRow:
     labels_operation_id: str
     labels_file_guid: str
     labels_filename: str
+    labels_file: str
     comment: str
     created_at_ts: int
     updated_at_ts: int
@@ -329,6 +330,10 @@ class OzonFboSupplyRepository:
             if "labels_file" not in cargo_cols:
                 conn.execute(
                     text("ALTER TABLE ozon_fbo_cargoes ADD COLUMN labels_file VARCHAR(256) NOT NULL DEFAULT ''")
+                )
+            if "labels_file" not in cols:
+                conn.execute(
+                    text("ALTER TABLE ozon_fbo_supplies ADD COLUMN labels_file VARCHAR(256) NOT NULL DEFAULT ''")
                 )
 
     def list_batches(self, filters: dict[str, str] | None = None) -> list[FboBatchRow]:
@@ -516,6 +521,7 @@ class OzonFboSupplyRepository:
                 ("labels_operation_id", 128),
                 ("labels_file_guid", 128),
                 ("labels_filename", 256),
+                ("labels_file", 256),
                 ("comment", 2048),
             ):
                 if key in data:
@@ -544,39 +550,36 @@ class OzonFboSupplyRepository:
                 return None
             return self._cargo_row(session, row)
 
-    def set_cargo_labels_file(self, cargo_id: int, labels_file: str) -> None:
+    def set_supply_labels_file(self, supply_id: int, labels_file: str) -> None:
+        from app.ozon_fbo_labels_storage import delete_supply_label
+
         with Session(self.engine) as session:
-            row = session.get(OzonFboCargo, int(cargo_id))
+            row = session.get(OzonFboSupply, int(supply_id))
             if row is None:
                 return
             old = str(row.labels_file or "").strip()
             new = str(labels_file or "").strip()
             if old and old != new:
-                from app.ozon_fbo_labels_storage import delete_cargo_label
-
-                delete_cargo_label(old)
+                delete_supply_label(old)
             row.labels_file = new[:256]
             session.commit()
 
-    def clear_supply_cargo_labels(self, supply_id: int) -> None:
-        from app.ozon_fbo_labels_storage import delete_cargo_label, delete_supply_labels
+    def clear_supply_labels(self, supply_id: int) -> None:
+        from app.ozon_fbo_labels_storage import delete_supply_label, delete_supply_labels
 
         with Session(self.engine) as session:
-            rows = session.scalars(
-                select(OzonFboCargo).where(OzonFboCargo.supply_id == int(supply_id))
-            ).all()
-            for row in rows:
-                old = str(row.labels_file or "").strip()
-                if old:
-                    delete_cargo_label(old)
-                row.labels_file = ""
+            row = session.get(OzonFboSupply, int(supply_id))
+            if row is None:
+                return
+            old = str(row.labels_file or "").strip()
+            if old:
+                delete_supply_label(old)
+            row.labels_file = ""
             session.commit()
         delete_supply_labels(supply_id)
 
     def delete_supply(self, supply_id: int) -> bool:
-        from app.ozon_fbo_labels_storage import delete_supply_labels
-
-        delete_supply_labels(supply_id)
+        self.clear_supply_labels(supply_id)
         with Session(self.engine) as session:
             row = session.get(OzonFboSupply, int(supply_id))
             if row is None:
@@ -617,7 +620,7 @@ class OzonFboSupplyRepository:
             return True
 
     def save_cargoes(self, supply_id: int, cargoes: list[dict[str, Any]]) -> FboSupplyRow | None:
-        self.clear_supply_cargo_labels(supply_id)
+        self.clear_supply_labels(supply_id)
         with Session(self.engine) as session:
             supply = session.get(OzonFboSupply, int(supply_id))
             if supply is None:
@@ -825,6 +828,7 @@ class OzonFboSupplyRepository:
             labels_operation_id=str(row.labels_operation_id or ""),
             labels_file_guid=str(row.labels_file_guid or ""),
             labels_filename=str(row.labels_filename or ""),
+            labels_file=str(row.labels_file or ""),
             comment=str(row.comment or ""),
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
@@ -907,6 +911,7 @@ def supply_to_dict(
         "labels_operation_id": row.labels_operation_id,
         "labels_file_guid": row.labels_file_guid,
         "labels_filename": row.labels_filename,
+        "labels_url": supply_labels_url(row.id) if str(row.labels_file or "").strip() else "",
         "comment": row.comment,
         "created_at_ts": row.created_at_ts,
         "updated_at_ts": row.updated_at_ts,
@@ -925,7 +930,6 @@ def supply_to_dict(
                 "ozon_cargo_id": c.ozon_cargo_id,
                 "comment": c.comment,
                 "sort_order": c.sort_order,
-                "labels_url": cargo_labels_url(c.id) if str(c.labels_file or "").strip() else "",
                 "items": [
                     _cargo_item_dict(i, catalog_map)
                     for i in c.items

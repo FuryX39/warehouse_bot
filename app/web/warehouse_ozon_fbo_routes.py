@@ -9,9 +9,9 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from app.adapters.ozon import OzonAdapter
-from app.fbs_labels_common import merge_label_pdfs, split_pdf_into_pages
+from app.fbs_labels_common import merge_label_pdfs
 from app.ozon_fbo_jobs import get_job, start_job
-from app.ozon_fbo_labels_storage import read_cargo_label, save_cargo_label
+from app.ozon_fbo_labels_storage import read_supply_label, save_supply_label
 from app.ozon_fbo_api import (
     CLUSTER_PAUSE_SEC,
     DELIVERY_CROSSDOCK,
@@ -233,51 +233,32 @@ def register_warehouse_ozon_fbo_routes(
         row = fbo_repo.get_supply(supply_id)
         if row is None:
             return []
-        pdfs: list[bytes] = []
-        for cargo in row.cargoes:
-            rel = str(cargo.labels_file or "").strip()
-            if not rel:
-                continue
-            data = read_cargo_label(rel)
-            if data:
-                pdfs.append(data)
-        return pdfs
+        rel = str(row.labels_file or "").strip()
+        if not rel:
+            return []
+        data = read_supply_label(rel)
+        return [data] if data else []
 
-    def _refresh_supply_cargo_labels(supply_id: int) -> dict[str, Any]:
+    def _refresh_supply_labels(supply_id: int) -> dict[str, Any]:
         ozon = _ozon()
         row = fbo_repo.get_supply(supply_id)
         if row is None:
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
         catalog_map = fbo_repo.catalog_map_for_supply(row)
         supply = supply_to_dict(row, include_details=True, catalog_map=catalog_map)
-        pairs: list[tuple[int, int]] = []
-        for cargo in supply.get("cargoes") or []:
-            local_id = cargo.get("id")
-            ozon_cid = str(cargo.get("ozon_cargo_id") or "").strip()
-            if local_id and ozon_cid.isdigit():
-                pairs.append((int(local_id), int(ozon_cid)))
-        results: list[dict[str, Any]] = []
-        if not pairs:
-            return {"supply_id": supply_id, "results": results, "ok_count": 0}
+        has_ozon_cargoes = any(
+            str(c.get("ozon_cargo_id") or "").strip().isdigit()
+            for c in (supply.get("cargoes") or [])
+        )
+        if not has_ozon_cargoes:
+            return {"supply_id": supply_id, "ok": False, "ok_count": 0, "error": "Нет грузомест с ID Ozon"}
         try:
-            pdf = fetch_cargo_labels_pdf(
-                ozon,
-                supply,
-                ozon_cargo_ids=[ozon_cid for _, ozon_cid in pairs],
-            )
-            pages = split_pdf_into_pages(pdf)
-            for idx, (local_id, _) in enumerate(pairs):
-                page_pdf = pages[idx] if idx < len(pages) else pdf
-                relpath = save_cargo_label(supply_id, local_id, page_pdf)
-                fbo_repo.set_cargo_labels_file(local_id, relpath)
-                results.append({"cargo_id": local_id, "ok": True})
+            pdf = fetch_cargo_labels_pdf(ozon, supply)
+            relpath = save_supply_label(supply_id, pdf)
+            fbo_repo.set_supply_labels_file(supply_id, relpath)
+            return {"supply_id": supply_id, "ok": True, "ok_count": 1}
         except Exception as exc:  # noqa: BLE001
-            results.append({"supply_id": supply_id, "error": str(exc)})
-        return {
-            "supply_id": supply_id,
-            "results": results,
-            "ok_count": sum(1 for r in results if r.get("ok")),
-        }
+            return {"supply_id": supply_id, "ok": False, "ok_count": 0, "error": str(exc)}
 
     def _sync_cargoes_from_ozon(supply_id: int) -> dict[str, Any]:
         row = fbo_repo.get_supply(supply_id)
@@ -538,7 +519,7 @@ def register_warehouse_ozon_fbo_routes(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         try:
-            result = _refresh_supply_cargo_labels(supply_id)
+            result = _refresh_supply_labels(supply_id)
         except HTTPException:
             raise
         except Exception as exc:
@@ -554,7 +535,7 @@ def register_warehouse_ozon_fbo_routes(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         try:
-            result = _refresh_supply_cargo_labels(supply_id)
+            result = _refresh_supply_labels(supply_id)
         except HTTPException:
             raise
         except Exception as exc:
@@ -564,18 +545,19 @@ def register_warehouse_ozon_fbo_routes(
         supply = supply_to_dict(row, include_details=True, catalog_map=catalog_map) if row else None
         return {"ok": True, **result, "supply": supply}
 
-    @app.get("/api/warehouse/marketplaces/ozon-fbo/cargoes/{cargo_id}/labels.pdf")
-    async def api_ozon_fbo_cargo_labels_file(
-        cargo_id: int,
+    @app.get("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/labels.pdf")
+    async def api_ozon_fbo_labels_file(
+        supply_id: int,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> Response:
-        cargo = fbo_repo.get_cargo(cargo_id)
-        if cargo is None or not str(cargo.labels_file or "").strip():
-            raise HTTPException(status_code=404, detail="Этикетка не найдена")
-        pdf = read_cargo_label(cargo.labels_file)
+        row = fbo_repo.get_supply(supply_id)
+        if row is None or not str(row.labels_file or "").strip():
+            raise HTTPException(status_code=404, detail="Этикетки не найдены")
+        pdf = read_supply_label(row.labels_file)
         if not pdf:
             raise HTTPException(status_code=404, detail="Файл этикетки отсутствует на сервере")
-        filename = f"ozon_fbo_gm_{cargo.cargo_number or cargo_id}.pdf"
+        inner_id = str(row.ozon_supply_id or supply_id)
+        filename = f"ozon_fbo_labels_{inner_id}.pdf"
         return Response(
             content=pdf,
             media_type="application/pdf",
@@ -613,26 +595,6 @@ def register_warehouse_ozon_fbo_routes(
                 },
             )
         return {"ok": True, "payload": payload, "data": data, "file_guid": file_guid}
-
-    @app.get("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/labels.pdf")
-    async def api_ozon_fbo_labels_file(
-        supply_id: int,
-        _: WarehouseUserRow = Depends(require_warehouse_user),
-    ) -> Response:
-        pdfs = _stored_label_pdfs_for_supply(supply_id)
-        if not pdfs:
-            raise HTTPException(status_code=404, detail="Нет сохранённых этикеток грузомест")
-        merged = merge_label_pdfs(pdfs) if len(pdfs) > 1 else pdfs[0]
-        if not merged:
-            raise HTTPException(status_code=500, detail="Не удалось объединить PDF (pypdf)")
-        row = fbo_repo.get_supply(supply_id)
-        inner_id = str(row.ozon_supply_id if row else supply_id)
-        filename = f"ozon_fbo_labels_{inner_id}.pdf"
-        return Response(
-            content=merged,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/ozon/demand")
     async def api_ozon_fbo_demand(
@@ -1091,7 +1053,7 @@ def register_warehouse_ozon_fbo_routes(
                 if idx:
                     time.sleep(CLUSTER_PAUSE_SEC)
                 try:
-                    result = _refresh_supply_cargo_labels(supply.id)
+                    result = _refresh_supply_labels(supply.id)
                     if result.get("ok_count"):
                         fbo_repo.update_supply(supply.id, {"status": STATUS_LABELS_READY})
                     out.append({"supply_id": supply.id, **result})
@@ -1111,27 +1073,17 @@ def register_warehouse_ozon_fbo_routes(
         if not supplies:
             raise HTTPException(status_code=404, detail="В пакете нет заявок")
         pdfs: list[bytes] = []
-        errors: list[str] = []
-        for idx, supply in enumerate(supplies):
-            if idx:
-                time.sleep(CLUSTER_PAUSE_SEC)
+        missing: list[str] = []
+        for supply in supplies:
             stored = _stored_label_pdfs_for_supply(supply.id)
-            if not stored:
-                try:
-                    refreshed = _refresh_supply_cargo_labels(supply.id)
-                    if not refreshed.get("ok_count"):
-                        errs = [r.get("error") for r in refreshed.get("results") or [] if r.get("error")]
-                        errors.append(f"#{supply.id}: " + ("; ".join(errs) if errs else "нет этикеток"))
-                        continue
-                    stored = _stored_label_pdfs_for_supply(supply.id)
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"#{supply.id}: {exc}")
-                    continue
-            pdfs.extend(stored)
+            if stored:
+                pdfs.extend(stored)
+            else:
+                missing.append(f"#{supply.id}")
         if not pdfs:
-            detail = "Нет сохранённых этикеток грузомест."
-            if errors:
-                detail += " " + "; ".join(errors)
+            detail = "Нет сохранённых этикеток. Загрузите их из Ozon для каждой заявки."
+            if missing:
+                detail += " Без файлов: " + ", ".join(missing)
             raise HTTPException(status_code=400, detail=detail)
         merged = merge_label_pdfs(pdfs)
         if not merged:

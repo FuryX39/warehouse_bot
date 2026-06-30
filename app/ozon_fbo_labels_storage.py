@@ -1,4 +1,4 @@
-"""Файловое хранилище PDF-этикеток грузомест FBO Ozon."""
+"""Файловое хранилище PDF-этикеток FBO Ozon (один объединённый файл на поставку)."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ def labels_root() -> Path:
     return root
 
 
-def cargo_label_relpath(supply_id: int, cargo_id: int) -> str:
-    return f"{int(supply_id)}/{int(cargo_id)}.pdf"
+def supply_label_relpath(supply_id: int) -> str:
+    return f"{int(supply_id)}.pdf"
 
 
-def cargo_labels_url(cargo_id: int) -> str:
-    return f"/api/warehouse/marketplaces/ozon-fbo/cargoes/{int(cargo_id)}/labels.pdf"
+def supply_labels_url(supply_id: int) -> str:
+    return f"/api/warehouse/marketplaces/ozon-fbo/supplies/{int(supply_id)}/labels.pdf"
 
 
 def resolve_label_path(relpath: str) -> Path | None:
@@ -34,40 +34,28 @@ def resolve_label_path(relpath: str) -> Path | None:
     return path
 
 
-def save_cargo_label(supply_id: int, cargo_id: int, pdf_bytes: bytes) -> str:
-    relpath = cargo_label_relpath(supply_id, cargo_id)
+def save_supply_label(supply_id: int, pdf_bytes: bytes) -> str:
+    relpath = supply_label_relpath(supply_id)
     path = resolve_label_path(relpath)
     if path is None:
         raise ValueError("Некорректный путь этикетки")
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(pdf_bytes)
     return relpath
 
 
-def read_cargo_label(relpath: str) -> bytes | None:
+def read_supply_label(relpath: str) -> bytes | None:
     path = resolve_label_path(relpath)
     if path is None or not path.is_file():
         return None
     return path.read_bytes()
 
 
-def delete_cargo_label(relpath: str) -> None:
+def delete_supply_label(relpath: str) -> None:
     path = resolve_label_path(relpath)
     if path is None or not path.is_file():
         return
     path.unlink(missing_ok=True)
-    parent = path.parent
-    if parent.is_dir() and not any(parent.iterdir()):
-        parent.rmdir()
 
 
 def delete_supply_labels(supply_id: int) -> None:
-    folder = labels_root() / str(int(supply_id))
-    if not folder.is_dir():
-        return
-    for pdf in folder.glob("*.pdf"):
-        pdf.unlink(missing_ok=True)
-    try:
-        folder.rmdir()
-    except OSError:
-        pass
+    delete_supply_label(supply_label_relpath(supply_id))
