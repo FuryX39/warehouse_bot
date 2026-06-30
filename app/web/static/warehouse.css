@@ -1752,6 +1752,36 @@ body.wh-body {
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.6rem;
+  align-items: center;
+}
+
+.wh-fbo-more-actions {
+  margin-left: 0.25rem;
+  font-size: 0.88rem;
+}
+
+.wh-fbo-more-actions summary {
+  cursor: pointer;
+  color: #4a5568;
+  list-style: none;
+}
+
+.wh-fbo-more-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.wh-fbo-more-actions[open] summary {
+  margin-bottom: 0.35rem;
+}
+
+.wh-fbo-batch-hint {
+  font-size: 0.86rem;
+  margin: 0 0 0.75rem;
+}
+
+.wh-fbo-batch-toolbar {
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .wh-fbo-cargo-drop {

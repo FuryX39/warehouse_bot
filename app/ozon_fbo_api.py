@@ -713,7 +713,7 @@ def cargo_api_key(cargo: dict[str, Any], idx: int, *, supply_id: int = 0) -> str
 
 
 def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int) -> dict[str, Any]:
-    kind = cargo_type_for_supply_kind(str(supply.get("supply_kind") or "box"))
+    default_kind = cargo_type_for_supply_kind(str(supply.get("supply_kind") or "box"))
     local_id = int(supply.get("id") or 0)
     cargoes: list[dict[str, Any]] = []
     for idx, cargo in enumerate(supply.get("cargoes") or []):
@@ -730,10 +730,13 @@ def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int
             items.append(row)
         if not items:
             continue
+        cargo_kind = str(cargo.get("cargo_type") or "").upper()
+        if cargo_kind not in {"BOX", "PALLET"}:
+            cargo_kind = default_kind
         cargoes.append(
             {
                 "key": cargo_api_key(cargo, idx, supply_id=local_id),
-                "value": {"type": kind, "items": items},
+                "value": {"type": cargo_kind, "items": items},
             }
         )
     if not cargoes:
@@ -810,11 +813,58 @@ def fetch_ozon_cargoes(
                 {
                     "cargo_number": str(idx + 1),
                     "ozon_cargo_id": cargo_id,
+                    "cargo_type": str(cargo.get("type") or "").upper(),
                     "comment": "",
                     "items": items,
                 }
             )
     return out
+
+
+def fetch_cargo_labels_pdf(adapter: OzonAdapter, supply: dict[str, Any]) -> bytes:
+    """Запросить этикетки в Ozon и скачать PDF (через file_url из ответа API)."""
+    import requests
+
+    inner_id = resolve_inner_supply_id(adapter, supply)
+    cargo_ids: list[int] = []
+    for cargo in supply.get("cargoes") or []:
+        cid = str(cargo.get("ozon_cargo_id") or "").strip()
+        if cid.isdigit():
+            cargo_ids.append(int(cid))
+    if not cargo_ids:
+        for cargo in fetch_ozon_cargoes(adapter, supply, inner_supply_id=inner_id):
+            cid = str(cargo.get("ozon_cargo_id") or "").strip()
+            if cid.isdigit():
+                cargo_ids.append(int(cid))
+    payload: dict[str, Any] = {"supply_id": int(inner_id)}
+    if cargo_ids:
+        payload["cargo_ids"] = cargo_ids
+    created = adapter.fbo_cargo_labels_create(payload)
+    operation_id = str(created.get("operation_id") or "").strip()
+    if not operation_id:
+        raise ValueError("Ozon не вернул operation_id для этикеток")
+    last: dict[str, Any] = {}
+    for _ in range(25):
+        last = adapter.fbo_cargo_labels_get({"operation_id": operation_id})
+        status = str(last.get("status") or "").upper()
+        if status == "SUCCESS":
+            result = last.get("result") or {}
+            url = str(result.get("file_url") or "").strip()
+            if url:
+                resp = requests.get(url, timeout=120)
+                resp.raise_for_status()
+                return resp.content
+            file_guid = str(result.get("file_guid") or "").strip()
+            if file_guid:
+                try:
+                    return adapter.fbo_cargo_labels_file(file_guid)
+                except Exception:
+                    pass
+            raise ValueError("Ozon не вернул ссылку на PDF этикеток")
+        if status in {"FAILED", "ERROR"}:
+            raise ValueError(f"Ozon не сгенерировал этикетки: {last}")
+        time.sleep(API_PAUSE_SEC)
+    raise ValueError(f"Таймаут ожидания этикеток Ozon: {last}")
 
 
 def fetch_supply_orders_overview(
