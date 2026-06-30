@@ -1681,6 +1681,61 @@ body.wh-body {
   font-size: 0.88rem;
 }
 
+.wh-fbo-pool-hint {
+  font-size: 0.82rem;
+  margin: 0 0 0.4rem;
+}
+
+.wh-fbo-product-row {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+}
+
+.wh-fbo-product-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--wh-border);
+  flex-shrink: 0;
+}
+
+.wh-fbo-product-thumb--empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #eef1f5;
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.wh-fbo-product-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.wh-fbo-product-sku {
+  font-size: 0.78rem;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.wh-fbo-product-name {
+  font-size: 0.88rem;
+  line-height: 1.25;
+  margin: 0.1rem 0;
+}
+
+.wh-fbo-pool-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
 .wh-fbo-pool-qty-label {
   font-size: 0.82rem;
   margin-left: 0.35rem;
@@ -1728,8 +1783,81 @@ body.wh-body {
 }
 
 .wh-fbo-cargo-line {
-  padding: 0.25rem 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #f0f2f5;
   font-size: 0.88rem;
+}
+
+.wh-fbo-cargo-line:last-child {
+  border-bottom: none;
+}
+
+.wh-fbo-cargo-line-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.wh-fbo-cargo-line-fields input[type="number"] {
+  width: 4rem;
+}
+
+.wh-fbo-cargo-line-fields input[type="date"] {
+  font-size: 0.82rem;
+}
+
+.wh-fbo-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 12000;
+  padding: 1rem;
+}
+
+.wh-fbo-modal {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  width: min(100%, 22rem);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.wh-fbo-modal-product {
+  display: flex;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.wh-fbo-modal-field {
+  display: block;
+  margin-bottom: 0.55rem;
+  font-size: 0.9rem;
+}
+
+.wh-fbo-modal-field input {
+  display: block;
+  width: 100%;
+  margin-top: 0.2rem;
+}
+
+.wh-fbo-modal-hint {
+  font-size: 0.82rem;
+  margin: 0 0 0.75rem;
+}
+
+.wh-fbo-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .wh-fbo-badge {

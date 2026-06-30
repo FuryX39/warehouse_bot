@@ -759,6 +759,64 @@ def poll_cargoes_create_info(adapter: OzonAdapter, operation_id: str) -> dict[st
     return last
 
 
+def fetch_ozon_cargoes(
+    adapter: OzonAdapter,
+    supply: dict[str, Any],
+    *,
+    inner_supply_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Загрузить грузоместа поставки из Ozon (состав — через bundle каждого ГМ)."""
+    sid = int(inner_supply_id) if inner_supply_id is not None else resolve_inner_supply_id(adapter, supply)
+    try:
+        data = adapter.fbo_cargoes_get([sid])
+    except Exception:
+        data = _post(adapter, "/v1/cargoes/get", {"supply_ids": [sid]}, timeout=120)
+    supplies = list(data.get("supplies") or data.get("supply") or [])
+    if not supplies and data.get("supplies_cargoes"):
+        supplies = [{"supply_id": sid, "cargoes": []}]
+        for block in data.get("supplies_cargoes") or []:
+            if int(block.get("supply_id") or 0) == sid:
+                supplies[0]["cargoes"] = [
+                    {"cargo_id": c.get("cargo_id"), "bundle_id": c.get("bundle_id")}
+                    for c in (block.get("cargoes_without_transport_cargoes") or [])
+                ]
+                break
+
+    out: list[dict[str, Any]] = []
+    for sup in supplies:
+        for idx, cargo in enumerate(sup.get("cargoes") or []):
+            cargo_id = str(cargo.get("cargo_id") or "").strip()
+            bundle_id = str(cargo.get("bundle_id") or "").strip()
+            items: list[dict[str, Any]] = []
+            if bundle_id:
+                try:
+                    for bi in get_bundle_items(adapter, bundle_id):
+                        offer = str(bi.get("offer_id") or bi.get("sku") or "").strip()
+                        qty = int(bi.get("quantity") or 0)
+                        if not offer or qty <= 0:
+                            continue
+                        items.append(
+                            {
+                                "sku": offer,
+                                "name": str(bi.get("name") or ""),
+                                "quantity": qty,
+                            }
+                        )
+                except Exception:
+                    pass
+            if not cargo_id and not items:
+                continue
+            out.append(
+                {
+                    "cargo_number": str(idx + 1),
+                    "ozon_cargo_id": cargo_id,
+                    "comment": "",
+                    "items": items,
+                }
+            )
+    return out
+
+
 def fetch_supply_orders_overview(
     adapter: OzonAdapter,
     *,

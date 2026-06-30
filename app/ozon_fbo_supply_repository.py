@@ -426,6 +426,19 @@ class OzonFboSupplyRepository:
             rows = session.scalars(q.limit(500)).all()
             return [self._row(session, r, include_details=False) for r in rows]
 
+    def catalog_map_for_supplies(self, supplies: list[FboSupplyRow]) -> dict[str, dict[str, Any]]:
+        skus: list[str] = []
+        for supply in supplies:
+            for item in supply.items:
+                skus.append(item.sku)
+            for cargo in supply.cargoes:
+                for item in cargo.items:
+                    skus.append(item.sku)
+        return self.catalog_repo.lookup_products_by_skus(skus)
+
+    def catalog_map_for_supply(self, supply: FboSupplyRow) -> dict[str, dict[str, Any]]:
+        return self.catalog_map_for_supplies([supply])
+
     def get_supply(self, supply_id: int) -> FboSupplyRow | None:
         with Session(self.engine) as session:
             row = session.get(OzonFboSupply, int(supply_id))
@@ -518,7 +531,38 @@ class OzonFboSupplyRepository:
             row = session.get(OzonFboSupply, int(supply_id))
             if row is None:
                 return False
+            cargo_ids = [
+                int(r.id)
+                for r in session.scalars(
+                    select(OzonFboCargo).where(OzonFboCargo.supply_id == int(supply_id))
+                ).all()
+            ]
+            if cargo_ids:
+                session.execute(delete(OzonFboCargoItem).where(OzonFboCargoItem.cargo_id.in_(cargo_ids)))
+            session.execute(delete(OzonFboCargo).where(OzonFboCargo.supply_id == int(supply_id)))
+            session.execute(delete(OzonFboSupplyItem).where(OzonFboSupplyItem.supply_id == int(supply_id)))
             session.delete(row)
+            session.commit()
+            return True
+
+    def delete_batch(self, batch_id: int) -> bool:
+        with Session(self.engine) as session:
+            batch = session.get(OzonFboBatch, int(batch_id))
+            if batch is None:
+                return False
+            supply_ids = [
+                int(r.id)
+                for r in session.scalars(
+                    select(OzonFboSupply).where(OzonFboSupply.batch_id == int(batch_id))
+                ).all()
+            ]
+        for sid in supply_ids:
+            self.delete_supply(sid)
+        with Session(self.engine) as session:
+            batch = session.get(OzonFboBatch, int(batch_id))
+            if batch is None:
+                return True
+            session.delete(batch)
             session.commit()
             return True
 
@@ -774,7 +818,12 @@ class OzonFboSupplyRepository:
         )
 
 
-def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[str, Any]:
+def supply_to_dict(
+    row: FboSupplyRow,
+    *,
+    include_details: bool = True,
+    catalog_map: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     data = {
         "id": row.id,
         "batch_id": row.batch_id,
@@ -814,14 +863,7 @@ def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[s
     }
     if include_details:
         data["items"] = [
-            {
-                "id": i.id,
-                "product_id": i.product_id,
-                "sku": i.sku,
-                "name": i.name,
-                "quantity": i.quantity,
-                "sort_order": i.sort_order,
-            }
+            _supply_item_dict(i, catalog_map)
             for i in row.items
         ]
         data["cargoes"] = [
@@ -832,15 +874,7 @@ def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[s
                 "comment": c.comment,
                 "sort_order": c.sort_order,
                 "items": [
-                    {
-                        "id": i.id,
-                        "product_id": i.product_id,
-                        "sku": i.sku,
-                        "name": i.name,
-                        "quantity": i.quantity,
-                        "expiration_date": i.expiration_date,
-                        "sort_order": i.sort_order,
-                    }
+                    _cargo_item_dict(i, catalog_map)
                     for i in c.items
                 ],
             }
@@ -849,7 +883,45 @@ def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[s
     return data
 
 
-def batch_to_dict(row: FboBatchRow, *, include_details: bool = True) -> dict[str, Any]:
+def _catalog_entry(catalog_map: dict[str, dict[str, Any]] | None, sku: str) -> dict[str, Any] | None:
+    if not catalog_map:
+        return None
+    return catalog_map.get(str(sku or "").strip().casefold())
+
+
+def _supply_item_dict(item: FboSupplyItemRow, catalog_map: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
+    cat = _catalog_entry(catalog_map, item.sku)
+    return {
+        "id": item.id,
+        "product_id": item.product_id or (cat["id"] if cat else None),
+        "sku": item.sku,
+        "name": item.name or (cat["name"] if cat else ""),
+        "quantity": item.quantity,
+        "sort_order": item.sort_order,
+        "image_url": (cat["image_url"] if cat else "") or "",
+    }
+
+
+def _cargo_item_dict(item: FboCargoItemRow, catalog_map: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
+    cat = _catalog_entry(catalog_map, item.sku)
+    return {
+        "id": item.id,
+        "product_id": item.product_id or (cat["id"] if cat else None),
+        "sku": item.sku,
+        "name": item.name or (cat["name"] if cat else ""),
+        "quantity": item.quantity,
+        "expiration_date": item.expiration_date,
+        "sort_order": item.sort_order,
+        "image_url": (cat["image_url"] if cat else "") or "",
+    }
+
+
+def batch_to_dict(
+    row: FboBatchRow,
+    *,
+    include_details: bool = True,
+    catalog_map: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     data = {
         "id": row.id,
         "title": row.title,
@@ -870,7 +942,9 @@ def batch_to_dict(row: FboBatchRow, *, include_details: bool = True) -> dict[str
         "supply_count": row.supply_count,
     }
     if include_details:
-        data["supplies"] = [supply_to_dict(s, include_details=True) for s in row.supplies]
+        data["supplies"] = [
+            supply_to_dict(s, include_details=True, catalog_map=catalog_map) for s in row.supplies
+        ]
     return data
 
 

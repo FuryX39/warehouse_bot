@@ -282,7 +282,8 @@
               "<td>" + esc(b.timeslot_label || "—") + "</td>" +
               "<td>" + esc(b.supply_count) + "</td>" +
               "<td>" + esc(b.status_label || batchStatusLabel(b.status)) + "</td>" +
-              "<td>" + esc(formatTs(b.updated_at_ts)) + "</td></tr>"
+              "<td>" + esc(formatTs(b.updated_at_ts)) + '</td>' +
+              '<td><button type="button" class="wh-btn wh-btn-sm wh-btn-danger wh-fbo-batch-del" data-id="' + esc(b.id) + '">Удалить</button></td></tr>'
             );
           })
           .join("");
@@ -295,7 +296,7 @@
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Пакеты в системе</h4>' +
           (batchRows
             ? '<table class="wh-employees-table wh-crm-table wh-fbo-batch-table"><thead><tr>' +
-              "<th>№</th><th>Название</th><th>Доставка</th><th>Слот</th><th>Заявок</th><th>Статус</th><th>Обновлено</th>" +
+              "<th>№</th><th>Название</th><th>Доставка</th><th>Слот</th><th>Заявок</th><th>Статус</th><th>Обновлено</th><th></th>" +
               "</tr></thead><tbody>" + batchRows + "</tbody></table>"
             : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
           "</section>" +
@@ -314,8 +315,23 @@
         bindOzonListEvents(tab, item, root);
         root.querySelectorAll(".wh-fbo-batch-table tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
-          tr.addEventListener("click", function () {
+          tr.addEventListener("click", function (e) {
+            if (e.target && e.target.closest(".wh-fbo-batch-del")) return;
             renderBatchDetail(tab, item, parseInt(tr.getAttribute("data-id"), 10));
+          });
+        });
+        root.querySelectorAll(".wh-fbo-batch-del").forEach(function (btn) {
+          btn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            var id = btn.getAttribute("data-id");
+            if (!confirm("Удалить пакет #" + id + " из системы? Заявки в Ozon не затрагиваются.")) return;
+            fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + id, { method: "DELETE" })
+              .then(function () {
+                renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
+              })
+              .catch(function (err) {
+                setMsg(root.querySelector("#whFboListMsg"), err.message, true);
+              });
           });
         });
         if (opts.reloadOzon && ozonOrdersLoaded) {
@@ -832,26 +848,32 @@
     });
   }
 
-  function cargoStateFromSupply(supply) {
-    var cargoes = (supply.cargoes || []).map(function (c) {
-      return {
-        cargo_number: c.cargo_number,
-        comment: c.comment || "",
-        items: (c.items || []).map(function (i) {
-          return {
-            sku: i.sku,
-            name: i.name,
-            product_id: i.product_id,
-            quantity: i.quantity,
-            expiration_date: i.expiration_date || "",
-          };
-        }),
-      };
+  function supplyNeedsOzonCargoesSync(s) {
+    if (!s.ozon_supply_id && !s.ozon_order_id) return false;
+    var cargoes = s.cargoes || [];
+    if (!cargoes.length) return true;
+    return !cargoes.some(function (c) {
+      return (c.ozon_cargo_id && String(c.ozon_cargo_id).trim()) || (c.items && c.items.length);
     });
-    if (!cargoes.length) {
-      cargoes.push({ cargo_number: "1", comment: "", items: [] });
-    }
-    return cargoes;
+  }
+
+  function batchNeedsOzonCargoesSync(batch) {
+    return (batch.supplies || []).some(supplyNeedsOzonCargoesSync);
+  }
+
+  function fetchBatchData(batchId, opts) {
+    opts = opts || {};
+    return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId).then(function (data) {
+      if (!opts.syncOzonCargoes || !batchNeedsOzonCargoesSync(data.batch)) {
+        return data;
+      }
+      return fetchJson(
+        "/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId + "/cargoes/sync-from-ozon",
+        { method: "POST", body: "{}" }
+      ).then(function () {
+        return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
+      });
+    });
   }
 
   function allocatedMap(cargoes, planItems) {
@@ -865,22 +887,142 @@
     (planItems || []).forEach(function (it) {
       var left = Number(it.quantity || 0) - (alloc[it.sku] || 0);
       if (left > 0) {
-        pool.push({ sku: it.sku, name: it.name, product_id: it.product_id, quantity: left });
+        pool.push({
+          sku: it.sku,
+          name: it.name,
+          product_id: it.product_id,
+          image_url: it.image_url || "",
+          quantity: left,
+        });
       }
     });
     return pool;
   }
 
+  function planQtyForSku(supply, sku) {
+    var total = 0;
+    (supply.items || []).forEach(function (it) {
+      if (it.sku === sku) total += Number(it.quantity || 0);
+    });
+    return total;
+  }
+
+  function allocatedQtyForSku(cargoes, sku, exceptCargoIdx, exceptItemIdx) {
+    var used = 0;
+    (cargoes || []).forEach(function (c, cIdx) {
+      (c.items || []).forEach(function (it, iIdx) {
+        if (it.sku !== sku) return;
+        if (cIdx === exceptCargoIdx && iIdx === exceptItemIdx) return;
+        used += Number(it.quantity || 0);
+      });
+    });
+    return used;
+  }
+
+  function maxAllocatable(supply, sku, exceptCargoIdx, exceptItemIdx) {
+    var cargoes = supply._cargoesDraft || supply.cargoes || [];
+    var plan = planQtyForSku(supply, sku);
+    var used = allocatedQtyForSku(cargoes, sku, exceptCargoIdx, exceptItemIdx);
+    return Math.max(0, plan - used);
+  }
+
+  function renderProductThumb(imageUrl, name) {
+    if (imageUrl) {
+      return '<img class="wh-fbo-product-thumb" src="' + esc(imageUrl) + '" alt="" loading="lazy" />';
+    }
+    var letter = String(name || "?").trim().charAt(0) || "?";
+    return '<span class="wh-fbo-product-thumb wh-fbo-product-thumb--empty">' + esc(letter) + "</span>";
+  }
+
+  function showCargoAddDialog(info) {
+    return new Promise(function (resolve, reject) {
+      var overlay = document.createElement("div");
+      overlay.className = "wh-fbo-modal-overlay";
+      var defaultQty = Math.max(1, Math.min(info.maxQty || 1, info.qty || 1));
+      overlay.innerHTML =
+        '<div class="wh-fbo-modal" role="dialog">' +
+        '<div class="wh-fbo-modal-product">' +
+        renderProductThumb(info.image_url, info.name) +
+        "<div><strong>" + esc(info.name || info.sku) + "</strong>" +
+        '<div class="wh-muted">Артикул ' + esc(info.sku) + "</div></div></div>" +
+        '<label class="wh-fbo-modal-field">Количество' +
+        ' <input type="number" class="wh-fbo-modal-qty" min="1" max="' + esc(info.maxQty) + '" value="' + esc(defaultQty) + '" /></label>' +
+        '<label class="wh-fbo-modal-field">Годен до' +
+        ' <input type="date" class="wh-fbo-modal-exp" value="' + esc(info.expiration_date || "") + '" /></label>' +
+        '<p class="wh-muted wh-fbo-modal-hint">Доступно к распределению: ' + esc(info.maxQty) + " шт.</p>" +
+        '<div class="wh-fbo-modal-actions">' +
+        '<button type="button" class="wh-btn wh-fbo-modal-cancel">Отмена</button>' +
+        '<button type="button" class="wh-btn wh-btn-primary wh-fbo-modal-ok">Добавить в ГМ</button>' +
+        "</div></div>";
+      document.body.appendChild(overlay);
+      var qtyInp = overlay.querySelector(".wh-fbo-modal-qty");
+      var expInp = overlay.querySelector(".wh-fbo-modal-exp");
+      function close() {
+        overlay.remove();
+      }
+      overlay.querySelector(".wh-fbo-modal-cancel").addEventListener("click", function () {
+        close();
+        reject(new Error("cancelled"));
+      });
+      overlay.addEventListener("click", function (e) {
+        if (e.target === overlay) {
+          close();
+          reject(new Error("cancelled"));
+        }
+      });
+      overlay.querySelector(".wh-fbo-modal-ok").addEventListener("click", function () {
+        var qty = Math.max(1, parseInt(qtyInp.value || "1", 10) || 1);
+        qty = Math.min(qty, info.maxQty || qty);
+        close();
+        resolve({ quantity: qty, expiration_date: expInp.value || "" });
+      });
+      setTimeout(function () { qtyInp.focus(); qtyInp.select(); }, 0);
+    });
+  }
+
+  function cargoStateFromSupply(supply) {
+    var cargoes = (supply.cargoes || []).map(function (c) {
+      return {
+        cargo_number: c.cargo_number,
+        ozon_cargo_id: c.ozon_cargo_id || "",
+        comment: c.comment || "",
+        items: (c.items || []).map(function (i) {
+          return {
+            sku: i.sku,
+            name: i.name,
+            product_id: i.product_id,
+            image_url: i.image_url || "",
+            quantity: i.quantity,
+            expiration_date: i.expiration_date || "",
+          };
+        }),
+      };
+    });
+    if (!cargoes.length) {
+      cargoes.push({ cargo_number: "1", ozon_cargo_id: "", comment: "", items: [] });
+    }
+    return cargoes;
+  }
+
   function renderCargoBoard(supply, cargoes) {
+    supply._cargoesDraft = cargoes;
     var pool = allocatedMap(cargoes, supply.items || []);
     var poolHtml = pool.length
       ? pool
           .map(function (it) {
             return (
-              '<div class="wh-fbo-pool-item" draggable="true" data-sku="' + esc(it.sku) + '" data-name="' + esc(it.name) + '" data-product-id="' + esc(it.product_id || "") + '" data-max="' + esc(it.quantity) + '">' +
-              esc(it.name || it.sku) + " · " + esc(it.sku) +
-              ' <span class="wh-muted">(остаток ' + esc(it.quantity) + ")</span> " +
-              '<label class="wh-fbo-pool-qty-label">× <input type="number" min="1" max="' + esc(it.quantity) + '" class="wh-fbo-pool-qty" value="' + esc(it.quantity) + '" /></label></div>'
+              '<div class="wh-fbo-pool-item" draggable="true" data-sku="' + esc(it.sku) + '" data-name="' + esc(it.name) + '" data-product-id="' + esc(it.product_id || "") + '" data-image="' + esc(it.image_url || "") + '" data-max="' + esc(it.quantity) + '">' +
+              '<div class="wh-fbo-product-row">' +
+              renderProductThumb(it.image_url, it.name) +
+              '<div class="wh-fbo-product-meta">' +
+              '<div class="wh-fbo-product-sku">' + esc(it.sku) + "</div>" +
+              '<div class="wh-fbo-product-name">' + esc(it.name || it.sku) + "</div>" +
+              '<div class="wh-muted">Остаток: ' + esc(it.quantity) + " шт.</div>" +
+              "</div></div>" +
+              '<div class="wh-fbo-pool-actions">' +
+              '<label class="wh-fbo-pool-qty-label">Взять <input type="number" min="1" max="' + esc(it.quantity) + '" class="wh-fbo-pool-qty" value="1" /> шт.</label>' +
+              '<button type="button" class="wh-btn wh-btn-sm wh-fbo-pool-add" title="Добавить в грузоместо">+</button>' +
+              "</div></div>"
             );
           })
           .join("")
@@ -889,16 +1031,26 @@
       .map(function (cargo, cIdx) {
         var itemsHtml = (cargo.items || [])
           .map(function (it, iIdx) {
+            var maxQ = maxAllocatable(supply, it.sku, cIdx, iIdx) + Number(it.quantity || 0);
             return (
               '<div class="wh-fbo-cargo-line" data-cargo="' + cIdx + '" data-item="' + iIdx + '">' +
-              esc(it.name || it.sku) + " × " + esc(it.quantity) +
-              ' <button type="button" class="wh-btn wh-btn-sm wh-fbo-line-remove" data-cargo="' + cIdx + '" data-item="' + iIdx + '">×</button></div>'
+              '<div class="wh-fbo-product-row">' +
+              renderProductThumb(it.image_url, it.name) +
+              '<div class="wh-fbo-product-meta">' +
+              '<div class="wh-fbo-product-sku">' + esc(it.sku) + "</div>" +
+              '<div class="wh-fbo-product-name">' + esc(it.name || it.sku) + "</div>" +
+              '<div class="wh-fbo-cargo-line-fields">' +
+              '<label>Кол-во <input type="number" min="1" max="' + esc(maxQ) + '" class="wh-fbo-line-qty" value="' + esc(it.quantity) + '" /></label>' +
+              '<label>Годен до <input type="date" class="wh-fbo-line-exp" value="' + esc(it.expiration_date || "") + '" /></label>' +
+              "</div></div></div>" +
+              '<button type="button" class="wh-btn wh-btn-sm wh-fbo-line-remove" data-cargo="' + cIdx + '" data-item="' + iIdx + '" title="Убрать">×</button></div>'
             );
           })
           .join("");
         return (
           '<div class="wh-fbo-cargo-drop" data-cargo="' + cIdx + '">' +
           '<div class="wh-fbo-cargo-drop-head">ГМ #' + esc(cargo.cargo_number || cIdx + 1) +
+          (cargo.ozon_cargo_id ? ' <span class="wh-muted">(Ozon ' + esc(cargo.ozon_cargo_id) + ")</span>" : "") +
           ' <button type="button" class="wh-btn wh-btn-sm wh-fbo-cargo-del" data-cargo="' + cIdx + '">Удалить</button></div>' +
           '<div class="wh-fbo-cargo-drop-body">' + (itemsHtml || '<span class="wh-muted">Перетащите товар сюда</span>') + "</div></div>"
         );
@@ -906,10 +1058,59 @@
       .join("");
     return (
       '<div class="wh-fbo-cargo-board" data-supply-id="' + esc(supply.id) + '">' +
-      '<div class="wh-fbo-pool"><h5>Нераспределено</h5><div class="wh-fbo-pool-list">' + poolHtml + "</div></div>" +
+      '<div class="wh-fbo-pool"><h5>Нераспределено</h5><p class="wh-muted wh-fbo-pool-hint">Укажите количество и перетащите в ГМ. Shift — весь остаток.</p>' +
+      '<div class="wh-fbo-pool-list">' + poolHtml + "</div></div>" +
       '<div class="wh-fbo-cargoes-col"><h5>Грузоместа <button type="button" class="wh-btn wh-btn-sm wh-fbo-add-cargo" data-supply-id="' + esc(supply.id) + '">+ ГМ</button></h5>' +
       cargoesHtml + "</div></div>"
     );
+  }
+
+  function addItemToCargo(supply, cIdx, payload, qty, expirationDate) {
+    var left = maxAllocatable(supply, payload.sku, -1, -1);
+    if (left < 1) return false;
+    var moveQty = Math.min(qty || 1, left);
+    var exp = expirationDate || "";
+    var items = supply._cargoesDraft[cIdx].items || [];
+    var existing = items.find(function (x) {
+      return x.sku === payload.sku && (x.expiration_date || "") === exp;
+    });
+    if (existing) {
+      var room = maxAllocatable(supply, payload.sku, cIdx, items.indexOf(existing)) + Number(existing.quantity || 0);
+      existing.quantity = Math.min(Number(existing.quantity || 0) + moveQty, room);
+    } else {
+      items.push({
+        sku: payload.sku,
+        name: payload.name,
+        product_id: payload.product_id,
+        image_url: payload.image_url || "",
+        quantity: moveQty,
+        expiration_date: exp,
+      });
+    }
+    return true;
+  }
+
+  function poolPayloadFromEl(el) {
+    var qtyInp = el.querySelector(".wh-fbo-pool-qty");
+    var maxQty = parseInt(el.getAttribute("data-max") || "1", 10) || 1;
+    var qty = qtyInp ? parseInt(qtyInp.value || "1", 10) || 1 : 1;
+    return {
+      sku: el.getAttribute("data-sku"),
+      name: el.getAttribute("data-name"),
+      product_id: el.getAttribute("data-product-id") || null,
+      image_url: el.getAttribute("data-image") || "",
+      quantity: Math.max(1, Math.min(maxQty, qty)),
+      maxQty: maxQty,
+    };
+  }
+
+  function rerenderCargoSection(root, batch, tab, item, batchId, supplyId) {
+    var supply = getSupplyDraft(root, supplyId);
+    if (!supply) return;
+    var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
+    if (!section) return;
+    section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
+    bindCargoBoard(root, batch, tab, item, batchId);
   }
 
   function renderBatchDetail(tab, item, batchId) {
@@ -917,9 +1118,16 @@
     preparePanel(tab, item);
     var root = panelEl();
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
-    fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId)
+    fetchBatchData(batchId, { syncOzonCargoes: true })
       .then(function (data) {
-        var batch = data.batch;
+        paintBatchDetail(tab, item, batchId, root, data.batch);
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
+  function paintBatchDetail(tab, item, batchId, root, batch) {
         var supplies = batch.supplies || [];
         var supplySections = supplies
           .map(function (s) {
@@ -933,10 +1141,12 @@
               '<p class="wh-muted">' + esc(s.ozon_warehouse_name) + " · " + esc(s.timeslot_label || "") + "</p>" +
               renderCargoBoard(s, cargoes) +
               '<div class="wh-fbo-supply-actions">' +
+              '<button type="button" class="wh-btn wh-fbo-sync-cargoes" data-supply-id="' + esc(s.id) + '">Загрузить ГМ из Ozon</button>' +
               '<button type="button" class="wh-btn wh-fbo-save-cargoes" data-supply-id="' + esc(s.id) + '">Сохранить грузоместа</button>' +
               '<button type="button" class="wh-btn wh-fbo-send-cargoes" data-supply-id="' + esc(s.id) + '">Отправить в Ozon</button>' +
               '<button type="button" class="wh-btn wh-fbo-gen-labels" data-supply-id="' + esc(s.id) + '">Этикетки</button>' +
               '<a class="wh-btn" href="/api/warehouse/marketplaces/ozon-fbo/supplies/' + esc(s.id) + '/labels.pdf" target="_blank">PDF</a>' +
+              '<button type="button" class="wh-btn wh-btn-danger wh-fbo-del-supply" data-supply-id="' + esc(s.id) + '">Удалить из системы</button>' +
               "</div></section>"
             );
           })
@@ -945,9 +1155,11 @@
           '<div class="wh-fbo-layout">' +
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whFboBatchBack">&larr; К списку</button>' +
+          '<button type="button" class="wh-btn" id="whFboSyncAllCargoes">Загрузить все ГМ из Ozon</button>' +
           '<button type="button" class="wh-btn" id="whFboSendAllCargoes">Отправить все ГМ в Ozon</button>' +
           '<button type="button" class="wh-btn" id="whFboGenAllLabels">Сгенерировать этикетки</button>' +
           '<a class="wh-btn wh-btn-primary" id="whFboAllLabelsPdf" href="/api/warehouse/marketplaces/ozon-fbo/batches/' + esc(batchId) + '/labels.pdf" target="_blank">Скачать все этикетки (PDF)</a>' +
+          '<button type="button" class="wh-btn wh-btn-danger" id="whFboDeleteBatch">Удалить пакет из системы</button>' +
           "</div>" +
           '<p class="wh-msg" id="whFboBatchMsg"></p>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">' + esc(batch.title) + "</h4>" +
@@ -958,6 +1170,31 @@
         root._batchData = batch;
         root.querySelector("#whFboBatchBack").addEventListener("click", function () {
           renderBatchList(tab, item);
+        });
+        root.querySelector("#whFboDeleteBatch").addEventListener("click", function () {
+          if (!confirm("Удалить пакет «" + batch.title + "» из системы? Заявки в Ozon останутся.")) return;
+          var msg = root.querySelector("#whFboBatchMsg");
+          fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId, { method: "DELETE" })
+            .then(function () {
+              renderBatchList(tab, item);
+            })
+            .catch(function (err) { setMsg(msg, err.message, true); });
+        });
+        root.querySelector("#whFboSyncAllCargoes").addEventListener("click", function () {
+          var msg = root.querySelector("#whFboBatchMsg");
+          setMsg(msg, "Загрузка грузомест из Ozon…", false);
+          fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId + "/cargoes/sync-from-ozon", {
+            method: "POST",
+            body: "{}",
+          })
+            .then(function () {
+              return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
+            })
+            .then(function (fresh) {
+              paintBatchDetail(tab, item, batchId, root, fresh.batch);
+              setMsg(msg, "Грузоместа загружены из Ozon.", false);
+            })
+            .catch(function (err) { setMsg(msg, err.message, true); });
         });
         root.querySelector("#whFboSendAllCargoes").addEventListener("click", function () {
           var msg = root.querySelector("#whFboBatchMsg");
@@ -997,11 +1234,7 @@
             setMsg(msg, "Запрос отправлен. Через минуту можно скачать PDF.", false);
           }).catch(function (err) { setMsg(msg, err.message, true); });
         });
-        bindCargoBoard(root, batch);
-      })
-      .catch(function (err) {
-        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
-      });
+        bindCargoBoard(root, batch, tab, item, batchId);
   }
 
   function getSupplyDraft(root, supplyId) {
@@ -1013,26 +1246,44 @@
     return null;
   }
 
-  function bindCargoBoard(root, batch) {
+  function bindCargoBoard(root, batch, tab, item, batchId) {
     root.querySelectorAll(".wh-fbo-pool-item").forEach(function (el) {
       el.addEventListener("dragstart", function (e) {
-        var qtyInp = el.querySelector(".wh-fbo-pool-qty");
-        var maxQty = parseInt(el.getAttribute("data-max") || "1", 10) || 1;
-        var qty = qtyInp ? parseInt(qtyInp.value || "1", 10) || 1 : maxQty;
-        if (e.shiftKey) qty = maxQty;
-        qty = Math.max(1, Math.min(maxQty, qty));
-        dragPayload = {
-          sku: el.getAttribute("data-sku"),
-          name: el.getAttribute("data-name"),
-          product_id: el.getAttribute("data-product-id") || null,
-          quantity: qty,
-        };
+        var payload = poolPayloadFromEl(el);
+        if (e.shiftKey) payload.quantity = payload.maxQty;
+        dragPayload = payload;
         e.dataTransfer.setData("text/plain", dragPayload.sku);
       });
-      var qtyInp = el.querySelector(".wh-fbo-pool-qty");
-      if (qtyInp) {
-        qtyInp.addEventListener("mousedown", function (e) { e.stopPropagation(); });
-        qtyInp.addEventListener("click", function (e) { e.stopPropagation(); });
+      el.querySelectorAll(".wh-fbo-pool-qty, .wh-fbo-pool-add").forEach(function (inp) {
+        inp.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+        inp.addEventListener("click", function (e) { e.stopPropagation(); });
+      });
+      var addBtn = el.querySelector(".wh-fbo-pool-add");
+      if (addBtn) {
+        addBtn.addEventListener("click", function () {
+          var board = el.closest(".wh-fbo-cargo-board");
+          var supplyId = board.getAttribute("data-supply-id");
+          var supply = getSupplyDraft(root, supplyId);
+          if (!supply) return;
+          var payload = poolPayloadFromEl(el);
+          var left = maxAllocatable(supply, payload.sku, -1, -1);
+          if (left < 1) return;
+          var cIdx = 0;
+          if (!supply._cargoesDraft.length) {
+            supply._cargoesDraft.push({ cargo_number: "1", comment: "", items: [] });
+          }
+          showCargoAddDialog({
+            sku: payload.sku,
+            name: payload.name,
+            image_url: payload.image_url,
+            product_id: payload.product_id,
+            maxQty: left,
+            qty: payload.quantity,
+          }).then(function (result) {
+            addItemToCargo(supply, cIdx, payload, result.quantity, result.expiration_date);
+            rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
+          }).catch(function () {});
+        });
       }
     });
     root.querySelectorAll(".wh-fbo-cargo-drop-body").forEach(function (zone) {
@@ -1048,18 +1299,50 @@
         var supply = getSupplyDraft(root, supplyId);
         if (!supply) return;
         var cIdx = parseInt(cargoEl.getAttribute("data-cargo"), 10);
-        var pool = allocatedMap(supply._cargoesDraft, supply.items || []);
-        var left = 0;
-        pool.forEach(function (p) { if (p.sku === dragPayload.sku) left = p.quantity; });
-        if (left < 1) return;
-        var moveQty = Math.min(dragPayload.quantity || 1, left);
-        var existing = (supply._cargoesDraft[cIdx].items || []).find(function (x) { return x.sku === dragPayload.sku; });
-        if (existing) existing.quantity += moveQty;
-        else supply._cargoesDraft[cIdx].items.push({ sku: dragPayload.sku, name: dragPayload.name, product_id: dragPayload.product_id, quantity: moveQty, expiration_date: "" });
-        var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
-        section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
-        bindCargoBoard(root, batch);
+        var left = maxAllocatable(supply, dragPayload.sku, -1, -1);
+        if (left < 1) {
+          dragPayload = null;
+          return;
+        }
+        var payload = dragPayload;
         dragPayload = null;
+        showCargoAddDialog({
+          sku: payload.sku,
+          name: payload.name,
+          image_url: payload.image_url,
+          product_id: payload.product_id,
+          maxQty: left,
+          qty: payload.quantity,
+        }).then(function (result) {
+          addItemToCargo(supply, cIdx, payload, result.quantity, result.expiration_date);
+          rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
+        }).catch(function () {});
+      });
+    });
+    root.querySelectorAll(".wh-fbo-line-qty").forEach(function (inp) {
+      inp.addEventListener("change", function () {
+        var line = inp.closest(".wh-fbo-cargo-line");
+        var supplyId = inp.closest(".wh-fbo-supply-section").getAttribute("data-supply-id");
+        var supply = getSupplyDraft(root, supplyId);
+        if (!supply || !line) return;
+        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
+        var iIdx = parseInt(line.getAttribute("data-item"), 10);
+        var lineItem = supply._cargoesDraft[cIdx].items[iIdx];
+        var maxQ = maxAllocatable(supply, lineItem.sku, cIdx, iIdx) + Number(lineItem.quantity || 0);
+        var newQty = Math.max(1, parseInt(inp.value || "1", 10) || 1);
+        lineItem.quantity = Math.min(newQty, maxQ);
+        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
+      });
+    });
+    root.querySelectorAll(".wh-fbo-line-exp").forEach(function (inp) {
+      inp.addEventListener("change", function () {
+        var line = inp.closest(".wh-fbo-cargo-line");
+        var supplyId = inp.closest(".wh-fbo-supply-section").getAttribute("data-supply-id");
+        var supply = getSupplyDraft(root, supplyId);
+        if (!supply || !line) return;
+        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
+        var iIdx = parseInt(line.getAttribute("data-item"), 10);
+        supply._cargoesDraft[cIdx].items[iIdx].expiration_date = inp.value || "";
       });
     });
     root.querySelectorAll(".wh-fbo-line-remove").forEach(function (btn) {
@@ -1070,9 +1353,7 @@
         var cIdx = parseInt(btn.getAttribute("data-cargo"), 10);
         var iIdx = parseInt(btn.getAttribute("data-item"), 10);
         supply._cargoesDraft[cIdx].items.splice(iIdx, 1);
-        var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
-        section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
-        bindCargoBoard(root, batch);
+        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
       });
     });
     root.querySelectorAll(".wh-fbo-add-cargo").forEach(function (btn) {
@@ -1081,9 +1362,7 @@
         var supply = getSupplyDraft(root, supplyId);
         if (!supply) return;
         supply._cargoesDraft.push({ cargo_number: String(supply._cargoesDraft.length + 1), comment: "", items: [] });
-        var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
-        section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
-        bindCargoBoard(root, batch);
+        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
       });
     });
     root.querySelectorAll(".wh-fbo-cargo-del").forEach(function (btn) {
@@ -1093,9 +1372,7 @@
         if (!supply) return;
         var cIdx = parseInt(btn.getAttribute("data-cargo"), 10);
         supply._cargoesDraft.splice(cIdx, 1);
-        var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
-        section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
-        bindCargoBoard(root, batch);
+        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
       });
     });
     root.querySelectorAll(".wh-fbo-save-cargoes").forEach(function (btn) {
@@ -1142,6 +1419,45 @@
         fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ozon/labels", { method: "POST", body: "{}" })
           .then(function () {
             setMsg(msg, "Запрос этикеток отправлен. Скачайте PDF через минуту.", false);
+          })
+          .catch(function (err) { setMsg(msg, err.message, true); });
+      });
+    });
+    root.querySelectorAll(".wh-fbo-sync-cargoes").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var supplyId = btn.getAttribute("data-supply-id");
+        var msg = root.querySelector("#whFboBatchMsg");
+        setMsg(msg, "Загрузка грузомест из Ozon…", false);
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ozon/cargoes/sync", {
+          method: "POST",
+          body: "{}",
+        })
+          .then(function () {
+            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
+          })
+          .then(function (fresh) {
+            paintBatchDetail(tab, item, batchId, root, fresh.batch);
+            setMsg(msg, "Грузоместа загружены из Ozon.", false);
+          })
+          .catch(function (err) { setMsg(msg, err.message, true); });
+      });
+    });
+    root.querySelectorAll(".wh-fbo-del-supply").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var supplyId = btn.getAttribute("data-supply-id");
+        if (!confirm("Удалить заявку #" + supplyId + " из системы? В Ozon она останется.")) return;
+        var msg = root.querySelector("#whFboBatchMsg");
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId, { method: "DELETE" })
+          .then(function () {
+            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
+          })
+          .then(function (fresh) {
+            if (!fresh.batch || !(fresh.batch.supplies || []).length) {
+              renderBatchList(tab, item);
+              return;
+            }
+            paintBatchDetail(tab, item, batchId, root, fresh.batch);
+            setMsg(msg, "Заявка удалена из системы.", false);
           })
           .catch(function (err) { setMsg(msg, err.message, true); });
       });

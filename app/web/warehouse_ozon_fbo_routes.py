@@ -22,6 +22,7 @@ from app.ozon_fbo_api import (
     expand_order_supplies,
     extract_draft_id,
     fetch_analytics_stocks,
+    fetch_ozon_cargoes,
     fetch_supply_orders_overview,
     get_bundle_items,
     get_supply_orders,
@@ -184,6 +185,27 @@ def register_warehouse_ozon_fbo_routes(
     def _inner_supply_id_for_labels(supply: dict[str, Any]) -> int:
         return resolve_inner_supply_id(_ozon(), supply)
 
+    def _sync_cargoes_from_ozon(supply_id: int) -> dict[str, Any]:
+        row = fbo_repo.get_supply(supply_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
+        supply = supply_to_dict(row, include_details=True)
+        ozon = _ozon()
+        try:
+            cargoes = fetch_ozon_cargoes(ozon, supply)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if cargoes:
+            updated = fbo_repo.save_cargoes(supply_id, cargoes)
+            return {
+                "supply_id": supply_id,
+                "cargo_count": len(cargoes),
+                "supply": supply_to_dict(updated, include_details=True) if updated else supply,
+            }
+        return {"supply_id": supply_id, "cargo_count": 0, "supply": supply}
+
     def _supply_payload(supply: dict, body: dict) -> dict:
         draft_id = str(body.get("draft_id") or supply.get("ozon_draft_id") or "").strip()
         timeslot_id = str(body.get("timeslot_id") or "").strip()
@@ -252,7 +274,8 @@ def register_warehouse_ozon_fbo_routes(
         row = fbo_repo.get_supply(supply_id)
         if row is None:
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
-        return {"supply": supply_to_dict(row, include_details=True)}
+        catalog_map = fbo_repo.catalog_map_for_supply(row)
+        return {"supply": supply_to_dict(row, include_details=True, catalog_map=catalog_map)}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies")
     async def api_ozon_fbo_create_supply(
@@ -287,6 +310,14 @@ def register_warehouse_ozon_fbo_routes(
         if not fbo_repo.delete_supply(supply_id):
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
         return {"ok": True}
+
+    @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/ozon/cargoes/sync")
+    async def api_ozon_fbo_sync_cargoes(
+        supply_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        result = _sync_cargoes_from_ozon(supply_id)
+        return {"ok": True, **result}
 
     @app.put("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/cargoes")
     async def api_ozon_fbo_save_cargoes(
@@ -700,7 +731,35 @@ def register_warehouse_ozon_fbo_routes(
         row = fbo_repo.get_batch(batch_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Пакет FBO не найден")
-        return {"batch": batch_to_dict(row, include_details=True)}
+        catalog_map = fbo_repo.catalog_map_for_supplies(row.supplies) if row.supplies else {}
+        return {"batch": batch_to_dict(row, include_details=True, catalog_map=catalog_map)}
+
+    @app.delete("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}")
+    async def api_ozon_fbo_delete_batch(
+        batch_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        if not fbo_repo.delete_batch(batch_id):
+            raise HTTPException(status_code=404, detail="Пакет FBO не найден")
+        return {"ok": True}
+
+    @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}/cargoes/sync-from-ozon")
+    async def api_ozon_fbo_batch_sync_cargoes(
+        batch_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        supplies = fbo_repo.list_supplies_for_batch(batch_id)
+        if not supplies:
+            raise HTTPException(status_code=404, detail="В пакете нет заявок")
+        results: list[dict[str, Any]] = []
+        for supply in supplies:
+            try:
+                results.append(_sync_cargoes_from_ozon(supply.id))
+            except HTTPException as exc:
+                results.append({"supply_id": supply.id, "error": str(exc.detail)})
+            except Exception as exc:  # noqa: BLE001
+                results.append({"supply_id": supply.id, "error": str(exc)})
+        return {"ok": True, "results": results}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/submit")
     async def api_ozon_fbo_batch_submit(
@@ -1163,6 +1222,15 @@ def register_warehouse_ozon_fbo_routes(
                     },
                     manager_user_id=user.id,
                 )
+                try:
+                    supply_dict = supply_to_dict(supply, include_details=True)
+                    ozon_cargoes = fetch_ozon_cargoes(ozon, supply_dict)
+                    if ozon_cargoes:
+                        saved = fbo_repo.save_cargoes(supply.id, ozon_cargoes)
+                        if saved:
+                            supply = saved
+                except Exception:
+                    pass
                 all_local.append(supply)
                 imported.append(
                     {

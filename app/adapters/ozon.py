@@ -159,6 +159,16 @@ class OzonAdapter(MarketplaceAdapter):
     def fbo_cargoes_delete(self, payload: dict) -> dict:
         return self._post_json("/v1/cargoes/delete", payload, timeout=90)
 
+    def fbo_cargoes_get(self, inner_supply_ids: list[int]) -> dict:
+        ids = [int(x) for x in inner_supply_ids if int(x) > 0][:100]
+        if not ids:
+            raise ValueError("Укажите supply_id поставки Ozon")
+        return self._post_json(
+            "/v2/cargoes/get",
+            {"supplies": [{"supply_id": sid} for sid in ids]},
+            timeout=120,
+        )
+
     def fbo_cargoes_rules_get(self, payload: dict) -> dict:
         return self._post_json("/v1/cargoes/rules/get", payload)
 

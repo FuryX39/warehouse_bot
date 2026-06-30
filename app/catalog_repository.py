@@ -578,6 +578,29 @@ class CatalogRepository:
                 for r in rows
             ]
 
+    def lookup_products_by_skus(self, skus: list[str]) -> dict[str, dict[str, Any]]:
+        """Ключ — sku в нижнем регистре; значение — id, sku, name, image_url."""
+        clean = [str(s).strip() for s in skus if str(s).strip()]
+        if not clean:
+            return {}
+        lowered = {s.casefold() for s in clean}
+        out: dict[str, dict[str, Any]] = {}
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(CatalogProduct).where(func.lower(CatalogProduct.sku).in_(list(lowered)))
+            ).all()
+            for row in rows:
+                key = str(row.sku or "").strip().casefold()
+                if key not in lowered:
+                    continue
+                out[key] = {
+                    "id": int(row.id),
+                    "sku": str(row.sku or ""),
+                    "name": str(row.name or ""),
+                    "image_url": str(row.image_url or ""),
+                }
+        return out
+
     def build_product_import_index(
         self,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
