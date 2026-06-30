@@ -17,6 +17,8 @@ DELIVERY_TYPES = {DELIVERY_DIRECT, DELIVERY_CROSSDOCK}
 SUPPLY_TYPE_DIRECT = "DIRECT"
 SUPPLY_TYPE_CROSSDOCK = "CROSSDOCK"
 
+DEMAND_HORIZON_DAYS = 60
+
 
 def _walk(obj: Any):
     if isinstance(obj, dict):
@@ -119,6 +121,9 @@ def rank_demand_by_clusters(
         row["turnover_grades"] = sorted(row["turnover_grades"])
         row["offer_id"] = offer_id
         row["ozon_sku"] = ozon_sku
+        ads = float(row.get("ads_cluster") or 0)
+        row["ads_per_day"] = ads
+        row["demand_60_days"] = round(ads * DEMAND_HORIZON_DAYS)
     return ranked
 
 

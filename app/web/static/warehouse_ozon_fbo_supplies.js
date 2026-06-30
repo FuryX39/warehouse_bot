@@ -321,7 +321,8 @@
           disabled +
           " /></td>" +
           "<td>" + esc(r.cluster_name) + "</td>" +
-          "<td>" + esc((r.ads_cluster || 0).toFixed(2)) + "</td>" +
+          "<td>" + esc((r.ads_per_day != null ? r.ads_per_day : r.ads_cluster || 0).toFixed(2)) + "</td>" +
+          "<td>" + esc(r.demand_60_days != null ? r.demand_60_days : Math.round((r.ads_cluster || 0) * 60)) + "</td>" +
           "<td>" + esc(r.available_stock_count || 0) + "</td>" +
           "<td>" + esc((r.turnover_grades || []).join(", ")) + "</td></tr>"
         );
@@ -329,7 +330,7 @@
       .join("");
     return (
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th></th><th>Кластер</th><th>ads_cluster</th><th>Остаток FBO</th><th>Ликвидность</th>" +
+      "<th></th><th>Кластер</th><th>Продажи в день</th><th>Потребность 60 дн.</th><th>Остаток FBO</th><th>Ликвидность</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table>"
     );
   }
