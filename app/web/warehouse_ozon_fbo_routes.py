@@ -12,20 +12,27 @@ from app.adapters.ozon import OzonAdapter
 from app.fbs_labels_common import merge_label_pdfs
 from app.ozon_fbo_api import (
     DELIVERY_CROSSDOCK,
+    build_cargoes_create_payload,
     create_draft,
     create_supply_from_draft,
     draft_create_info,
+    draft_warehouse_error_detail,
+    poll_draft_create_info,
     draft_timeslots,
+    expand_order_supplies,
     extract_draft_id,
     fetch_analytics_stocks,
     fetch_supply_orders_overview,
     get_bundle_items,
     get_supply_orders,
+    inner_supply_id_from_order,
     list_macrolocal_clusters,
     normalize_supply_order,
     parse_timeslot_days,
+    poll_cargoes_create_info,
     poll_supply_create_status,
     rank_demand_by_clusters,
+    resolve_inner_supply_id,
     resolve_offer_ids,
     dropoff_presets_from_env,
     search_dropoff_warehouses,
@@ -92,14 +99,6 @@ def register_warehouse_ozon_fbo_routes(
             "dropoff_presets": dropoff_presets_from_env(),
         }
 
-    def _ozon() -> OzonAdapter:
-        if ozon_adapter is None or not ozon_adapter.is_configured():
-            raise HTTPException(
-                status_code=400,
-                detail="Ozon API не настроен: задайте OZON_CLIENT_ID и OZON_API_KEY",
-            )
-        return ozon_adapter
-
     def _extract_first_id(data: dict, keys: tuple[str, ...]) -> str:
         stack: list[Any] = [data]
         while stack:
@@ -138,6 +137,53 @@ def register_warehouse_ozon_fbo_routes(
             "items": items,
         }
 
+    def _ozon() -> OzonAdapter:
+        if ozon_adapter is None or not ozon_adapter.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Ozon API не настроен: задайте OZON_CLIENT_ID и OZON_API_KEY",
+            )
+        return ozon_adapter
+
+    def _send_supply_cargoes_to_ozon(supply_id: int, supply: dict[str, Any]) -> dict[str, Any]:
+        ozon = _ozon()
+        inner_id = resolve_inner_supply_id(ozon, supply)
+        order_raw = str(supply.get("ozon_order_id") or "").strip()
+        inner_raw = str(supply.get("ozon_supply_id") or "").strip()
+        if str(inner_id) != inner_raw or not order_raw:
+            patch: dict[str, str] = {"ozon_supply_id": str(inner_id)}
+            if not order_raw and inner_raw and inner_raw != str(inner_id):
+                patch["ozon_order_id"] = inner_raw
+            elif order_raw:
+                patch["ozon_order_id"] = order_raw
+            fbo_repo.update_supply(supply_id, patch)
+        payload = build_cargoes_create_payload(supply, inner_supply_id=inner_id)
+        data = ozon.fbo_cargoes_create(payload)
+        operation_id = _extract_first_id(data, ("operation_id", "operationId", "task_id", "taskId"))
+        if not operation_id:
+            raise ValueError("Ozon не вернул operation_id для грузомест")
+        info = poll_cargoes_create_info(ozon, operation_id)
+        status = str(info.get("status") or "").upper()
+        if status == "FAILED" or status == "ERROR":
+            errors = info.get("errors") or (info.get("result") or {}).get("errors") or []
+            raise ValueError(f"Ozon отклонил грузоместа: {errors or info}")
+        fbo_repo.update_supply(
+            supply_id,
+            {"status": STATUS_SENT_TO_OZON, "cargoes_operation_id": operation_id},
+        )
+        updated = fbo_repo.apply_ozon_cargo_ids(supply_id, info)
+        return {
+            "operation_id": operation_id,
+            "inner_supply_id": inner_id,
+            "payload": payload,
+            "data": data,
+            "info": info,
+            "supply": supply_to_dict(updated, include_details=True) if updated else supply,
+        }
+
+    def _inner_supply_id_for_labels(supply: dict[str, Any]) -> int:
+        return resolve_inner_supply_id(_ozon(), supply)
+
     def _supply_payload(supply: dict, body: dict) -> dict:
         draft_id = str(body.get("draft_id") or supply.get("ozon_draft_id") or "").strip()
         timeslot_id = str(body.get("timeslot_id") or "").strip()
@@ -146,39 +192,6 @@ def register_warehouse_ozon_fbo_routes(
         if not timeslot_id:
             raise ValueError("Укажите timeslot_id")
         return {"draft_id": draft_id, "timeslot_id": timeslot_id}
-
-    def _cargoes_payload(supply: dict) -> dict:
-        supply_id = str(supply.get("ozon_supply_id") or "").strip()
-        if not supply_id:
-            raise ValueError("У заявки нет ID поставки Ozon")
-        cargoes = []
-        for cargo in supply.get("cargoes") or []:
-            items = []
-            for item in cargo.get("items") or []:
-                sku = str(item.get("sku") or "").strip()
-                qty = int(item.get("quantity") or 0)
-                if not sku or qty <= 0:
-                    continue
-                row = {"sku": sku, "quantity": qty}
-                exp = str(item.get("expiration_date") or "").strip()
-                if exp:
-                    row["expiration_date"] = exp
-                items.append(row)
-            if not items:
-                continue
-            cargoes.append(
-                {
-                    "cargo_number": str(cargo.get("cargo_number") or "").strip(),
-                    "items": items,
-                }
-            )
-        if not cargoes:
-            raise ValueError("Добавьте грузоместа и состав")
-        return {
-            "supply_id": supply_id,
-            "delete_current_version": True,
-            "cargoes": cargoes,
-        }
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/supplies")
     async def api_ozon_fbo_supplies(
@@ -345,18 +358,12 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
         supply = supply_to_dict(row, include_details=True)
         try:
-            payload = _cargoes_payload(supply)
-            data = _ozon().fbo_cargoes_create(payload)
+            result = _send_supply_cargoes_to_ozon(supply_id, supply)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        operation_id = _extract_first_id(data, ("operation_id", "operationId", "task_id", "taskId"))
-        fbo_repo.update_supply(
-            supply_id,
-            {"status": STATUS_SENT_TO_OZON, "cargoes_operation_id": operation_id},
-        )
-        return {"ok": True, "payload": payload, "data": data, "operation_id": operation_id}
+        return {"ok": True, **result}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/ozon/cargoes/status")
     async def api_ozon_fbo_cargoes_status(
@@ -376,6 +383,9 @@ def register_warehouse_ozon_fbo_routes(
             data = _ozon().fbo_cargoes_create_info(payload)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status = str(data.get("status") or "").upper()
+        if status == "SUCCESS":
+            fbo_repo.apply_ozon_cargo_ids(supply_id, data)
         return {"ok": True, "payload": payload, "data": data}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/ozon/cargoes/rules")
@@ -387,10 +397,11 @@ def register_warehouse_ozon_fbo_routes(
         if row is None:
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
         supply = supply_to_dict(row, include_details=True)
-        ozon_supply_id = str(supply.get("ozon_supply_id") or "").strip()
-        if not ozon_supply_id:
-            raise HTTPException(status_code=400, detail="У заявки нет ID поставки Ozon")
-        payload = {"supply_ids": [ozon_supply_id]}
+        try:
+            inner_id = resolve_inner_supply_id(_ozon(), supply)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload = {"supply_ids": [inner_id]}
         try:
             data = _ozon().fbo_cargoes_rules_get(payload)
         except Exception as exc:
@@ -406,15 +417,16 @@ def register_warehouse_ozon_fbo_routes(
         if row is None:
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
         supply = supply_to_dict(row, include_details=True)
-        ozon_supply_id = str(supply.get("ozon_supply_id") or "").strip()
-        if not ozon_supply_id:
-            raise HTTPException(status_code=400, detail="У заявки нет ID поставки Ozon")
+        try:
+            inner_id = _inner_supply_id_for_labels(supply)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         cargo_ids = [
             str(c.get("ozon_cargo_id") or "").strip()
             for c in supply.get("cargoes") or []
             if str(c.get("ozon_cargo_id") or "").strip()
         ]
-        payload: dict[str, Any] = {"supply_id": ozon_supply_id}
+        payload: dict[str, Any] = {"supply_id": inner_id}
         if cargo_ids:
             payload["cargo_ids"] = cargo_ids
         try:
@@ -429,7 +441,7 @@ def register_warehouse_ozon_fbo_routes(
                 {
                     "labels_file_guid": file_guid,
                     "labels_operation_id": operation_id,
-                    "labels_filename": f"ozon_fbo_cargo_labels_{ozon_supply_id}.pdf",
+                    "labels_filename": f"ozon_fbo_cargo_labels_{inner_id}.pdf",
                     "status": STATUS_LABELS_READY,
                 },
             )
@@ -647,11 +659,10 @@ def register_warehouse_ozon_fbo_routes(
             draft_id = extract_draft_id(created.get("response") or {})
             if not draft_id:
                 raise HTTPException(status_code=502, detail="Ozon не вернул draft_id")
-            time.sleep(5)
-            info = draft_create_info(ozon, draft_id)
+            info = poll_draft_create_info(ozon, draft_id)
             warehouse = top_warehouse_from_draft_info(info)
             if not warehouse:
-                raise HTTPException(status_code=502, detail="Нет доступного склада")
+                raise HTTPException(status_code=502, detail=draft_warehouse_error_detail(info))
             time.sleep(5)
             data = draft_timeslots(
                 ozon,
@@ -787,11 +798,10 @@ def register_warehouse_ozon_fbo_routes(
                     row["error"] = "Ozon не вернул draft_id"
                     results.append(row)
                     continue
-                time.sleep(5)
-                info = draft_create_info(ozon, draft_id)
+                info = poll_draft_create_info(ozon, draft_id)
                 warehouse = top_warehouse_from_draft_info(info)
                 if not warehouse:
-                    row["error"] = "Нет доступного склада в черновике"
+                    row["error"] = draft_warehouse_error_detail(info)
                     results.append(row)
                     continue
                 row["warehouse"] = warehouse
@@ -812,6 +822,18 @@ def register_warehouse_ozon_fbo_routes(
                     row["error"] = f"Заявка не создана: {st}"
                     results.append(row)
                     continue
+                inner_supply_id = order_id
+                try:
+                    oz_orders = get_supply_orders(ozon, [int(order_id)])
+                    if oz_orders:
+                        resolved = inner_supply_id_from_order(
+                            oz_orders[0],
+                            bundle_id=str(warehouse.get("bundle_id") or ""),
+                        )
+                        if resolved is not None:
+                            inner_supply_id = resolved
+                except Exception:
+                    pass
                 supply = fbo_repo.create_supply(
                     {
                         "batch_id": batch.id,
@@ -819,7 +841,8 @@ def register_warehouse_ozon_fbo_routes(
                         "supply_kind": supply_kind,
                         "delivery_type": delivery_type,
                         "status": STATUS_ASSIGNED,
-                        "ozon_supply_id": str(order_id),
+                        "ozon_order_id": str(order_id),
+                        "ozon_supply_id": str(inner_supply_id),
                         "ozon_draft_id": str(draft_id),
                         "ozon_bundle_id": str(warehouse.get("bundle_id") or ""),
                         "ozon_cluster_id": str(macro_id),
@@ -865,12 +888,13 @@ def register_warehouse_ozon_fbo_routes(
         out: list[dict[str, Any]] = []
         for supply in supplies:
             supply_dict = supply_to_dict(supply, include_details=True)
-            ozon_supply_id = str(supply_dict.get("ozon_supply_id") or "").strip()
-            if not ozon_supply_id:
-                out.append({"supply_id": supply.id, "error": "Нет ozon_supply_id"})
+            try:
+                inner_id = resolve_inner_supply_id(ozon, supply_dict)
+            except ValueError as exc:
+                out.append({"supply_id": supply.id, "error": str(exc)})
                 continue
             try:
-                payload: dict[str, Any] = {"supply_id": ozon_supply_id}
+                payload: dict[str, Any] = {"supply_id": inner_id}
                 cargo_ids = [
                     str(c.get("ozon_cargo_id") or "").strip()
                     for c in supply_dict.get("cargoes") or []
@@ -887,7 +911,7 @@ def register_warehouse_ozon_fbo_routes(
                         {
                             "labels_file_guid": file_guid,
                             "labels_operation_id": operation_id,
-                            "labels_filename": f"ozon_fbo_labels_{ozon_supply_id}.pdf",
+                            "labels_filename": f"ozon_fbo_labels_{inner_id}.pdf",
                             "status": STATUS_LABELS_READY,
                         },
                     )
@@ -943,14 +967,15 @@ def register_warehouse_ozon_fbo_routes(
         for supply in supplies:
             supply_dict = supply_to_dict(supply, include_details=True)
             try:
-                payload = _cargoes_payload(supply_dict)
-                data = _ozon().fbo_cargoes_create(payload)
-                operation_id = _extract_first_id(data, ("operation_id", "operationId", "task_id", "taskId"))
-                fbo_repo.update_supply(
-                    supply.id,
-                    {"status": STATUS_SENT_TO_OZON, "cargoes_operation_id": operation_id},
+                result = _send_supply_cargoes_to_ozon(supply.id, supply_dict)
+                results.append(
+                    {
+                        "supply_id": supply.id,
+                        "operation_id": result.get("operation_id"),
+                        "inner_supply_id": result.get("inner_supply_id"),
+                        "ok": True,
+                    }
                 )
-                results.append({"supply_id": supply.id, "operation_id": operation_id, "ok": True})
             except Exception as exc:  # noqa: BLE001
                 results.append({"supply_id": supply.id, "error": str(exc)})
         if any(r.get("ok") for r in results):
@@ -968,15 +993,28 @@ def register_warehouse_ozon_fbo_routes(
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         local_rows = fbo_repo.list_supplies({})
-        local_by_ozon = {
-            str(r.ozon_supply_id): r.id
-            for r in local_rows
-            if str(r.ozon_supply_id or "").strip()
-        }
+        local_by_order: dict[str, list[int]] = {}
+        local_by_inner: dict[str, int] = {}
+        for r in local_rows:
+            oid = str(r.ozon_order_id or "").strip()
+            sid = str(r.ozon_supply_id or "").strip()
+            if oid:
+                local_by_order.setdefault(oid, []).append(r.id)
+            if sid:
+                local_by_inner[sid] = r.id
         for order in overview.get("orders") or []:
             oid = str(order.get("order_id") or "")
-            order["local_supply_id"] = local_by_ozon.get(oid)
-            order["in_local_system"] = oid in local_by_ozon
+            lines = order.get("supply_lines") or []
+            inner_ids = [str(ln.get("supply_id")) for ln in lines if ln.get("supply_id")]
+            local_ids = list(local_by_order.get(oid, []))
+            for inner in inner_ids:
+                if inner in local_by_inner:
+                    lid = local_by_inner[inner]
+                    if lid not in local_ids:
+                        local_ids.append(lid)
+            order["local_supply_ids"] = local_ids
+            order["local_supply_id"] = local_ids[0] if local_ids else None
+            order["in_local_system"] = bool(local_ids)
         return {"ok": True, **overview}
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/ozon/supply-orders/{order_id}")
@@ -992,22 +1030,47 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=404, detail="Заявка не найдена в Ozon")
         order = normalize_supply_order(orders[0])
         items: list[dict[str, Any]] = []
-        if order.get("bundle_id"):
+        lines = order.get("supply_lines") or []
+        if len(lines) > 1:
+            for ln in lines:
+                bundle_id = str(ln.get("bundle_id") or "")
+                if bundle_id:
+                    try:
+                        for bi in get_bundle_items(_ozon(), bundle_id):
+                            items.append(
+                                {
+                                    "offer_id": str(bi.get("offer_id") or bi.get("sku") or ""),
+                                    "name": str(bi.get("name") or ""),
+                                    "quantity": int(bi.get("quantity") or 0),
+                                    "warehouse_name": ln.get("warehouse_name"),
+                                    "supply_id": ln.get("supply_id"),
+                                }
+                            )
+                    except Exception:
+                        pass
+        elif order.get("bundle_id"):
             try:
                 items = get_bundle_items(_ozon(), str(order["bundle_id"]))
             except Exception:
                 items = []
-        local = fbo_repo.list_supplies({"q": str(order_id)})
-        local_id = None
+        local = fbo_repo.list_supplies({})
+        local_ids: list[int] = []
         for row in local:
-            if str(row.ozon_supply_id) == str(order_id):
-                local_id = row.id
-                break
+            if str(row.ozon_order_id) == str(order_id):
+                local_ids.append(row.id)
+            elif str(row.ozon_supply_id) == str(order_id):
+                local_ids.append(row.id)
+            else:
+                for ln in lines:
+                    if ln.get("supply_id") and str(row.ozon_supply_id) == str(ln.get("supply_id")):
+                        local_ids.append(row.id)
+        local_id = local_ids[0] if local_ids else None
         return {
             "ok": True,
             "order": order,
             "items": items,
             "local_supply_id": local_id,
+            "local_supply_ids": local_ids,
             "raw": orders[0],
         }
 
@@ -1043,46 +1106,72 @@ def register_warehouse_ozon_fbo_routes(
             manager_user_id=user.id,
         )
         imported: list[dict[str, Any]] = []
+        all_local = fbo_repo.list_supplies({})
         for raw in orders:
-            norm = normalize_supply_order(raw)
-            oid = str(norm.get("order_id") or "")
-            existing = [r for r in fbo_repo.list_supplies({}) if str(r.ozon_supply_id) == oid]
-            if existing:
-                imported.append({"order_id": oid, "local_supply_id": existing[0].id, "skipped": True})
-                continue
-            items: list[dict[str, Any]] = []
-            bundle_id = str(norm.get("bundle_id") or "")
-            if bundle_id:
-                try:
-                    for bi in get_bundle_items(ozon, bundle_id):
-                        items.append(
-                            {
-                                "sku": str(bi.get("offer_id") or bi.get("sku") or ""),
-                                "name": str(bi.get("name") or ""),
-                                "quantity": int(bi.get("quantity") or 0),
-                            }
-                        )
-                except Exception:
-                    pass
-            supply = fbo_repo.create_supply(
-                {
-                    "batch_id": batch.id,
-                    "title": f"Ozon #{norm.get('order_number') or oid}",
-                    "supply_kind": str(body.get("supply_kind") or "pallet"),
-                    "delivery_type": norm.get("delivery_type") or "direct",
-                    "status": STATUS_ASSIGNED,
-                    "ozon_supply_id": oid,
-                    "ozon_bundle_id": bundle_id,
-                    "ozon_cluster_id": str(norm.get("macrolocal_cluster_id") or ""),
-                    "ozon_warehouse_id": str(norm.get("warehouse_id") or ""),
-                    "ozon_warehouse_name": str(norm.get("warehouse_name") or ""),
-                    "timeslot_from": str(norm.get("timeslot_from") or ""),
-                    "timeslot_to": str(norm.get("timeslot_to") or ""),
-                    "items": items,
-                },
-                manager_user_id=user.id,
-            )
-            imported.append({"order_id": oid, "local_supply_id": supply.id, "skipped": False})
+            for norm in expand_order_supplies(raw):
+                order_id = str(norm.get("order_id") or "")
+                inner_id = str(norm.get("supply_id") or "")
+                bundle_id = str(norm.get("bundle_id") or "")
+                dedupe_key = inner_id or f"{order_id}:{bundle_id}"
+                existing = [
+                    r
+                    for r in all_local
+                    if (inner_id and str(r.ozon_supply_id) == inner_id)
+                    or (not inner_id and str(r.ozon_supply_id) == order_id and str(r.ozon_bundle_id) == bundle_id)
+                ]
+                if existing:
+                    imported.append(
+                        {
+                            "order_id": order_id,
+                            "supply_id": inner_id,
+                            "local_supply_id": existing[0].id,
+                            "skipped": True,
+                        }
+                    )
+                    continue
+                items: list[dict[str, Any]] = []
+                if bundle_id:
+                    try:
+                        for bi in get_bundle_items(ozon, bundle_id):
+                            items.append(
+                                {
+                                    "sku": str(bi.get("offer_id") or bi.get("sku") or ""),
+                                    "name": str(bi.get("name") or ""),
+                                    "quantity": int(bi.get("quantity") or 0),
+                                }
+                            )
+                    except Exception:
+                        pass
+                cluster_label = str(norm.get("warehouse_name") or norm.get("macrolocal_cluster_id") or "")
+                supply = fbo_repo.create_supply(
+                    {
+                        "batch_id": batch.id,
+                        "title": f"Ozon #{norm.get('order_number') or order_id}"
+                        + (f" — {cluster_label}" if cluster_label else ""),
+                        "supply_kind": str(body.get("supply_kind") or "pallet"),
+                        "delivery_type": norm.get("delivery_type") or "direct",
+                        "status": STATUS_ASSIGNED,
+                        "ozon_order_id": order_id,
+                        "ozon_supply_id": inner_id or order_id,
+                        "ozon_bundle_id": bundle_id,
+                        "ozon_cluster_id": str(norm.get("macrolocal_cluster_id") or ""),
+                        "ozon_warehouse_id": str(norm.get("warehouse_id") or ""),
+                        "ozon_warehouse_name": str(norm.get("warehouse_name") or ""),
+                        "timeslot_from": str(norm.get("timeslot_from") or ""),
+                        "timeslot_to": str(norm.get("timeslot_to") or ""),
+                        "items": items,
+                    },
+                    manager_user_id=user.id,
+                )
+                all_local.append(supply)
+                imported.append(
+                    {
+                        "order_id": order_id,
+                        "supply_id": inner_id,
+                        "local_supply_id": supply.id,
+                        "skipped": False,
+                    }
+                )
         batch_row = fbo_repo.get_batch(batch.id)
         return {
             "ok": True,

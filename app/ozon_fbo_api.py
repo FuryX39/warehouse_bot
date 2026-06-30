@@ -328,8 +328,35 @@ def draft_create_info(adapter: OzonAdapter, draft_id: int) -> dict[str, Any]:
     return _post(adapter, "/v2/draft/create/info", {"draft_id": int(draft_id)}, timeout=120)
 
 
+def poll_draft_create_info(
+    adapter: OzonAdapter,
+    draft_id: int,
+    *,
+    attempts: int = 12,
+    delay: float | None = None,
+) -> dict[str, Any]:
+    pause = API_PAUSE_SEC if delay is None else delay
+    last: dict[str, Any] = {}
+    for _ in range(attempts):
+        last = draft_create_info(adapter, draft_id)
+        status = str(last.get("status") or "").upper()
+        if status in {"SUCCESS", "FAILED", "ERROR"}:
+            return last
+        time.sleep(pause)
+    return last
+
+
+def _draft_info_payload(draft_info: dict[str, Any]) -> dict[str, Any]:
+    nested = draft_info.get("response")
+    if isinstance(nested, dict):
+        return nested
+    return draft_info
+
+
 def top_warehouse_from_draft_info(draft_info: dict[str, Any]) -> dict[str, Any] | None:
-    for cluster in draft_info.get("clusters") or []:
+    data = _draft_info_payload(draft_info)
+    for cluster in data.get("clusters") or []:
+        supply_type = str(cluster.get("supply_type") or "").upper()
         warehouses = sorted(
             cluster.get("warehouses") or [],
             key=lambda w: int(w.get("total_rank") or 999),
@@ -338,18 +365,60 @@ def top_warehouse_from_draft_info(draft_info: dict[str, Any]) -> dict[str, Any] 
             state = str(((wh.get("availability_status") or {}).get("state")) or "").upper()
             if state and state not in {"FULL_AVAILABLE", "AVAILABLE"}:
                 continue
-            storage = wh.get("storage_warehouse") or {}
-            warehouse_id = storage.get("warehouse_id")
             bundle_id = wh.get("bundle_id")
-            if warehouse_id and bundle_id:
-                return {
-                    "macrolocal_cluster_id": int(cluster.get("macrolocal_cluster_id") or 0),
-                    "cluster_name": cluster.get("cluster_name"),
-                    "storage_warehouse_id": int(warehouse_id),
-                    "bundle_id": str(bundle_id),
-                    "warehouse_name": storage.get("name"),
-                }
+            if not bundle_id:
+                continue
+            storage_raw = wh.get("storage_warehouse")
+            storage = storage_raw if isinstance(storage_raw, dict) else {}
+            warehouse_id = storage.get("warehouse_id")
+            base: dict[str, Any] = {
+                "macrolocal_cluster_id": int(cluster.get("macrolocal_cluster_id") or 0),
+                "cluster_name": cluster.get("cluster_name"),
+                "bundle_id": str(bundle_id),
+                "warehouse_name": storage.get("name") or cluster.get("cluster_name") or "",
+                "supply_type": supply_type or None,
+            }
+            if warehouse_id:
+                base["storage_warehouse_id"] = int(warehouse_id)
+                return base
+            if supply_type == SUPPLY_TYPE_CROSSDOCK:
+                return base
     return None
+
+
+def selected_cluster_warehouse(warehouse: dict[str, Any], delivery_type: str) -> dict[str, Any]:
+    sel: dict[str, Any] = {
+        "macrolocal_cluster_id": int(warehouse["macrolocal_cluster_id"]),
+        "bundle_id": str(warehouse["bundle_id"]),
+    }
+    if supply_type_for_delivery(delivery_type) != SUPPLY_TYPE_CROSSDOCK:
+        wid = warehouse.get("storage_warehouse_id")
+        if wid is None:
+            raise ValueError("Нет склада назначения для прямой поставки")
+        sel["storage_warehouse_id"] = int(wid)
+    return sel
+
+
+def draft_warehouse_error_detail(draft_info: dict[str, Any]) -> str:
+    data = _draft_info_payload(draft_info)
+    status = str(data.get("status") or "").upper()
+    errors = data.get("errors") or []
+    if status in {"FAILED", "ERROR"}:
+        return f"Черновик Ozon: {status}. {errors}"
+    reasons: list[str] = []
+    for cluster in data.get("clusters") or []:
+        for wh in cluster.get("warehouses") or []:
+            avail = wh.get("availability_status") or {}
+            state = str(avail.get("state") or "")
+            reason = str(avail.get("invalid_reason") or "")
+            name = (wh.get("storage_warehouse") or {}).get("name") or cluster.get("cluster_name") or "?"
+            if state and state not in {"FULL_AVAILABLE", "AVAILABLE"}:
+                reasons.append(f"{name}: {state}" + (f" ({reason})" if reason else ""))
+    if reasons:
+        return "Нет доступного склада: " + "; ".join(reasons[:5])
+    if status == "IN_PROGRESS":
+        return "Черновик Ozon ещё обрабатывается — повторите через несколько секунд"
+    return "Нет доступного склада в черновике. Проверьте кластер, количество и точку отгрузки."
 
 
 def supply_type_for_delivery(delivery_type: str) -> str:
@@ -370,13 +439,7 @@ def draft_timeslots(
         "date_from": date_from,
         "date_to": date_to,
         "supply_type": supply_type_for_delivery(delivery_type),
-        "selected_cluster_warehouses": [
-            {
-                "macrolocal_cluster_id": warehouse["macrolocal_cluster_id"],
-                "storage_warehouse_id": warehouse["storage_warehouse_id"],
-                "bundle_id": warehouse["bundle_id"],
-            }
-        ],
+        "selected_cluster_warehouses": [selected_cluster_warehouse(warehouse, delivery_type)],
     }
     return _post(adapter, "/v2/draft/timeslot/info", payload, timeout=120)
 
@@ -411,13 +474,7 @@ def create_supply_from_draft(
     payload = {
         "draft_id": int(draft_id),
         "supply_type": supply_type_for_delivery(delivery_type),
-        "selected_cluster_warehouses": [
-            {
-                "macrolocal_cluster_id": warehouse["macrolocal_cluster_id"],
-                "storage_warehouse_id": warehouse["storage_warehouse_id"],
-                "bundle_id": warehouse["bundle_id"],
-            }
-        ],
+        "selected_cluster_warehouses": [selected_cluster_warehouse(warehouse, delivery_type)],
         "timeslot": {
             "from_in_timezone": timeslot["from_in_timezone"],
             "to_in_timezone": timeslot["to_in_timezone"],
@@ -552,18 +609,17 @@ def _format_ozon_datetime(raw: Any) -> str:
         return s[:16].replace("T", " ")
 
 
-def normalize_supply_order(order: dict[str, Any]) -> dict[str, Any]:
-    supplies = order.get("supplies") or []
-    supply = supplies[0] if supplies else {}
+def normalize_supply_line(order: dict[str, Any], supply: dict[str, Any]) -> dict[str, Any]:
     storage = supply.get("storage_warehouse") or order.get("drop_off_warehouse") or {}
     dropoff = order.get("drop_off_warehouse") or {}
     ts_wrap = order.get("timeslot") or {}
     ts = ts_wrap.get("timeslot") or {}
     tz = (ts_wrap.get("timezone_info") or {}).get("iana_name") or ""
-    state = str(order.get("state") or supply.get("state") or "")
+    state = str(supply.get("state") or order.get("state") or "")
     return {
         "order_id": order.get("order_id"),
         "order_number": order.get("order_number"),
+        "supply_id": supply.get("supply_id"),
         "state": state,
         "state_label": supply_order_state_label(state),
         "created_date": order.get("created_date"),
@@ -584,6 +640,123 @@ def normalize_supply_order(order: dict[str, Any]) -> dict[str, Any]:
         ).strip(),
         "data_filling_deadline": order.get("data_filling_deadline"),
     }
+
+
+def expand_order_supplies(order: dict[str, Any]) -> list[dict[str, Any]]:
+    supplies = order.get("supplies") or []
+    if not supplies:
+        return [normalize_supply_line(order, {})]
+    return [normalize_supply_line(order, sup) for sup in supplies]
+
+
+def normalize_supply_order(order: dict[str, Any]) -> dict[str, Any]:
+    lines = expand_order_supplies(order)
+    base = dict(lines[0]) if lines else {}
+    base["supply_lines"] = lines
+    base["supply_count"] = len(lines)
+    if len(lines) > 1:
+        names = [str(ln.get("warehouse_name") or ln.get("macrolocal_cluster_id") or "?") for ln in lines]
+        base["warehouse_name"] = f"{len(lines)} поставок: " + ", ".join(names)
+    return base
+
+
+def _looks_like_inner_supply_id(raw: str) -> bool:
+    return bool(raw.isdigit() and len(raw) >= 12)
+
+
+def inner_supply_id_from_order(order: dict[str, Any], *, bundle_id: str = "") -> int | None:
+    supplies = order.get("supplies") or []
+    bundle_id = str(bundle_id or "").strip()
+    if bundle_id:
+        for sup in supplies:
+            if str(sup.get("bundle_id") or "") == bundle_id:
+                sid = sup.get("supply_id")
+                return int(sid) if sid is not None else None
+    if len(supplies) == 1:
+        sid = supplies[0].get("supply_id")
+        return int(sid) if sid is not None else None
+    return None
+
+
+def resolve_inner_supply_id(adapter: OzonAdapter, supply: dict[str, Any]) -> int:
+    inner_raw = str(supply.get("ozon_supply_id") or "").strip()
+    order_raw = str(supply.get("ozon_order_id") or "").strip()
+    bundle_id = str(supply.get("ozon_bundle_id") or "").strip()
+
+    if inner_raw and _looks_like_inner_supply_id(inner_raw):
+        if not order_raw or inner_raw != order_raw:
+            return int(inner_raw)
+
+    order_id = int(order_raw or inner_raw)
+    orders = get_supply_orders(adapter, [order_id])
+    if not orders:
+        raise ValueError(f"Заявка Ozon {order_id} не найдена")
+    inner = inner_supply_id_from_order(orders[0], bundle_id=bundle_id)
+    if inner is None:
+        raise ValueError(
+            "В заявке Ozon несколько поставок — импортируйте каждую отдельно или укажите bundle_id"
+        )
+    return int(inner)
+
+
+def cargo_type_for_supply_kind(supply_kind: str) -> str:
+    return "PALLET" if str(supply_kind or "").lower() == "pallet" else "BOX"
+
+
+def cargo_api_key(cargo: dict[str, Any], idx: int, *, supply_id: int = 0) -> str:
+    raw = str(cargo.get("cargo_key") or cargo.get("cargo_number") or "").strip()
+    if len(raw) >= 4:
+        return raw
+    if raw:
+        return f"gm-{raw}"
+    return f"gm-{supply_id}-{idx + 1}"
+
+
+def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int) -> dict[str, Any]:
+    kind = cargo_type_for_supply_kind(str(supply.get("supply_kind") or "box"))
+    local_id = int(supply.get("id") or 0)
+    cargoes: list[dict[str, Any]] = []
+    for idx, cargo in enumerate(supply.get("cargoes") or []):
+        items: list[dict[str, Any]] = []
+        for item in cargo.get("items") or []:
+            offer_id = str(item.get("sku") or item.get("offer_id") or "").strip()
+            qty = int(item.get("quantity") or 0)
+            if not offer_id or qty <= 0:
+                continue
+            row: dict[str, Any] = {"offer_id": offer_id, "quantity": qty}
+            exp = str(item.get("expiration_date") or "").strip()
+            if exp:
+                row["expiration_date"] = exp
+            items.append(row)
+        if not items:
+            continue
+        cargoes.append(
+            {
+                "key": cargo_api_key(cargo, idx, supply_id=local_id),
+                "value": {"type": kind, "items": items},
+            }
+        )
+    if not cargoes:
+        raise ValueError("Добавьте грузоместа и состав")
+    return {
+        "supply_id": int(inner_supply_id),
+        "delete_current_version": True,
+        "cargoes": cargoes,
+    }
+
+
+def poll_cargoes_create_info(adapter: OzonAdapter, operation_id: str) -> dict[str, Any]:
+    op = str(operation_id or "").strip()
+    if not op:
+        raise ValueError("Нет operation_id")
+    last: dict[str, Any] = {}
+    for _ in range(20):
+        last = adapter.fbo_cargoes_create_info({"operation_id": op})
+        status = str(last.get("status") or "").upper()
+        if status in {"SUCCESS", "FAILED", "ERROR"}:
+            return last
+        time.sleep(API_PAUSE_SEC)
+    return last
 
 
 def fetch_supply_orders_overview(

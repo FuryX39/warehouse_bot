@@ -76,6 +76,7 @@ class OzonFboSupply(_Base):
     delivery_type: Mapped[str] = mapped_column(String(16), nullable=False, default=DELIVERY_DIRECT)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=STATUS_DRAFT)
     ozon_supply_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ozon_order_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_draft_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_bundle_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ozon_cluster_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -198,6 +199,7 @@ class FboSupplyRow:
     delivery_type: str
     status: str
     ozon_supply_id: str
+    ozon_order_id: str
     ozon_draft_id: str
     ozon_bundle_id: str
     ozon_cluster_id: str
@@ -308,6 +310,7 @@ class OzonFboSupplyRepository:
                 ("batch_id", "INTEGER"),
                 ("delivery_type", "VARCHAR(16) NOT NULL DEFAULT 'direct'"),
                 ("ozon_bundle_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
+                ("ozon_order_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
                 ("dropoff_warehouse_id", "VARCHAR(64) NOT NULL DEFAULT ''"),
                 ("dropoff_warehouse_name", "VARCHAR(256) NOT NULL DEFAULT ''"),
                 ("timeslot_from", "VARCHAR(32) NOT NULL DEFAULT ''"),
@@ -413,6 +416,7 @@ class OzonFboSupplyRepository:
                     or_(
                         OzonFboSupply.title.ilike(pat),
                         OzonFboSupply.ozon_supply_id.ilike(pat),
+                        OzonFboSupply.ozon_order_id.ilike(pat),
                         OzonFboSupply.ozon_cluster_name.ilike(pat),
                         OzonFboSupply.ozon_warehouse_name.ilike(pat),
                     )
@@ -440,6 +444,7 @@ class OzonFboSupplyRepository:
                 delivery_type=_normalize_delivery_type(data.get("delivery_type")),
                 status=_normalize_status(data.get("status"), default=STATUS_DRAFT),
                 ozon_supply_id=_str(data.get("ozon_supply_id"), 64),
+                ozon_order_id=_str(data.get("ozon_order_id"), 64),
                 ozon_draft_id=_str(data.get("ozon_draft_id"), 64),
                 ozon_bundle_id=_str(data.get("ozon_bundle_id"), 64),
                 ozon_cluster_id=_str(data.get("ozon_cluster_id"), 64),
@@ -472,6 +477,7 @@ class OzonFboSupplyRepository:
             for key, limit in (
                 ("title", 256),
                 ("ozon_supply_id", 64),
+                ("ozon_order_id", 64),
                 ("ozon_draft_id", 64),
                 ("ozon_bundle_id", 64),
                 ("ozon_cluster_id", 64),
@@ -546,6 +552,41 @@ class OzonFboSupplyRepository:
                         continue
                     session.add(OzonFboCargoItem(cargo_id=int(cargo.id), **norm))
             supply.status = STATUS_PACKING if supply.status in {STATUS_DRAFT, STATUS_ASSIGNED} else supply.status
+            supply.updated_at_ts = int(time.time())
+            session.commit()
+            session.refresh(supply)
+            return self._row(session, supply, include_details=True)
+
+    def apply_ozon_cargo_ids(self, supply_id: int, create_info: dict[str, Any]) -> FboSupplyRow | None:
+        result = create_info.get("result") or {}
+        key_to_id: dict[str, str] = {}
+        for entry in result.get("cargoes") or []:
+            key = str(entry.get("key") or "").strip()
+            cargo_id = str((entry.get("value") or {}).get("cargo_id") or "").strip()
+            if key and cargo_id:
+                key_to_id[key] = cargo_id
+        if not key_to_id:
+            return self.get_supply(supply_id)
+        from app.ozon_fbo_api import cargo_api_key
+
+        with Session(self.engine) as session:
+            supply = session.get(OzonFboSupply, int(supply_id))
+            if supply is None:
+                return None
+            cargo_rows = session.scalars(
+                select(OzonFboCargo)
+                .where(OzonFboCargo.supply_id == int(supply_id))
+                .order_by(OzonFboCargo.sort_order, OzonFboCargo.id)
+            ).all()
+            for idx, cargo_row in enumerate(cargo_rows):
+                key = cargo_api_key(
+                    {"cargo_number": cargo_row.cargo_number},
+                    idx,
+                    supply_id=int(supply_id),
+                )
+                ozon_id = key_to_id.get(key)
+                if ozon_id:
+                    cargo_row.ozon_cargo_id = ozon_id
             supply.updated_at_ts = int(time.time())
             session.commit()
             session.refresh(supply)
@@ -669,6 +710,7 @@ class OzonFboSupplyRepository:
             delivery_type=str(row.delivery_type or DELIVERY_DIRECT),
             status=str(row.status or STATUS_DRAFT),
             ozon_supply_id=str(row.ozon_supply_id or ""),
+            ozon_order_id=str(row.ozon_order_id or ""),
             ozon_draft_id=str(row.ozon_draft_id or ""),
             ozon_bundle_id=str(row.ozon_bundle_id or ""),
             ozon_cluster_id=str(row.ozon_cluster_id or ""),
@@ -744,6 +786,7 @@ def supply_to_dict(row: FboSupplyRow, *, include_details: bool = True) -> dict[s
         "status": row.status,
         "status_label": status_label(row.status),
         "ozon_supply_id": row.ozon_supply_id,
+        "ozon_order_id": row.ozon_order_id,
         "ozon_draft_id": row.ozon_draft_id,
         "ozon_bundle_id": row.ozon_bundle_id,
         "ozon_cluster_id": row.ozon_cluster_id,

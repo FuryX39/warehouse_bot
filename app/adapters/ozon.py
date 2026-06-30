@@ -156,6 +156,9 @@ class OzonAdapter(MarketplaceAdapter):
     def fbo_cargoes_create_info(self, payload: dict) -> dict:
         return self._post_json("/v2/cargoes/create/info", payload)
 
+    def fbo_cargoes_delete(self, payload: dict) -> dict:
+        return self._post_json("/v1/cargoes/delete", payload, timeout=90)
+
     def fbo_cargoes_rules_get(self, payload: dict) -> dict:
         return self._post_json("/v1/cargoes/rules/get", payload)
 

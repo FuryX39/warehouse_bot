@@ -1681,6 +1681,24 @@ body.wh-body {
   font-size: 0.88rem;
 }
 
+.wh-fbo-pool-qty-label {
+  font-size: 0.82rem;
+  margin-left: 0.35rem;
+}
+
+.wh-fbo-pool-qty {
+  width: 3.2rem;
+  padding: 0.15rem 0.25rem;
+  font-size: 0.82rem;
+}
+
+.wh-fbo-supply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
 .wh-fbo-cargo-drop {
   border: 1px solid var(--wh-border);
   border-radius: 8px;
