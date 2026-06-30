@@ -28,10 +28,12 @@ DEFAULT_DROPOFF_PRESETS: list[dict[str, Any]] = [
     {
         "warehouse_id": "1020005004424570",
         "name": "НОВОСИБИРСК_ДО_ПЕТУХОВА_БЛОК_3",
+        "warehouse_type": "SORTING_CENTER",
     },
     {
         "warehouse_id": "21957447472000",
         "name": "НОВОСИБИРСК_РФЦ_НОВЫЙ",
+        "warehouse_type": "CROSS_DOCK",
     },
 ]
 
@@ -167,11 +169,36 @@ def list_macrolocal_clusters(adapter: OzonAdapter) -> list[dict[str, Any]]:
     return out
 
 
+def draft_dropoff_warehouse_type(
+    *,
+    warehouse_type: str | None = None,
+    name: str | None = None,
+) -> str:
+    """Тип точки отгрузки для delivery_info.drop_off_warehouse.warehouse_type."""
+    explicit = str(warehouse_type or "").strip().upper()
+    if explicit in {"SORTING_CENTER", "CROSS_DOCK", "ORDERS_RECEIVING_POINT"}:
+        return explicit
+    nm = str(name or "").upper()
+    if "КРОССДОК" in nm or "CROSSDOCK" in nm:
+        return "CROSS_DOCK"
+    listed = str(warehouse_type or "").strip().upper()
+    if listed == "WAREHOUSE_TYPE_ORDERS_RECEIVING_POINT":
+        return "ORDERS_RECEIVING_POINT"
+    return "SORTING_CENTER"
+
+
 def dropoff_presets_from_env() -> list[dict[str, str]]:
     raw = (os.getenv("OZON_FBO_DROPOFF_PRESETS") or "").strip()
     if not raw:
         return [
-            {"warehouse_id": str(p["warehouse_id"]), "name": str(p["name"])}
+            {
+                "warehouse_id": str(p["warehouse_id"]),
+                "name": str(p["name"]),
+                "warehouse_type": str(
+                    p.get("warehouse_type")
+                    or draft_dropoff_warehouse_type(name=str(p.get("name") or ""))
+                ),
+            }
             for p in DEFAULT_DROPOFF_PRESETS
         ]
     try:
@@ -187,7 +214,19 @@ def dropoff_presets_from_env() -> list[dict[str, str]]:
         wid = str(item.get("warehouse_id") or item.get("id") or "").strip()
         name = str(item.get("name") or "").strip()
         if wid and name:
-            out.append({"warehouse_id": wid, "name": name})
+            out.append(
+                {
+                    "warehouse_id": wid,
+                    "name": name,
+                    "warehouse_type": str(
+                        item.get("warehouse_type")
+                        or draft_dropoff_warehouse_type(
+                            warehouse_type=item.get("warehouse_type"),
+                            name=name,
+                        )
+                    ),
+                }
+            )
     if not out:
         raise ValueError("OZON_FBO_DROPOFF_PRESETS: нет валидных записей")
     return out
@@ -208,6 +247,10 @@ def normalize_dropoff_search(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "name": str(name),
                 "address": str(item.get("address") or ""),
                 "warehouse_type": item.get("warehouse_type"),
+                "draft_warehouse_type": draft_dropoff_warehouse_type(
+                    warehouse_type=str(item.get("warehouse_type") or ""),
+                    name=str(name),
+                ),
             }
         )
     return rows
@@ -236,6 +279,8 @@ def create_draft(
     macrolocal_cluster_id: int,
     items: list[dict[str, Any]],
     dropoff_warehouse_id: int | None = None,
+    dropoff_warehouse_type: str | None = None,
+    dropoff_warehouse_name: str | None = None,
 ) -> dict[str, Any]:
     delivery = str(delivery_type or DELIVERY_DIRECT).lower()
     draft_items = []
@@ -254,11 +299,18 @@ def create_draft(
     if delivery == DELIVERY_CROSSDOCK:
         if not dropoff_warehouse_id:
             raise ValueError("Для кросс-дока укажите точку отгрузки")
+        wh_type = draft_dropoff_warehouse_type(
+            warehouse_type=dropoff_warehouse_type,
+            name=dropoff_warehouse_name,
+        )
         payload = {
             "cluster_info": cluster_info,
             "delivery_info": {
                 "type": "DROPOFF",
-                "drop_off_warehouse_id": int(dropoff_warehouse_id),
+                "drop_off_warehouse": {
+                    "warehouse_id": int(dropoff_warehouse_id),
+                    "warehouse_type": wh_type,
+                },
             },
             "deletion_sku_mode": DRAFT_DELETE_SKU_MODE,
         }
@@ -411,9 +463,15 @@ SUPPLY_ORDER_ARCHIVE_STATES = (
     "CANCELLED",
 )
 
+# Статусы «Подготовка» и «Готово к отгрузке» в ЛК Ozon.
+SUPPLY_ORDER_PRE_SHIP_STATES = (
+    "DATA_FILLING",
+    "READY_TO_SUPPLY",
+)
+
 SUPPLY_ORDER_STATE_LABELS: dict[str, str] = {
-    "DATA_FILLING": "Заполнение данных",
-    "READY_TO_SUPPLY": "Готова к отгрузке",
+    "DATA_FILLING": "Подготовка",
+    "READY_TO_SUPPLY": "Готово к отгрузке",
     "IN_TRANSIT": "В пути",
     "ACCEPTED_AT_SUPPLY_WAREHOUSE": "Принята на точке отгрузки",
     "ACCEPTANCE_AT_STORAGE_WAREHOUSE": "Приёмка на складе",
@@ -539,6 +597,8 @@ def fetch_supply_orders_overview(
         states = SUPPLY_ORDER_ACTIVE_STATES + SUPPLY_ORDER_ARCHIVE_STATES
     elif scope == "archive":
         states = SUPPLY_ORDER_ARCHIVE_STATES
+    elif scope in {"pre_ship", "preparing", "preparing_for_shipment"}:
+        states = SUPPLY_ORDER_PRE_SHIP_STATES
     else:
         states = SUPPLY_ORDER_ACTIVE_STATES
     order_ids = list_supply_order_ids(adapter, states=states, limit=limit_per_state)

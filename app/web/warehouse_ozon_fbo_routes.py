@@ -606,6 +606,8 @@ def register_warehouse_ozon_fbo_routes(
         """Черновик для первого кластера — только чтобы показать доступные слоты (без заявки)."""
         delivery_type = str(body.get("delivery_type") or "direct").lower()
         dropoff_id = str(body.get("dropoff_warehouse_id") or "").strip()
+        dropoff_type = str(body.get("dropoff_warehouse_type") or "").strip()
+        dropoff_name = str(body.get("dropoff_warehouse_name") or "").strip()
         clusters = body.get("clusters") or []
         items = body.get("items") or []
         date_from = str(body.get("date_from") or "").strip()
@@ -639,6 +641,8 @@ def register_warehouse_ozon_fbo_routes(
                 macrolocal_cluster_id=int(macro_id),
                 items=draft_items,
                 dropoff_warehouse_id=int(dropoff_id) if dropoff_id else None,
+                dropoff_warehouse_type=dropoff_type or None,
+                dropoff_warehouse_name=dropoff_name or None,
             )
             draft_id = extract_draft_id(created.get("response") or {})
             if not draft_id:
@@ -695,6 +699,7 @@ def register_warehouse_ozon_fbo_routes(
         """Создать пакет заявок в Ozon: N кластеров × один таймслот."""
         delivery_type = str(body.get("delivery_type") or "direct").lower()
         dropoff_id = str(body.get("dropoff_warehouse_id") or "").strip()
+        dropoff_type = str(body.get("dropoff_warehouse_type") or "").strip()
         dropoff_name = str(body.get("dropoff_warehouse_name") or "").strip()
         timeslot = body.get("timeslot") or {}
         ts_from = str(timeslot.get("from_in_timezone") or body.get("timeslot_from") or "").strip()
@@ -773,6 +778,8 @@ def register_warehouse_ozon_fbo_routes(
                     macrolocal_cluster_id=int(macro_id),
                     items=draft_items,
                     dropoff_warehouse_id=dropoff_int,
+                    dropoff_warehouse_type=dropoff_type or None,
+                    dropoff_warehouse_name=dropoff_name or None,
                 )
                 draft_id = extract_draft_id(created.get("response") or {})
                 row["draft_id"] = draft_id

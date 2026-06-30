@@ -12,6 +12,9 @@
   var dragPayload = null;
   var ozonScope = "active";
   var ozonSelectedIds = {};
+  var ozonOrdersLoaded = false;
+  var ozonOrders = [];
+  var ozonOrdersCount = 0;
   var listView = "overview";
 
   function esc(s) {
@@ -127,21 +130,146 @@
     );
   }
 
-  function renderBatchList(tab, item) {
+  function renderOzonScopeOptions() {
+    return (
+      '<option value="active"' + (ozonScope === "active" ? " selected" : "") + ">Активные</option>" +
+      '<option value="pre_ship"' + (ozonScope === "pre_ship" ? " selected" : "") + ">Подготовка к отгрузке</option>" +
+      '<option value="archive"' + (ozonScope === "archive" ? " selected" : "") + ">Архив (завершённые и отменённые)</option>" +
+      '<option value="all"' + (ozonScope === "all" ? " selected" : "") + ">Все</option>"
+    );
+  }
+
+  function renderOzonSectionContent() {
+    if (!ozonOrdersLoaded) {
+      return (
+        '<p class="wh-muted">Список заявок из Ozon не загружен — это ускоряет открытие вкладки.</p>' +
+        '<button type="button" class="wh-btn wh-btn-primary" id="whFboLoadOzon">Загрузить из Ozon</button>'
+      );
+    }
+    return (
+      '<div class="wh-fbo-row">' +
+      '<label>Фильтр</label><select id="whFboOzonScope" class="wh-fbo-input">' +
+      renderOzonScopeOptions() +
+      "</select>" +
+      '<button type="button" class="wh-btn" id="whFboReloadOzon">Обновить из Ozon</button>' +
+      '<button type="button" class="wh-btn" id="whFboImportOzon">Импортировать выбранные в систему</button>' +
+      "</div>" +
+      '<div id="whFboOzonTable">' + renderOzonOrdersTable(ozonOrders) + "</div>"
+    );
+  }
+
+  function bindOzonListEvents(tab, item, root) {
+    var loadBtn = root.querySelector("#whFboLoadOzon");
+    if (loadBtn) {
+      loadBtn.addEventListener("click", function () {
+        fetchOzonOrders(tab, item, root);
+      });
+      return;
+    }
+    var reloadBtn = root.querySelector("#whFboReloadOzon");
+    if (reloadBtn) {
+      reloadBtn.addEventListener("click", function () {
+        fetchOzonOrders(tab, item, root);
+      });
+    }
+    var scopeSel = root.querySelector("#whFboOzonScope");
+    if (scopeSel) {
+      scopeSel.addEventListener("change", function (e) {
+        ozonScope = e.target.value || "active";
+        fetchOzonOrders(tab, item, root);
+      });
+    }
+    var importBtn = root.querySelector("#whFboImportOzon");
+    if (importBtn) {
+      importBtn.addEventListener("click", function () {
+        var ids = Object.keys(ozonSelectedIds);
+        if (!ids.length) {
+          setMsg(root.querySelector("#whFboListMsg"), "Отметьте заявки для импорта", true);
+          return;
+        }
+        setMsg(root.querySelector("#whFboListMsg"), "Импорт…", false);
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/import-ozon", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order_ids: ids, title: "Импорт из Ozon" }),
+        })
+          .then(function (data) {
+            if (data.batch && data.batch.id) {
+              renderBatchDetail(tab, item, data.batch.id);
+            } else {
+              renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
+            }
+          })
+          .catch(function (err) {
+            setMsg(root.querySelector("#whFboListMsg"), err.message, true);
+          });
+      });
+    }
+    root.querySelectorAll(".wh-fbo-ozon-check").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var id = cb.getAttribute("data-order-id");
+        if (cb.checked) ozonSelectedIds[id] = true;
+        else delete ozonSelectedIds[id];
+      });
+    });
+    root.querySelectorAll(".wh-fbo-ozon-row").forEach(function (tr) {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", function (e) {
+        if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON")) return;
+        renderOzonOrderDetail(tab, item, parseInt(tr.getAttribute("data-order-id"), 10));
+      });
+    });
+  }
+
+  function updateOzonSection(tab, item, root) {
+    var section = root.querySelector("#whFboOzonSection");
+    var titleCount = root.querySelector("#whFboOzonCount");
+    if (titleCount) {
+      titleCount.textContent = "(" + (ozonOrdersLoaded ? String(ozonOrdersCount) : "—") + ")";
+    }
+    if (section) {
+      section.innerHTML = renderOzonSectionContent();
+      bindOzonListEvents(tab, item, root);
+    }
+  }
+
+  function fetchOzonOrders(tab, item, root) {
+    var tableWrap = root.querySelector("#whFboOzonSection");
+    if (tableWrap) {
+      tableWrap.innerHTML = '<p class="wh-msg">Загрузка заявок из Ozon…</p>';
+    }
+    setMsg(root.querySelector("#whFboListMsg"), "Загрузка заявок из Ozon…", false);
+    fetchJson("/api/warehouse/marketplaces/ozon-fbo/ozon/supply-orders?scope=" + encodeURIComponent(ozonScope))
+      .then(function (ozonData) {
+        ozonOrdersLoaded = true;
+        ozonOrders = ozonData.orders || [];
+        ozonOrdersCount = ozonData.count || ozonOrders.length;
+        updateOzonSection(tab, item, root);
+        setMsg(
+          root.querySelector("#whFboListMsg"),
+          "Загружено заявок из Ozon: " + ozonOrdersCount,
+          false
+        );
+      })
+      .catch(function (err) {
+        ozonOrdersLoaded = false;
+        ozonOrders = [];
+        ozonOrdersCount = 0;
+        updateOzonSection(tab, item, root);
+        setMsg(root.querySelector("#whFboListMsg"), err.message, true);
+      });
+  }
+
+  function renderBatchList(tab, item, opts) {
+    opts = opts || {};
     currentBatchId = null;
     listView = "overview";
     preparePanel(tab, item);
     var root = panelEl();
-    root.innerHTML = '<p class="wh-msg">Загрузка заявок из Ozon и локальных пакетов…</p>';
-    Promise.all([
-      loadMeta(),
-      fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches"),
-      fetchJson("/api/warehouse/marketplaces/ozon-fbo/ozon/supply-orders?scope=" + encodeURIComponent(ozonScope)),
-    ])
+    root.innerHTML = '<p class="wh-msg">Загрузка локальных пакетов…</p>';
+    Promise.all([loadMeta(), fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches")])
       .then(function (parts) {
         var batches = (parts[1].batches || []);
-        var ozonData = parts[2] || {};
-        var ozonOrders = ozonData.orders || [];
         var batchRows = batches
           .map(function (b) {
             return (
@@ -162,78 +290,35 @@
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboNewBatch">+ Создать пакет заявок</button>' +
           '<button type="button" class="wh-btn" id="whFboRefreshBatches">Обновить</button></div>' +
           '<p class="wh-msg" id="whFboListMsg"></p>' +
-          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Заявки в Ozon <span class="wh-muted">(' + esc(ozonData.count || 0) + ")</span></h4>" +
-          '<p class="wh-muted">Актуальные данные из Ozon Seller API. Заявки, созданные вне панели (в т.ч. через API), тоже отображаются здесь.</p>' +
-          '<div class="wh-fbo-row">' +
-          '<label>Фильтр</label><select id="whFboOzonScope" class="wh-fbo-input">' +
-          '<option value="active"' + (ozonScope === "active" ? " selected" : "") + ">Активные</option>" +
-          '<option value="archive"' + (ozonScope === "archive" ? " selected" : "") + ">Архив (завершённые и отменённые)</option>" +
-          '<option value="all"' + (ozonScope === "all" ? " selected" : "") + ">Все</option>" +
-          "</select>" +
-          '<button type="button" class="wh-btn" id="whFboImportOzon">Импортировать выбранные в систему</button>' +
-          "</div>" +
-          '<div id="whFboOzonTable">' + renderOzonOrdersTable(ozonOrders) + "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Пакеты в системе</h4>' +
           (batchRows
             ? '<table class="wh-employees-table wh-crm-table wh-fbo-batch-table"><thead><tr>' +
               "<th>№</th><th>Название</th><th>Доставка</th><th>Слот</th><th>Заявок</th><th>Статус</th><th>Обновлено</th>" +
               "</tr></thead><tbody>" + batchRows + "</tbody></table>"
             : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
-          "</section></div>";
+          "</section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Заявки в Ozon <span class="wh-muted" id="whFboOzonCount">(' +
+          esc(ozonOrdersLoaded ? ozonOrdersCount : "—") +
+          ")</span></h4>" +
+          '<p class="wh-muted">Актуальные данные из Ozon Seller API. Загружаются по запросу.</p>' +
+          '<div id="whFboOzonSection">' + renderOzonSectionContent() + "</div></section></div>";
         root.querySelector("#whFboNewBatch").addEventListener("click", function () {
           resetCreateState();
           renderCreateWizard(tab, item);
         });
         root.querySelector("#whFboRefreshBatches").addEventListener("click", function () {
-          renderBatchList(tab, item);
+          renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
         });
-        root.querySelector("#whFboOzonScope").addEventListener("change", function (e) {
-          ozonScope = e.target.value || "active";
-          renderBatchList(tab, item);
-        });
-        root.querySelector("#whFboImportOzon").addEventListener("click", function () {
-          var ids = Object.keys(ozonSelectedIds);
-          if (!ids.length) {
-            setMsg(root.querySelector("#whFboListMsg"), "Отметьте заявки для импорта", true);
-            return;
-          }
-          setMsg(root.querySelector("#whFboListMsg"), "Импорт…", false);
-          fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/import-ozon", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ order_ids: ids, title: "Импорт из Ozon" }),
-          })
-            .then(function (data) {
-              if (data.batch && data.batch.id) {
-                renderBatchDetail(tab, item, data.batch.id);
-              } else {
-                renderBatchList(tab, item);
-              }
-            })
-            .catch(function (err) {
-              setMsg(root.querySelector("#whFboListMsg"), err.message, true);
-            });
-        });
-        root.querySelectorAll(".wh-fbo-ozon-check").forEach(function (cb) {
-          cb.addEventListener("change", function () {
-            var id = cb.getAttribute("data-order-id");
-            if (cb.checked) ozonSelectedIds[id] = true;
-            else delete ozonSelectedIds[id];
-          });
-        });
-        root.querySelectorAll(".wh-fbo-ozon-row").forEach(function (tr) {
-          tr.style.cursor = "pointer";
-          tr.addEventListener("click", function (e) {
-            if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON")) return;
-            renderOzonOrderDetail(tab, item, parseInt(tr.getAttribute("data-order-id"), 10));
-          });
-        });
+        bindOzonListEvents(tab, item, root);
         root.querySelectorAll(".wh-fbo-batch-table tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
           tr.addEventListener("click", function () {
             renderBatchDetail(tab, item, parseInt(tr.getAttribute("data-id"), 10));
           });
         });
+        if (opts.reloadOzon && ozonOrdersLoaded) {
+          fetchOzonOrders(tab, item, root);
+        }
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
@@ -402,6 +487,8 @@
           '<p class="wh-muted">Отметьте кластеры для поставки. Список обновляется из Ozon.</p>' +
           '<div id="whFboClusterPicker">' + renderClusterPicker() + "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">3. Товары и количества</h4>' +
+          '<p class="wh-muted">Количество указывается <strong>на каждый выбранный кластер</strong>. ' +
+          "Например, SS996 × 150 и 4 кластера → 4 отдельные заявки по 150 шт. (всего 600).</p>" +
           '<div class="wh-fbo-row"><input type="text" id="whFboAddSku" placeholder="Артикул" class="wh-fbo-input" />' +
           '<input type="number" min="1" id="whFboAddQty" value="1" class="wh-fbo-input wh-fbo-input--qty" />' +
           '<button type="button" class="wh-btn" id="whFboAddItem">Добавить</button></div>' +
@@ -448,6 +535,15 @@
       });
   }
 
+  function dropoffPayload() {
+    if (!dropoffPick) return {};
+    return {
+      dropoff_warehouse_id: dropoffPick.id,
+      dropoff_warehouse_name: dropoffPick.name,
+      dropoff_warehouse_type: dropoffPick.warehouse_type || "",
+    };
+  }
+
   function setDropoffPick(root, pick) {
     dropoffPick = pick;
     var pickedEl = root.querySelector("#whFboDropoffPicked");
@@ -475,6 +571,8 @@
           esc(p.warehouse_id) +
           '" data-name="' +
           esc(p.name) +
+          '" data-warehouse-type="' +
+          esc(p.warehouse_type || "") +
           '">' +
           esc(p.name) +
           "</button>"
@@ -492,6 +590,7 @@
         setDropoffPick(root, {
           id: btn.getAttribute("data-id"),
           name: btn.getAttribute("data-name"),
+          warehouse_type: btn.getAttribute("data-warehouse-type") || "",
         });
       });
     });
@@ -558,16 +657,31 @@
       }).then(function (resp) {
         var list = root.querySelector("#whFboDropoffList");
         var rows = (resp.items || []).map(function (r) {
-          return { id: String(r.warehouse_id), name: String(r.name) };
+          return {
+            id: String(r.warehouse_id),
+            name: String(r.name),
+            warehouse_type: String(r.draft_warehouse_type || r.warehouse_type || ""),
+          };
         });
         list.innerHTML = rows.slice(0, 30).map(function (r) {
-          return '<button type="button" class="wh-fbo-dropoff-pick wh-btn wh-btn-sm" data-id="' + esc(r.id) + '" data-name="' + esc(r.name) + '">' + esc(r.name) + "</button> ";
+          return (
+            '<button type="button" class="wh-fbo-dropoff-pick wh-btn wh-btn-sm" data-id="' +
+            esc(r.id) +
+            '" data-name="' +
+            esc(r.name) +
+            '" data-warehouse-type="' +
+            esc(r.warehouse_type) +
+            '">' +
+            esc(r.name) +
+            "</button> "
+          );
         }).join("") || '<p class="wh-muted">Ничего не найдено</p>';
         list.querySelectorAll(".wh-fbo-dropoff-pick").forEach(function (btn) {
           btn.addEventListener("click", function () {
             setDropoffPick(root, {
               id: btn.getAttribute("data-id"),
               name: btn.getAttribute("data-name"),
+              warehouse_type: btn.getAttribute("data-warehouse-type") || "",
             });
           });
         });
@@ -577,14 +691,20 @@
       var clusters = selectedClustersArray();
       if (!clusters.length) return setMsg(msg, "Выберите кластер", true);
       if (!createItems.length) return setMsg(msg, "Добавьте товары", true);
-      var body = {
-        delivery_type: root.querySelector("#whFboDeliveryType").value,
-        dropoff_warehouse_id: dropoffPick ? dropoffPick.id : "",
-        clusters: clusters,
-        items: createItems,
-        date_from: root.querySelector("#whFboSlotFrom").value,
-        date_to: root.querySelector("#whFboSlotTo").value,
-      };
+      var deliveryType = root.querySelector("#whFboDeliveryType").value;
+      if (deliveryType === "crossdock" && !dropoffPick) {
+        return setMsg(msg, "Выберите точку отгрузки", true);
+      }
+      var body = Object.assign(
+        {
+          delivery_type: root.querySelector("#whFboDeliveryType").value,
+          clusters: clusters,
+          items: createItems,
+          date_from: root.querySelector("#whFboSlotFrom").value,
+          date_to: root.querySelector("#whFboSlotTo").value,
+        },
+        dropoffPayload()
+      );
       setMsg(msg, "Загрузка таймслотов (создаётся пробный черновик)…", false);
       fetchJson("/api/warehouse/marketplaces/ozon-fbo/ozon/preview-timeslots", {
         method: "POST",
@@ -605,16 +725,17 @@
       if (!selectedSlot) return setMsg(msg, "Выберите таймслот", true);
       var delivery = root.querySelector("#whFboDeliveryType").value;
       if (delivery === "crossdock" && !dropoffPick) return setMsg(msg, "Выберите точку отгрузки", true);
-      var body = {
-        title: root.querySelector("#whFboBatchTitle").value.trim() || "Пакет FBO",
-        delivery_type: delivery,
-        supply_kind: root.querySelector("#whFboSupplyKind").value,
-        dropoff_warehouse_id: dropoffPick ? dropoffPick.id : "",
-        dropoff_warehouse_name: dropoffPick ? dropoffPick.name : "",
-        timeslot: selectedSlot,
-        clusters: clusters,
-        items: createItems,
-      };
+      var body = Object.assign(
+        {
+          title: root.querySelector("#whFboBatchTitle").value.trim() || "Пакет FBO",
+          delivery_type: delivery,
+          supply_kind: root.querySelector("#whFboSupplyKind").value,
+          timeslot: selectedSlot,
+          clusters: clusters,
+          items: createItems,
+        },
+        dropoffPayload()
+      );
       setMsg(msg, "Создание заявок в Ozon… Это может занять несколько минут.", false);
       root.querySelector("#whFboSubmitBatch").disabled = true;
       fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/submit", {
