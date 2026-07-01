@@ -501,7 +501,9 @@ def create_dashboard_app(
     register_warehouse_barcode_print_routes(app, require_warehouse_user)
     register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo, crm_repo)
     register_warehouse_stock_routes(app, stock_repo, require_warehouse_user)
-    register_warehouse_ozon_fbo_routes(app, ozon_fbo_repo, require_warehouse_user, ozon_adapter)
+    register_warehouse_ozon_fbo_routes(
+        app, ozon_fbo_repo, require_warehouse_user, ozon_adapter, crm_repo
+    )
     register_warehouse_receipts_routes(
         app,
         receipts_repo,

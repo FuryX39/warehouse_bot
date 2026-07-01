@@ -63,8 +63,30 @@ class OzonFboBatch(_Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=BATCH_STATUS_PLANNING)
     manager_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    ops_ship_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    ops_packing_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_barcode_link_2: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    ops_packing_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    ops_counterparty_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ops_weight_kg: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    ops_unload_address_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ops_ship_time: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    ops_expense_doc_number: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_pallets_ready_time: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_logistics_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    ops_car_driver: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class OzonFboUnloadAddress(_Base):
+    __tablename__ = "ozon_fbo_unload_addresses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    address: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class OzonFboSupply(_Base):
@@ -96,23 +118,6 @@ class OzonFboSupply(_Base):
     labels_filename: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     labels_file: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
-    ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
-    ops_ship_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
-    ops_movement_number: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    ops_units_count: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    ops_cargoes_desc: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    ops_packing_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    ops_barcode_link: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    ops_barcode_link_2: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    ops_packing_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
-    ops_client: Mapped[str] = mapped_column(String(64), nullable=False, default="OZON")
-    ops_weight_kg: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    ops_unload_address: Mapped[str] = mapped_column(String(256), nullable=False, default="")
-    ops_ship_time: Mapped[str] = mapped_column(String(16), nullable=False, default="")
-    ops_expense_doc_number: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    ops_pallets_ready_time: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    ops_logistics_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
-    ops_car_driver: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -192,6 +197,14 @@ class FboCargoRow:
     items: list[FboCargoItemRow] = field(default_factory=list)
 
 @dataclass
+class FboUnloadAddressRow:
+    id: int
+    name: str
+    address: str
+    sort_order: int
+
+
+@dataclass
 class FboBatchRow:
     id: int
     title: str
@@ -204,6 +217,19 @@ class FboBatchRow:
     manager_user_id: int | None
     manager_user_name: str
     comment: str
+    ops_assembly_date: str
+    ops_ship_date: str
+    ops_packing_status: str
+    ops_barcode_link_2: str
+    ops_packing_comment: str
+    ops_counterparty_id: int | None
+    ops_weight_kg: str
+    ops_unload_address_id: int | None
+    ops_ship_time: str
+    ops_expense_doc_number: str
+    ops_pallets_ready_time: str
+    ops_logistics_comment: str
+    ops_car_driver: str
     created_at_ts: int
     updated_at_ts: int
     supply_count: int = 0
@@ -241,23 +267,6 @@ class FboSupplyRow:
     labels_filename: str
     labels_file: str
     comment: str
-    ops_assembly_date: str
-    ops_ship_date: str
-    ops_movement_number: str
-    ops_units_count: str
-    ops_cargoes_desc: str
-    ops_packing_status: str
-    ops_barcode_link: str
-    ops_barcode_link_2: str
-    ops_packing_comment: str
-    ops_client: str
-    ops_weight_kg: str
-    ops_unload_address: str
-    ops_ship_time: str
-    ops_expense_doc_number: str
-    ops_pallets_ready_time: str
-    ops_logistics_comment: str
-    ops_car_driver: str
     created_at_ts: int
     updated_at_ts: int
     items: list[FboSupplyItemRow] = field(default_factory=list)
@@ -392,6 +401,99 @@ class OzonFboSupplyRepository:
             for name, ddl in ops_cols.items():
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE ozon_fbo_supplies ADD COLUMN {name} {ddl}"))
+            batch_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_batches)")).all()
+            }
+            batch_ops_cols = {
+                "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
+                "ops_ship_date": "VARCHAR(10) NOT NULL DEFAULT ''",
+                "ops_packing_status": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_barcode_link_2": "VARCHAR(512) NOT NULL DEFAULT ''",
+                "ops_packing_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
+                "ops_counterparty_id": "INTEGER",
+                "ops_weight_kg": "VARCHAR(32) NOT NULL DEFAULT ''",
+                "ops_unload_address_id": "INTEGER",
+                "ops_ship_time": "VARCHAR(16) NOT NULL DEFAULT ''",
+                "ops_expense_doc_number": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_pallets_ready_time": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_logistics_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
+                "ops_car_driver": "VARCHAR(256) NOT NULL DEFAULT ''",
+            }
+            for name, ddl in batch_ops_cols.items():
+                if name not in batch_cols:
+                    conn.execute(text(f"ALTER TABLE ozon_fbo_batches ADD COLUMN {name} {ddl}"))
+
+    def list_unload_addresses(self) -> list[FboUnloadAddressRow]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(OzonFboUnloadAddress).order_by(OzonFboUnloadAddress.sort_order, OzonFboUnloadAddress.id)
+            ).all()
+            return [
+                FboUnloadAddressRow(
+                    id=int(r.id),
+                    name=str(r.name or ""),
+                    address=str(r.address or ""),
+                    sort_order=int(r.sort_order or 0),
+                )
+                for r in rows
+            ]
+
+    def unload_addresses_map(self) -> dict[int, str]:
+        return {row.id: row.address for row in self.list_unload_addresses()}
+
+    def save_unload_addresses(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {int(r.id): r for r in session.scalars(select(OzonFboUnloadAddress)).all()}
+            keep_ids: set[int] = set()
+            for idx, raw in enumerate(items or []):
+                if not isinstance(raw, dict):
+                    continue
+                name = _str(raw.get("name"), 128)
+                address = _str(raw.get("address"), 512)
+                if not name:
+                    continue
+                row = None
+                raw_id = _int_or_none(raw.get("id"))
+                if raw_id and raw_id in existing:
+                    row = existing[raw_id]
+                if row is None:
+                    row = OzonFboUnloadAddress()
+                    session.add(row)
+                row.name = name
+                row.address = address
+                row.sort_order = idx
+                session.flush()
+                keep_ids.add(int(row.id))
+            for rid, row in existing.items():
+                if rid not in keep_ids:
+                    session.delete(row)
+            session.commit()
+        rows = self.list_unload_addresses()
+        return [
+            {"id": r.id, "name": r.name, "address": r.address, "sort_order": r.sort_order}
+            for r in rows
+        ]
+
+    def _apply_batch_ops_fields(self, row: OzonFboBatch, data: dict[str, Any]) -> None:
+        from app.ozon_fbo_ops_sheets import batch_ops_editable_field_names
+
+        ops_payload = data.get("ops") if isinstance(data.get("ops"), dict) else data
+        field_names = batch_ops_editable_field_names()
+        for key in field_names:
+            if key not in ops_payload:
+                continue
+            if key.endswith("_id"):
+                setattr(row, key, _int_or_none(ops_payload.get(key)))
+                continue
+            limit = 1024 if "comment" in key else 512 if "link" in key else 256 if key == "ops_car_driver" else 64
+            if key in {"ops_assembly_date", "ops_ship_date"}:
+                limit = 10
+            if key == "ops_weight_kg":
+                limit = 32
+            if key == "ops_ship_time":
+                limit = 16
+            setattr(row, key, _str(ops_payload.get(key), limit))
 
     def list_batches(self, filters: dict[str, str] | None = None) -> list[FboBatchRow]:
         filters = filters or {}
@@ -451,6 +553,8 @@ class OzonFboSupplyRepository:
                 row.delivery_type = _normalize_delivery_type(data.get("delivery_type"))
             if "status" in data:
                 row.status = _normalize_batch_status(data.get("status"), default=row.status)
+            if "ops" in data or any(k.startswith("ops_") for k in data):
+                self._apply_batch_ops_fields(row, data)
             row.updated_at_ts = now
             session.commit()
             session.refresh(row)
@@ -583,35 +687,6 @@ class OzonFboSupplyRepository:
             ):
                 if key in data:
                     setattr(row, key, _str(data.get(key), limit))
-            from app.ozon_fbo_ops_sheets import ops_editable_field_names
-
-            ops_field_names = ops_editable_field_names()
-            for key in data:
-                if key.startswith("ops_") and key in ops_field_names:
-                    limit = 1024 if "comment" in key or "link" in key or "address" in key or "driver" in key else 64
-                    if key in {"ops_barcode_link", "ops_barcode_link_2"}:
-                        limit = 512
-                    if key in {"ops_unload_address"}:
-                        limit = 256
-                    if key in {"ops_assembly_date", "ops_ship_date"}:
-                        limit = 10
-                    if key in {"ops_units_count", "ops_weight_kg"}:
-                        limit = 32
-                    if key in {"ops_ship_time"}:
-                        limit = 16
-                    setattr(row, key, _str(data.get(key), limit))
-            ops_payload = data.get("ops")
-            if isinstance(ops_payload, dict):
-                for key in ops_field_names:
-                    if key in ops_payload:
-                        limit = 512 if "link" in key else 256 if key == "ops_unload_address" or key == "ops_car_driver" else 1024 if "comment" in key else 64
-                        if key in {"ops_assembly_date", "ops_ship_date"}:
-                            limit = 10
-                        if key in {"ops_units_count", "ops_weight_kg"}:
-                            limit = 32
-                        if key == "ops_ship_time":
-                            limit = 16
-                        setattr(row, key, _str(ops_payload.get(key), limit))
             if "batch_id" in data:
                 row.batch_id = _int_or_none(data.get("batch_id"))
             if "supply_kind" in data:
@@ -916,23 +991,6 @@ class OzonFboSupplyRepository:
             labels_filename=str(row.labels_filename or ""),
             labels_file=str(row.labels_file or ""),
             comment=str(row.comment or ""),
-            ops_assembly_date=str(row.ops_assembly_date or ""),
-            ops_ship_date=str(row.ops_ship_date or ""),
-            ops_movement_number=str(row.ops_movement_number or ""),
-            ops_units_count=str(row.ops_units_count or ""),
-            ops_cargoes_desc=str(row.ops_cargoes_desc or ""),
-            ops_packing_status=str(row.ops_packing_status or ""),
-            ops_barcode_link=str(row.ops_barcode_link or ""),
-            ops_barcode_link_2=str(row.ops_barcode_link_2 or ""),
-            ops_packing_comment=str(row.ops_packing_comment or ""),
-            ops_client=str(row.ops_client or "OZON"),
-            ops_weight_kg=str(row.ops_weight_kg or ""),
-            ops_unload_address=str(row.ops_unload_address or ""),
-            ops_ship_time=str(row.ops_ship_time or ""),
-            ops_expense_doc_number=str(row.ops_expense_doc_number or ""),
-            ops_pallets_ready_time=str(row.ops_pallets_ready_time or ""),
-            ops_logistics_comment=str(row.ops_logistics_comment or ""),
-            ops_car_driver=str(row.ops_car_driver or ""),
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
             items=items,
@@ -976,6 +1034,19 @@ class OzonFboSupplyRepository:
             manager_user_id=int(row.manager_user_id) if row.manager_user_id else None,
             manager_user_name=manager_name,
             comment=str(row.comment or ""),
+            ops_assembly_date=str(row.ops_assembly_date or ""),
+            ops_ship_date=str(row.ops_ship_date or ""),
+            ops_packing_status=str(row.ops_packing_status or ""),
+            ops_barcode_link_2=str(row.ops_barcode_link_2 or ""),
+            ops_packing_comment=str(row.ops_packing_comment or ""),
+            ops_counterparty_id=int(row.ops_counterparty_id) if row.ops_counterparty_id else None,
+            ops_weight_kg=str(row.ops_weight_kg or ""),
+            ops_unload_address_id=int(row.ops_unload_address_id) if row.ops_unload_address_id else None,
+            ops_ship_time=str(row.ops_ship_time or ""),
+            ops_expense_doc_number=str(row.ops_expense_doc_number or ""),
+            ops_pallets_ready_time=str(row.ops_pallets_ready_time or ""),
+            ops_logistics_comment=str(row.ops_logistics_comment or ""),
+            ops_car_driver=str(row.ops_car_driver or ""),
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
             supply_count=int(supply_count or 0),
@@ -1029,9 +1100,6 @@ def supply_to_dict(
         "cargo_count": len(row.cargoes),
     }
     if include_details:
-        from app.ozon_fbo_ops_sheets import ops_sheet_for_supply
-
-        data["ops_sheet"] = ops_sheet_for_supply(row)
         data["items"] = [
             _supply_item_dict(i, catalog_map)
             for i in row.items
@@ -1091,6 +1159,8 @@ def batch_to_dict(
     *,
     include_details: bool = True,
     catalog_map: dict[str, dict[str, Any]] | None = None,
+    counterparty_name: str = "",
+    unload_address: str = "",
 ) -> dict[str, Any]:
     data = {
         "id": row.id,
@@ -1107,12 +1177,36 @@ def batch_to_dict(
         "manager_user_id": row.manager_user_id,
         "manager_user_name": row.manager_user_name,
         "comment": row.comment,
+        "ops_assembly_date": row.ops_assembly_date,
+        "ops_ship_date": row.ops_ship_date,
+        "ops_packing_status": row.ops_packing_status,
+        "ops_barcode_link_2": row.ops_barcode_link_2,
+        "ops_packing_comment": row.ops_packing_comment,
+        "ops_counterparty_id": row.ops_counterparty_id,
+        "ops_counterparty_name": counterparty_name,
+        "ops_weight_kg": row.ops_weight_kg,
+        "ops_unload_address_id": row.ops_unload_address_id,
+        "ops_unload_address": unload_address,
+        "ops_ship_time": row.ops_ship_time,
+        "ops_expense_doc_number": row.ops_expense_doc_number,
+        "ops_pallets_ready_time": row.ops_pallets_ready_time,
+        "ops_logistics_comment": row.ops_logistics_comment,
+        "ops_car_driver": row.ops_car_driver,
         "created_at_ts": row.created_at_ts,
         "updated_at_ts": row.updated_at_ts,
         "supply_count": row.supply_count,
         "labels_url": row.labels_url,
     }
     if include_details:
+        from app.ozon_fbo_ops_sheets import ops_editable_from_batch, ops_sheet_for_batch
+
+        data["ops_editable"] = ops_editable_from_batch(row)
+        data["ops_sheet"] = ops_sheet_for_batch(
+            row,
+            row.supplies,
+            counterparty_name=counterparty_name,
+            unload_address=unload_address,
+        )
         data["supplies"] = [
             supply_to_dict(s, include_details=True, catalog_map=catalog_map) for s in row.supplies
         ]
