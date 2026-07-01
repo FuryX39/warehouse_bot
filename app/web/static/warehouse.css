@@ -1908,8 +1908,58 @@ body.wh-body {
   color: #888;
 }
 
+.wh-fbo-ops-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+
+.wh-fbo-ops-col-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.wh-fbo-ops-field {
+  display: block;
+  margin-bottom: 0.45rem;
+}
+
+.wh-fbo-ops-label {
+  display: block;
+  font-size: 0.78rem;
+  color: #555;
+  margin-bottom: 0.15rem;
+}
+
+.wh-fbo-ops-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.wh-fbo-ops-auto {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
+.wh-fbo-ops-summary-block {
+  margin-bottom: 1.25rem;
+}
+
+.wh-fbo-ops-table-wrap {
+  overflow-x: auto;
+}
+
+.wh-fbo-ops-summary-table {
+  font-size: 0.82rem;
+}
+
 @media (max-width: 900px) {
   .wh-fbo-cargo-board {
+    grid-template-columns: 1fr;
+  }
+
+  .wh-fbo-ops-grid {
     grid-template-columns: 1fr;
   }
 }

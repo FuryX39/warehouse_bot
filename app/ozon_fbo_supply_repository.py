@@ -11,6 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
 from app.ozon_fbo_labels_storage import batch_labels_url, supply_labels_url
+from app.ozon_fbo_ops_sheets import ops_editable_field_names, ops_sheet_for_supply
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 SUPPLY_KIND_PALLET = "pallet"
@@ -96,6 +97,23 @@ class OzonFboSupply(_Base):
     labels_filename: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     labels_file: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    ops_ship_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    ops_movement_number: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_units_count: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    ops_cargoes_desc: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_packing_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_barcode_link: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    ops_barcode_link_2: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    ops_packing_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    ops_client: Mapped[str] = mapped_column(String(64), nullable=False, default="OZON")
+    ops_weight_kg: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    ops_unload_address: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    ops_ship_time: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    ops_expense_doc_number: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_pallets_ready_time: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_logistics_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    ops_car_driver: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -224,6 +242,23 @@ class FboSupplyRow:
     labels_filename: str
     labels_file: str
     comment: str
+    ops_assembly_date: str
+    ops_ship_date: str
+    ops_movement_number: str
+    ops_units_count: str
+    ops_cargoes_desc: str
+    ops_packing_status: str
+    ops_barcode_link: str
+    ops_barcode_link_2: str
+    ops_packing_comment: str
+    ops_client: str
+    ops_weight_kg: str
+    ops_unload_address: str
+    ops_ship_time: str
+    ops_expense_doc_number: str
+    ops_pallets_ready_time: str
+    ops_logistics_comment: str
+    ops_car_driver: str
     created_at_ts: int
     updated_at_ts: int
     items: list[FboSupplyItemRow] = field(default_factory=list)
@@ -336,6 +371,28 @@ class OzonFboSupplyRepository:
                 conn.execute(
                     text("ALTER TABLE ozon_fbo_supplies ADD COLUMN labels_file VARCHAR(256) NOT NULL DEFAULT ''")
                 )
+            ops_cols = {
+                "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
+                "ops_ship_date": "VARCHAR(10) NOT NULL DEFAULT ''",
+                "ops_movement_number": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_units_count": "VARCHAR(32) NOT NULL DEFAULT ''",
+                "ops_cargoes_desc": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_packing_status": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_barcode_link": "VARCHAR(512) NOT NULL DEFAULT ''",
+                "ops_barcode_link_2": "VARCHAR(512) NOT NULL DEFAULT ''",
+                "ops_packing_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
+                "ops_client": "VARCHAR(64) NOT NULL DEFAULT 'OZON'",
+                "ops_weight_kg": "VARCHAR(32) NOT NULL DEFAULT ''",
+                "ops_unload_address": "VARCHAR(256) NOT NULL DEFAULT ''",
+                "ops_ship_time": "VARCHAR(16) NOT NULL DEFAULT ''",
+                "ops_expense_doc_number": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_pallets_ready_time": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_logistics_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
+                "ops_car_driver": "VARCHAR(256) NOT NULL DEFAULT ''",
+            }
+            for name, ddl in ops_cols.items():
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE ozon_fbo_supplies ADD COLUMN {name} {ddl}"))
 
     def list_batches(self, filters: dict[str, str] | None = None) -> list[FboBatchRow]:
         filters = filters or {}
@@ -527,6 +584,32 @@ class OzonFboSupplyRepository:
             ):
                 if key in data:
                     setattr(row, key, _str(data.get(key), limit))
+            for key in ops_editable_field_names():
+                if key in data:
+                    limit = 1024 if "comment" in key or "link" in key or "address" in key or "driver" in key else 64
+                    if key in {"ops_barcode_link", "ops_barcode_link_2"}:
+                        limit = 512
+                    if key in {"ops_unload_address"}:
+                        limit = 256
+                    if key in {"ops_assembly_date", "ops_ship_date"}:
+                        limit = 10
+                    if key in {"ops_units_count", "ops_weight_kg"}:
+                        limit = 32
+                    if key in {"ops_ship_time"}:
+                        limit = 16
+                    setattr(row, key, _str(data.get(key), limit))
+            ops_payload = data.get("ops")
+            if isinstance(ops_payload, dict):
+                for key in ops_editable_field_names():
+                    if key in ops_payload:
+                        limit = 512 if "link" in key else 256 if key == "ops_unload_address" or key == "ops_car_driver" else 1024 if "comment" in key else 64
+                        if key in {"ops_assembly_date", "ops_ship_date"}:
+                            limit = 10
+                        if key in {"ops_units_count", "ops_weight_kg"}:
+                            limit = 32
+                        if key == "ops_ship_time":
+                            limit = 16
+                        setattr(row, key, _str(ops_payload.get(key), limit))
             if "batch_id" in data:
                 row.batch_id = _int_or_none(data.get("batch_id"))
             if "supply_kind" in data:
@@ -831,6 +914,23 @@ class OzonFboSupplyRepository:
             labels_filename=str(row.labels_filename or ""),
             labels_file=str(row.labels_file or ""),
             comment=str(row.comment or ""),
+            ops_assembly_date=str(row.ops_assembly_date or ""),
+            ops_ship_date=str(row.ops_ship_date or ""),
+            ops_movement_number=str(row.ops_movement_number or ""),
+            ops_units_count=str(row.ops_units_count or ""),
+            ops_cargoes_desc=str(row.ops_cargoes_desc or ""),
+            ops_packing_status=str(row.ops_packing_status or ""),
+            ops_barcode_link=str(row.ops_barcode_link or ""),
+            ops_barcode_link_2=str(row.ops_barcode_link_2 or ""),
+            ops_packing_comment=str(row.ops_packing_comment or ""),
+            ops_client=str(row.ops_client or "OZON"),
+            ops_weight_kg=str(row.ops_weight_kg or ""),
+            ops_unload_address=str(row.ops_unload_address or ""),
+            ops_ship_time=str(row.ops_ship_time or ""),
+            ops_expense_doc_number=str(row.ops_expense_doc_number or ""),
+            ops_pallets_ready_time=str(row.ops_pallets_ready_time or ""),
+            ops_logistics_comment=str(row.ops_logistics_comment or ""),
+            ops_car_driver=str(row.ops_car_driver or ""),
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
             items=items,
@@ -927,6 +1027,7 @@ def supply_to_dict(
         "cargo_count": len(row.cargoes),
     }
     if include_details:
+        data["ops_sheet"] = ops_sheet_for_supply(row)
         data["items"] = [
             _supply_item_dict(i, catalog_map)
             for i in row.items

@@ -16,6 +16,10 @@
   var ozonOrders = [];
   var ozonOrdersCount = 0;
   var listView = "overview";
+  var opsPackingFields = [];
+  var opsLogisticsFields = [];
+  var opsPackingColumns = [];
+  var opsLogisticsColumns = [];
 
   function esc(s) {
     return String(s || "")
@@ -78,6 +82,10 @@
   function loadMeta() {
     return fetchJson("/api/warehouse/marketplaces/ozon-fbo/meta").then(function (data) {
       meta = data;
+      opsPackingFields = data.ops_packing_fields || [];
+      opsLogisticsFields = data.ops_logistics_fields || [];
+      opsPackingColumns = data.ops_packing_columns || [];
+      opsLogisticsColumns = data.ops_logistics_columns || [];
       return meta;
     });
   }
@@ -268,6 +276,164 @@
       : '<span class="wh-muted">—</span>';
   }
 
+  function opsInput(name, label, value, placeholder) {
+    return (
+      '<label class="wh-fbo-ops-field"><span class="wh-fbo-ops-label">' + esc(label) + "</span>" +
+      '<input type="text" class="wh-fbo-input wh-fbo-ops-input" data-ops-field="' + esc(name) + '" value="' + esc(value || "") + '"' +
+      (placeholder ? ' placeholder="' + esc(placeholder) + '"' : "") +
+      " /></label>"
+    );
+  }
+
+  function opsDateInput(name, label, value, placeholder) {
+    return (
+      '<label class="wh-fbo-ops-field"><span class="wh-fbo-ops-label">' + esc(label) + "</span>" +
+      '<input type="date" class="wh-fbo-input wh-fbo-ops-input" data-ops-field="' + esc(name) + '" value="' + esc(value || "") + '"' +
+      (placeholder ? ' placeholder="' + esc(placeholder) + '"' : "") +
+      " /></label>"
+    );
+  }
+
+  function renderOpsForm(supply) {
+    var ops = supply.ops_sheet || {};
+    var editable = ops.editable || {};
+    var values = ops.values || {};
+    var packingHtml = opsPackingFields
+      .map(function (f) {
+        var ph = values[f.value_key] || "";
+        if (f.name === "ops_assembly_date" || f.name === "ops_ship_date") {
+          return opsDateInput(f.name, f.label, editable[f.name], ph && editable[f.name] ? "" : ph);
+        }
+        return opsInput(f.name, f.label, editable[f.name], ph && editable[f.name] ? "" : ph);
+      })
+      .join("");
+    var packingNames = {};
+    opsPackingFields.forEach(function (f) {
+      packingNames[f.name] = true;
+    });
+    var logisticsHtml = opsLogisticsFields
+      .filter(function (f) {
+        return !packingNames[f.name];
+      })
+      .map(function (f) {
+        var ph = values[f.value_key] || "";
+        return opsInput(f.name, f.label, editable[f.name], ph && editable[f.name] ? "" : ph);
+      })
+      .join("");
+    return (
+      '<details class="wh-fbo-ops-sheet" open>' +
+      "<summary>Данные для таблиц (упаковщики и логисты)</summary>" +
+      '<p class="wh-muted wh-fbo-ops-auto">Авто: кластер <b>' + esc(values.cluster || "—") +
+      "</b> · склад <b>" + esc(values.warehouse || "—") +
+      "</b> · ID поставки <b>" + esc(values.supply_id || "—") +
+      "</b> · упаковщик <b>" + esc(values.packer || "—") + "</b></p>" +
+      '<div class="wh-fbo-ops-grid">' +
+      '<div class="wh-fbo-ops-col"><h5 class="wh-fbo-ops-col-title">Поставки (упаковщики)</h5>' + packingHtml + "</div>" +
+      '<div class="wh-fbo-ops-col"><h5 class="wh-fbo-ops-col-title">Отгрузка (логисты)</h5>' + logisticsHtml + "</div>" +
+      "</div>" +
+      '<button type="button" class="wh-btn wh-btn-sm wh-fbo-save-ops" data-supply-id="' + esc(supply.id) + '">Сохранить для таблиц</button>' +
+      "</details>"
+    );
+  }
+
+  function collectOpsPayload(section) {
+    var ops = {};
+    section.querySelectorAll("[data-ops-field]").forEach(function (inp) {
+      ops[inp.getAttribute("data-ops-field")] = inp.value.trim();
+    });
+    return ops;
+  }
+
+  function renderOpsSummaryTables(summary) {
+    summary = summary || {};
+    var rows = summary.rows || [];
+    if (!rows.length) {
+      return '<p class="wh-muted">Нет данных. Заполните поля в заявках и сохраните.</p>';
+    }
+    function table(title, columns, rowKey) {
+      var head = columns
+        .map(function (c) {
+          return "<th>" + esc(c.label) + "</th>";
+        })
+        .join("");
+      var body = rows
+        .map(function (r) {
+          var cells = (r[rowKey] || [])
+            .map(function (cell) {
+              var val = cell.value || "";
+              if ((cell.key === "barcode_link" || cell.key === "barcode_link_2") && val) {
+                return '<td><a href="' + esc(val) + '" target="_blank" rel="noopener">ссылка</a></td>';
+              }
+              return "<td>" + esc(val || "—") + "</td>";
+            })
+            .join("");
+          return "<tr><td>" + esc(r.ozon_supply_id || r.title || r.supply_id) + "</td>" + cells + "</tr>";
+        })
+        .join("");
+      return (
+        '<div class="wh-fbo-ops-summary-block"><h5 class="wh-fbo-ops-col-title">' + esc(title) + "</h5>" +
+        '<div class="wh-fbo-ops-table-wrap"><table class="wh-employees-table wh-crm-table wh-fbo-ops-summary-table">' +
+        "<thead><tr><th>Заявка</th>" + head + "</tr></thead><tbody>" + body + "</tbody></table></div></div>"
+      );
+    }
+    return (
+      table("ПОСТАВКИ (упаковщики)", summary.packing_columns || opsPackingColumns, "packing_row") +
+      table("ОТГРУЗКА (логисты)", summary.logistics_columns || opsLogisticsColumns, "logistics_row")
+    );
+  }
+
+  function opsSummaryFromSupplies(supplies) {
+    return {
+      packing_columns: opsPackingColumns,
+      logistics_columns: opsLogisticsColumns,
+      rows: (supplies || [])
+        .map(function (s) {
+          return s.ops_sheet;
+        })
+        .filter(Boolean),
+    };
+  }
+
+  function bindOpsSummaryExport(tab, item, root, batchId) {
+    var btn = root.querySelector("#whFboExportSheets");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var msg = root.querySelector("#whFboBatchMsg");
+      setMsg(msg, "Подготовка данных для таблиц…", false);
+      fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId + "/ops/export", {
+        method: "POST",
+        body: "{}",
+      })
+        .then(function (data) {
+          var box = root.querySelector("#whFboOpsSummaryTables");
+          if (box) box.innerHTML = renderOpsSummaryTables(data);
+          setMsg(msg, data.message || "Данные подготовлены.", false);
+        })
+        .catch(function (err) {
+          setMsg(msg, err.message, true);
+        });
+    });
+  }
+
+  function bindGlobalOpsSummary(tab, item, root) {
+    var btn = root.querySelector("#whFboLoadOpsSummary");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var box = root.querySelector("#whFboGlobalOpsSummary");
+      var msg = root.querySelector("#whFboListMsg");
+      if (box) box.innerHTML = '<p class="wh-msg">Загрузка…</p>';
+      fetchJson("/api/warehouse/marketplaces/ozon-fbo/ops-summary")
+        .then(function (data) {
+          if (box) box.innerHTML = renderOpsSummaryTables(data);
+          setMsg(msg, "Сводка обновлена (" + (data.supply_count || 0) + " заявок).", false);
+        })
+        .catch(function (err) {
+          if (box) box.innerHTML = "";
+          setMsg(msg, err.message, true);
+        });
+    });
+  }
+
   function renderBatchList(tab, item, opts) {
     opts = opts || {};
     currentBatchId = null;
@@ -307,6 +473,10 @@
               "</tr></thead><tbody>" + batchRows + "</tbody></table>"
             : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
           "</section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
+          '<p class="wh-muted">Все значения для таблиц «ПОСТАВКИ» и «ОТГРУЗКА» по заявкам в системе.</p>' +
+          '<button type="button" class="wh-btn" id="whFboLoadOpsSummary">Показать сводку</button>' +
+          '<div id="whFboGlobalOpsSummary" class="wh-fbo-ops-summary-root"></div></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Заявки в Ozon <span class="wh-muted" id="whFboOzonCount">(' +
           esc(ozonOrdersLoaded ? ozonOrdersCount : "—") +
           ")</span></h4>" +
@@ -320,6 +490,7 @@
           renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
         });
         bindOzonListEvents(tab, item, root);
+        bindGlobalOpsSummary(tab, item, root);
         root.querySelectorAll(".wh-fbo-batch-table tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
           tr.addEventListener("click", function (e) {
@@ -1154,6 +1325,7 @@
               (s.ozon_order_id ? " (заявка " + esc(s.ozon_order_id) + ")" : "") +
               "</h4>" +
               '<p class="wh-muted">' + esc(s.ozon_warehouse_name) + " · " + esc(s.timeslot_label || "") + "</p>" +
+              renderOpsForm(s) +
               renderCargoBoard(s, cargoes) +
               '<div class="wh-fbo-supply-actions">' +
               '<button type="button" class="wh-btn wh-btn-primary wh-fbo-save-cargoes" data-supply-id="' + esc(s.id) + '" title="Сохранить черновик грузомест в системе">Сохранить</button>' +
@@ -1175,12 +1347,16 @@
           (batch.labels_url
             ? '<a class="wh-btn" href="' + esc(batch.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
             : "") +
+          '<button type="button" class="wh-btn" id="whFboExportSheets" title="Подготовить строки для Google Таблиц">Выгрузить в таблицы</button>' +
           '<button type="button" class="wh-btn wh-btn-danger" id="whFboDeleteBatch">Удалить пакет</button>' +
           "</div>" +
           '<p class="wh-muted wh-fbo-batch-hint">После отправки грузомест в Ozon нажмите «Загрузить этикетки» — в списке пакетов появится одна ссылка на объединённый PDF.</p>' +
           '<p class="wh-msg" id="whFboBatchMsg"></p>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">' + esc(batch.title) + "</h4>" +
           "<p>" + esc(batch.delivery_type_label) + " · " + esc(batch.timeslot_label || "—") + " · " + esc(batch.supply_count) + " заявок</p></section>" +
+          '<section class="wh-crm-section wh-fbo-ops-summary-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
+          '<p class="wh-muted">Итоговые строки для «ПОСТАВКИ» и «ОТГРУЗКА» по этому пакету.</p>' +
+          '<div id="whFboOpsSummaryTables">' + renderOpsSummaryTables(opsSummaryFromSupplies(supplies)) + "</div></section>" +
           supplySections +
           "</div>";
         batch.supplies.forEach(function (s) { s._cargoesDraft = cargoStateFromSupply(s); });
@@ -1300,6 +1476,7 @@
             .catch(function (err) { setMsg(msg, err.message, true); });
         });
         bindCargoBoard(root, batch, tab, item, batchId);
+        bindOpsSummaryExport(tab, item, root, batchId);
   }
 
   function getSupplyDraft(root, supplyId) {
@@ -1513,6 +1690,40 @@
             setMsg(msg, "Заявка удалена из системы.", false);
           })
           .catch(function (err) { setMsg(msg, err.message, true); });
+      });
+    });
+    root.querySelectorAll(".wh-fbo-save-ops").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var supplyId = btn.getAttribute("data-supply-id");
+        var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
+        if (!section) return;
+        var msg = root.querySelector("#whFboBatchMsg");
+        var ops = collectOpsPayload(section);
+        setMsg(msg, "Сохранение…", false);
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ops", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ops: ops }),
+        })
+          .then(function (data) {
+            var supply = data.supply;
+            if (root._batchData && supply) {
+              for (var i = 0; i < root._batchData.supplies.length; i++) {
+                if (String(root._batchData.supplies[i].id) === String(supplyId)) {
+                  root._batchData.supplies[i] = supply;
+                  break;
+                }
+              }
+              var summaryBox = root.querySelector("#whFboOpsSummaryTables");
+              if (summaryBox) {
+                summaryBox.innerHTML = renderOpsSummaryTables(opsSummaryFromSupplies(root._batchData.supplies));
+              }
+            }
+            setMsg(msg, "Данные для таблиц сохранены.", false);
+          })
+          .catch(function (err) {
+            setMsg(msg, err.message, true);
+          });
       });
     });
   }

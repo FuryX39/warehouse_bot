@@ -74,6 +74,7 @@ warehouse_packing_app/
 
 # Local runtime data
 data/ozon_fbo_labels/
+tables_examples/
 
 *.db
 *.db-journal

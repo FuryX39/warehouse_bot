@@ -43,6 +43,13 @@ from app.ozon_fbo_api import (
     search_dropoff_warehouses,
     top_warehouse_from_draft_info,
 )
+from app.ozon_fbo_ops_sheets import (
+    LOGISTICS_EDITABLE_KEYS,
+    LOGISTICS_COLUMNS,
+    PACKING_EDITABLE_KEYS,
+    PACKING_COLUMNS,
+    ops_summary_for_supplies,
+)
 from app.ozon_fbo_supply_repository import (
     BATCH_STATUS_PACKING,
     BATCH_STATUS_SUBMITTED,
@@ -59,7 +66,7 @@ from app.warehouse_users_repository import WarehouseUserRow
 
 def _filters_from_query(params: Any) -> dict[str, str]:
     out: dict[str, str] = {}
-    for key in ("q", "status", "assigned_user_id"):
+    for key in ("q", "status", "assigned_user_id", "batch_id"):
         raw = params.get(key)
         if raw is not None and str(raw).strip():
             out[key] = str(raw).strip()
@@ -102,6 +109,16 @@ def register_warehouse_ozon_fbo_routes(
                 {"id": "done", "name": "Завершена"},
             ],
             "dropoff_presets": dropoff_presets_from_env(),
+            "ops_packing_fields": [
+                {"name": name, "value_key": value_key, "label": label}
+                for name, value_key, label in PACKING_EDITABLE_KEYS
+            ],
+            "ops_logistics_fields": [
+                {"name": name, "value_key": value_key, "label": label}
+                for name, value_key, label in LOGISTICS_EDITABLE_KEYS
+            ],
+            "ops_packing_columns": [{"key": k, "label": l} for k, l in PACKING_COLUMNS],
+            "ops_logistics_columns": [{"key": k, "label": l} for k, l in LOGISTICS_COLUMNS],
         }
 
     def _extract_first_id(data: dict, keys: tuple[str, ...]) -> str:
@@ -764,6 +781,70 @@ def register_warehouse_ozon_fbo_routes(
             "draft_id": draft_id,
             "warehouse": warehouse,
             "slots": slots,
+        }
+
+    def _supplies_for_ops(*, batch_id: int | None = None) -> list:
+        filters: dict[str, str] = {}
+        if batch_id:
+            filters["batch_id"] = str(int(batch_id))
+        rows = fbo_repo.list_supplies(filters)
+        full = []
+        for row in rows:
+            supply = fbo_repo.get_supply(row.id)
+            if supply is not None:
+                full.append(supply)
+        return full
+
+    @app.get("/api/warehouse/marketplaces/ozon-fbo/ops-summary")
+    async def api_ozon_fbo_ops_summary(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        batch_raw = request.query_params.get("batch_id")
+        batch_id: int | None = None
+        if batch_raw is not None and str(batch_raw).strip():
+            try:
+                batch_id = int(batch_raw)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Некорректный batch_id") from exc
+        supplies = _supplies_for_ops(batch_id=batch_id)
+        return {"ok": True, **ops_summary_for_supplies(supplies)}
+
+    @app.put("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/ops")
+    async def api_ozon_fbo_update_supply_ops(
+        supply_id: int,
+        body: dict | None = None,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        payload = dict(body or {})
+        ops = payload.get("ops") if isinstance(payload.get("ops"), dict) else payload
+        updated = fbo_repo.update_supply(supply_id, {"ops": ops})
+        if updated is None:
+            raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
+        catalog_map = fbo_repo.catalog_map_for_supply(updated)
+        return {
+            "ok": True,
+            "supply": supply_to_dict(updated, include_details=True, catalog_map=catalog_map),
+        }
+
+    @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}/ops/export")
+    async def api_ozon_fbo_batch_ops_export(
+        batch_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        batch = fbo_repo.get_batch(batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Пакет FBO не найден")
+        supplies = _supplies_for_ops(batch_id=batch_id)
+        if not supplies:
+            raise HTTPException(status_code=404, detail="В пакете нет заявок")
+        summary = ops_summary_for_supplies(supplies)
+        return {
+            "ok": True,
+            "batch_id": batch_id,
+            "google_sheets": False,
+            "message": "Запись в Google Таблицы будет подключена позже. Данные подготовлены к выгрузке.",
+            **summary,
         }
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/batches")
