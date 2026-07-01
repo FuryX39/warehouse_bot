@@ -2688,7 +2688,7 @@
           '<section class="wh-crm-section wh-fbo-ops-summary-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
           '<p class="wh-muted">Редактируйте ячейки в таблице ниже или в форме выше — одна строка на пакет.</p>' +
           '<div id="whFboOpsSummaryTables">' + renderOpsSummaryTables(opsSummaryFromBatch(batch)) + "</div></section>" +
-          supplySections +
+          '<div class="wh-fbo-supplies-grid">' + supplySections + "</div>" +
           "</div>";
         batch.supplies.forEach(function (s) { s._cargoesDraft = cargoStateFromSupply(s); });
         root._batchData = batch;
