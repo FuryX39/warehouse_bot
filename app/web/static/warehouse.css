@@ -1784,6 +1784,31 @@ body.wh-body {
   gap: 0.4rem;
 }
 
+.wh-fbo-cargo-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.wh-fbo-cargo-empty {
+  margin: 0.25rem 0 0;
+}
+
+.wh-fbo-cargo-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.wh-fbo-cargo-type--box {
+  color: #2d6a4f;
+}
+
+.wh-fbo-cargo-type--pallet {
+  color: #5c4d7d;
+}
+
 .wh-fbo-cargo-drop {
   border: 1px solid var(--wh-border);
   border-radius: 8px;

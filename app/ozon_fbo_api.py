@@ -875,7 +875,6 @@ def cargo_expires_at_for_ozon(item: dict[str, Any]) -> str:
 
 
 def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int) -> dict[str, Any]:
-    default_kind = cargo_type_for_supply_kind(str(supply.get("supply_kind") or "box"))
     local_id = int(supply.get("id") or 0)
     cargoes: list[dict[str, Any]] = []
     for idx, cargo in enumerate(supply.get("cargoes") or []):
@@ -894,7 +893,9 @@ def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int
             continue
         cargo_kind = str(cargo.get("cargo_type") or "").upper()
         if cargo_kind not in {"BOX", "PALLET"}:
-            cargo_kind = default_kind
+            raise ValueError(
+                f"Грузоместо #{idx + 1}: укажите тип — короб (BOX) или паллет (PALLET)"
+            )
         cargoes.append(
             {
                 "key": cargo_api_key(cargo, idx, supply_id=local_id),

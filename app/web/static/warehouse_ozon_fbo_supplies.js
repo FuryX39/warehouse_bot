@@ -2186,7 +2186,7 @@
         '<p class="wh-muted wh-fbo-modal-hint">Доступно к распределению: ' + esc(info.maxQty) + " шт.</p>" +
         '<div class="wh-fbo-modal-actions">' +
         '<button type="button" class="wh-btn wh-fbo-modal-cancel">Отмена</button>' +
-        '<button type="button" class="wh-btn wh-btn-primary wh-fbo-modal-ok">Добавить в ГМ</button>' +
+        '<button type="button" class="wh-btn wh-btn-primary wh-fbo-modal-ok">Добавить</button>' +
         "</div></div>";
       document.body.appendChild(overlay);
       var qtyInp = overlay.querySelector(".wh-fbo-modal-qty");
@@ -2238,6 +2238,41 @@
     });
   }
 
+  function cargoTypeLabel(cargoType) {
+    var t = String(cargoType || "").toUpperCase();
+    if (t === "BOX") return "Короб";
+    if (t === "PALLET") return "Паллет";
+    return "";
+  }
+
+  function cargoTypeBadgeClass(cargoType) {
+    var t = String(cargoType || "").toUpperCase();
+    if (t === "BOX") return " wh-fbo-cargo-type--box";
+    if (t === "PALLET") return " wh-fbo-cargo-type--pallet";
+    return "";
+  }
+
+  function addCargoToSupply(supply, cargoType) {
+    if (!supply._cargoesDraft) supply._cargoesDraft = [];
+    var type = String(cargoType || "").toUpperCase();
+    if (type !== "BOX" && type !== "PALLET") type = "BOX";
+    var n = (supply._cargoesDraft || []).length + 1;
+    supply._cargoesDraft.push({
+      cargo_number: String(n),
+      ozon_cargo_id: "",
+      cargo_type: type,
+      comment: "",
+      items: [],
+    });
+  }
+
+  function requireCargoDraft(root, supply) {
+    if (supply._cargoesDraft && supply._cargoesDraft.length) return true;
+    var msg = root.querySelector("#whFboBatchMsg");
+    if (msg) setMsg(msg, "Сначала добавьте короб или паллет.", true);
+    return false;
+  }
+
   function cargoStateFromSupply(supply) {
     var cargoes = (supply.cargoes || []).map(function (c) {
       return {
@@ -2258,9 +2293,6 @@
         }),
       };
     });
-    if (!cargoes.length) {
-      cargoes.push({ cargo_number: "1", ozon_cargo_id: "", cargo_type: "", comment: "", items: [] });
-    }
     return cargoes;
   }
 
@@ -2307,9 +2339,12 @@
             );
           })
           .join("");
+        var typeLabel = cargoTypeLabel(cargo.cargo_type) || "Грузоместо";
+        var typeClass = cargoTypeBadgeClass(cargo.cargo_type);
         return (
           '<div class="wh-fbo-cargo-drop" data-cargo="' + cIdx + '">' +
-          '<div class="wh-fbo-cargo-drop-head">ГМ #' + esc(cargo.cargo_number || cIdx + 1) +
+          '<div class="wh-fbo-cargo-drop-head">' +
+          '<span class="wh-fbo-cargo-type' + typeClass + '">' + esc(typeLabel) + " #" + esc(cargo.cargo_number || cIdx + 1) + "</span>" +
           (cargo.ozon_cargo_id ? ' <span class="wh-muted">(Ozon ' + esc(cargo.ozon_cargo_id) + ")</span>" : "") +
           ' <button type="button" class="wh-btn wh-btn-sm wh-fbo-cargo-del" data-cargo="' + cIdx + '">Удалить</button></div>' +
           '<div class="wh-fbo-cargo-drop-body">' + (itemsHtml || '<span class="wh-muted">Перетащите товар сюда</span>') + "</div></div>"
@@ -2318,10 +2353,15 @@
       .join("");
     return (
       '<div class="wh-fbo-cargo-board" data-supply-id="' + esc(supply.id) + '">' +
-      '<div class="wh-fbo-pool"><h5>Нераспределено</h5><p class="wh-muted wh-fbo-pool-hint">Укажите количество и перетащите в ГМ. Shift — весь остаток.</p>' +
+      '<div class="wh-fbo-pool"><h5>Нераспределено</h5><p class="wh-muted wh-fbo-pool-hint">Сначала добавьте короб или паллет, затем перетащите товар. Shift — весь остаток.</p>' +
       '<div class="wh-fbo-pool-list">' + poolHtml + "</div></div>" +
-      '<div class="wh-fbo-cargoes-col"><h5>Грузоместа <button type="button" class="wh-btn wh-btn-sm wh-fbo-add-cargo" data-supply-id="' + esc(supply.id) + '">+ ГМ</button></h5>' +
-      cargoesHtml + "</div></div>"
+      '<div class="wh-fbo-cargoes-col"><h5>Грузоместа</h5>' +
+      '<div class="wh-fbo-cargo-add-actions">' +
+      '<button type="button" class="wh-btn wh-btn-sm wh-fbo-add-cargo-box" data-supply-id="' + esc(supply.id) + '" data-cargo-type="BOX">+ короб</button>' +
+      '<button type="button" class="wh-btn wh-btn-sm wh-fbo-add-cargo-pallet" data-supply-id="' + esc(supply.id) + '" data-cargo-type="PALLET">+ паллет</button>' +
+      "</div>" +
+      (cargoesHtml || '<p class="wh-muted wh-fbo-cargo-empty">Нет грузомест. Нажмите «+ короб» или «+ паллет».</p>') +
+      "</div></div>"
     );
   }
 
@@ -2474,8 +2514,16 @@
         root.querySelector("#whFboSendAllCargoes").addEventListener("click", function () {
           syncCargoDraftFromDom(root);
           var msg = root.querySelector("#whFboBatchMsg");
-          setMsg(msg, "Сохранение и отправка в Ozon…", false);
           var supplies = (root._batchData && root._batchData.supplies) || batch.supplies || [];
+          for (var si = 0; si < supplies.length; si++) {
+            var draftSupply = getSupplyDraft(root, supplies[si].id) || supplies[si];
+            var vErr = validateCargoesForOzon(draftSupply);
+            if (vErr) {
+              setMsg(msg, "Заявка #" + supplies[si].id + ": " + vErr, true);
+              return;
+            }
+          }
+          setMsg(msg, "Сохранение и отправка в Ozon…", false);
           var saves = supplies.map(function (s) {
             var draft = getSupplyDraft(root, s.id) || s;
             return fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + s.id + "/cargoes", {
@@ -2567,6 +2615,24 @@
     return null;
   }
 
+  function validateCargoesForOzon(supply) {
+    var cargoes = supply._cargoesDraft || [];
+    if (!cargoes.length) return "Добавьте хотя бы одно грузоместо (короб или паллет) и распределите товары.";
+    var hasItems = false;
+    for (var i = 0; i < cargoes.length; i++) {
+      var c = cargoes[i];
+      var items = c.items || [];
+      if (!items.length) continue;
+      hasItems = true;
+      var t = String(c.cargo_type || "").toUpperCase();
+      if (t !== "BOX" && t !== "PALLET") {
+        return "Грузоместо #" + (i + 1) + ": укажите тип — добавьте через «+ короб» или «+ паллет».";
+      }
+    }
+    if (!hasItems) return "Распределите товары по грузоместам перед отправкой в Ozon.";
+    return "";
+  }
+
   function bindCargoBoard(root, batch, tab, item, batchId) {
     root.querySelectorAll(".wh-fbo-pool-item").forEach(function (el) {
       el.addEventListener("dragstart", function (e) {
@@ -2586,13 +2652,11 @@
           var supplyId = board.getAttribute("data-supply-id");
           var supply = getSupplyDraft(root, supplyId);
           if (!supply) return;
+          if (!requireCargoDraft(root, supply)) return;
           var payload = poolPayloadFromEl(el);
           var left = maxAllocatable(supply, payload.sku, -1, -1);
           if (left < 1) return;
           var cIdx = 0;
-          if (!supply._cargoesDraft.length) {
-            supply._cargoesDraft.push({ cargo_number: "1", comment: "", items: [] });
-          }
           showCargoAddDialog({
             sku: payload.sku,
             name: payload.name,
@@ -2677,12 +2741,12 @@
         rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
       });
     });
-    root.querySelectorAll(".wh-fbo-add-cargo").forEach(function (btn) {
+    root.querySelectorAll(".wh-fbo-add-cargo-box, .wh-fbo-add-cargo-pallet").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var supplyId = btn.getAttribute("data-supply-id");
         var supply = getSupplyDraft(root, supplyId);
         if (!supply) return;
-        supply._cargoesDraft.push({ cargo_number: String(supply._cargoesDraft.length + 1), comment: "", items: [] });
+        addCargoToSupply(supply, btn.getAttribute("data-cargo-type"));
         rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
       });
     });
@@ -2719,6 +2783,11 @@
         var supply = getSupplyDraft(root, supplyId);
         if (!supply) return;
         var msg = root.querySelector("#whFboBatchMsg");
+        var err = validateCargoesForOzon(supply);
+        if (err) {
+          setMsg(msg, err, true);
+          return;
+        }
         setMsg(msg, "Сохранение и отправка…", false);
         fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/cargoes", {
           method: "PUT",
