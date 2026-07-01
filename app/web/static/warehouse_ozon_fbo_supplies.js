@@ -695,12 +695,42 @@
     return map;
   }
 
+  function summaryColgroup(columns) {
+    var cols =
+      '<col class="wh-fbo-ops-col wh-fbo-ops-col--batch" />' +
+      columns
+        .map(function (c) {
+          return '<col class="wh-fbo-ops-col wh-fbo-ops-col--' + esc(c.key) + '" />';
+        })
+        .join("");
+    return "<colgroup>" + cols + "</colgroup>";
+  }
+
+  function summaryCellAttrs(cell) {
+    var key = cell && cell.key ? cell.key : "";
+    return key ? ' data-col-key="' + esc(key) + '"' : "";
+  }
+
   function renderOpsSummaryReadonlyCell(cell) {
     var val = cell.value || "";
+    var attrs = summaryCellAttrs(cell);
     if (cell.key === "barcode_link" && val) {
-      return '<td class="wh-fbo-ops-summary-readonly"><a href="' + esc(val) + '" target="_blank" rel="noopener">ссылка</a></td>';
+      return (
+        '<td class="wh-fbo-ops-summary-readonly"' +
+        attrs +
+        '><a href="' +
+        esc(val) +
+        '" target="_blank" rel="noopener">ссылка</a></td>'
+      );
     }
-    return '<td class="wh-fbo-ops-summary-readonly">' + esc(val || "—") + "</td>";
+    return (
+      '<td class="wh-fbo-ops-summary-readonly"' +
+      attrs +
+      (val ? ' title="' + esc(val) + '"' : "") +
+      ">" +
+      esc(val || "—") +
+      "</td>"
+    );
   }
 
   function renderOpsSummaryEditableCell(row, cell, field) {
@@ -708,6 +738,7 @@
     var ops = row.ops_editable || {};
     var fieldName = field.name;
     var val = ops[fieldName] != null && ops[fieldName] !== "" ? String(ops[fieldName]) : "";
+    var colAttrs = summaryCellAttrs(cell);
     var attrs =
       ' class="wh-fbo-input wh-fbo-ops-summary-cell" data-batch-id="' +
       esc(bid) +
@@ -715,18 +746,29 @@
       esc(fieldName) +
       '"';
     if (field.type === "packing_status") {
-      return "<td><select" + attrs + ">" + buildPackingStatusOptions(val) + "</select></td>";
+      return "<td" + colAttrs + "><select" + attrs + ">" + buildPackingStatusOptions(val) + "</select></td>";
     }
     if (field.type === "counterparty") {
-      return "<td><select" + attrs + ">" + buildCounterpartyOptions(val) + "</select></td>";
+      return "<td" + colAttrs + "><select" + attrs + ">" + buildCounterpartyOptions(val) + "</select></td>";
     }
     if (field.type === "unload_address") {
-      return "<td><select" + attrs + ">" + buildUnloadAddressOptions(val) + "</select></td>";
+      return "<td" + colAttrs + "><select" + attrs + ">" + buildUnloadAddressOptions(val) + "</select></td>";
     }
     if (field.type === "date") {
-      return "<td><input type=\"date\"" + attrs + ' value="' + esc(val) + '" /></td>';
+      return "<td" + colAttrs + '><input type="date"' + attrs + ' value="' + esc(val) + '" /></td>';
     }
-    return "<td><input type=\"text\"" + attrs + ' value="' + esc(val) + '" /></td>';
+    if (field.name === "ops_packing_comment" || field.name === "ops_logistics_comment") {
+      return (
+        "<td" +
+        colAttrs +
+        '><textarea rows="2"' +
+        attrs +
+        ">" +
+        esc(val) +
+        "</textarea></td>"
+      );
+    }
+    return "<td" + colAttrs + '><input type="text"' + attrs + ' value="' + esc(val) + '" /></td>';
   }
 
   function renderOpsSummaryTableBody(rowList, rowKey, fieldMap) {
@@ -744,7 +786,9 @@
         return (
           '<tr data-batch-id="' +
           esc(r.batch_id) +
-          '"><td class="wh-fbo-ops-summary-readonly">' +
+          '"><td class="wh-fbo-ops-summary-readonly wh-fbo-ops-summary-batch" data-col-key="batch" title="' +
+          esc(r.batch_title || r.title || "") +
+          '">' +
           esc(r.batch_title || r.title || ("Пакет #" + (r.batch_id || "—"))) +
           "</td>" +
           cells +
@@ -766,7 +810,15 @@
     function table(title, columns, rowList, rowKey) {
       var head = columns
         .map(function (c) {
-          return "<th>" + esc(c.label) + "</th>";
+          return (
+            '<th data-col-key="' +
+            esc(c.key) +
+            '" title="' +
+            esc(c.label) +
+            '">' +
+            esc(c.label) +
+            "</th>"
+          );
         })
         .join("");
       var body = renderOpsSummaryTableBody(rowList, rowKey, fieldMap);
@@ -775,7 +827,8 @@
         esc(title) +
         "</h5>" +
         '<div class="wh-fbo-ops-table-wrap"><table class="wh-employees-table wh-crm-table wh-fbo-ops-summary-table wh-fbo-ops-summary-table--editable">' +
-        "<thead><tr><th>Пакет</th>" +
+        summaryColgroup(columns) +
+        "<thead><tr><th data-col-key=\"batch\">Пакет</th>" +
         head +
         "</tr></thead><tbody>" +
         body +
@@ -786,7 +839,7 @@
       '<div class="wh-fbo-ops-summary-toolbar">' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whFboOpsSummarySave">Сохранить изменения</button>' +
       '<span class="wh-muted" id="whFboOpsSummarySaveMsg"></span></div>' +
-      '<p class="wh-muted wh-fbo-ops-summary-hint">Редактируйте ячейки прямо в таблице — одна строка на пакет. Серые поля заполняются автоматически.</p>' +
+      '<p class="wh-muted wh-fbo-ops-summary-hint">Редактируйте ячейки в таблице. Длинный текст переносится на несколько строк — горизонтальная прокрутка не нужна.</p>' +
       table("ПОСТАВКИ (упаковщики)", summary.packing_columns || opsPackingColumns, packingRows, "packing_row") +
       table("ОТГРУЗКА (логисты)", summary.logistics_columns || opsLogisticsColumns, logisticsRows, "logistics_row")
     );

@@ -1946,6 +1946,10 @@ body.wh-body {
   margin-bottom: 1.25rem;
 }
 
+.wh-fbo-ops-summary-root {
+  width: 100%;
+}
+
 .wh-fbo-ops-summary-toolbar {
   display: flex;
   align-items: center;
@@ -1960,28 +1964,102 @@ body.wh-body {
 }
 
 .wh-fbo-ops-table-wrap {
-  overflow-x: auto;
+  width: 100%;
+  overflow-x: visible;
 }
 
 .wh-fbo-ops-summary-table {
-  font-size: 0.82rem;
-}
-
-.wh-fbo-ops-summary-table--editable .wh-fbo-ops-summary-cell {
+  table-layout: fixed;
   width: 100%;
-  min-width: 5rem;
-  max-width: 14rem;
-  font-size: 0.8rem;
-  padding: 0.2rem 0.35rem;
-  box-sizing: border-box;
+  font-size: 0.74rem;
+  margin-bottom: 0.35rem;
 }
 
-.wh-fbo-ops-summary-table--editable select.wh-fbo-ops-summary-cell {
-  max-width: 11rem;
+.wh-fbo-ops-summary-table th,
+.wh-fbo-ops-summary-table td {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  padding: 0.28rem 0.32rem;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.28;
+  hyphens: auto;
+  max-width: 0;
+}
+
+.wh-fbo-ops-summary-table th {
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.2;
+  background: #f3f6fb;
+}
+
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--batch {
+  width: 8%;
+}
+
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--assembly_date,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--ship_date,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--ship_time,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--units_count,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--weight_kg,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--cargoes_desc,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--movement_number,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--barcode_link,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--barcode_link_2,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--packing_status {
+  width: 5.5%;
+}
+
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--packing_comment,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--logistics_comment,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--unload_address,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--car_driver {
+  width: 8%;
+}
+
+.wh-fbo-ops-summary-batch {
+  font-weight: 600;
+  font-size: 0.72rem;
 }
 
 .wh-fbo-ops-summary-readonly {
-  white-space: nowrap;
+  color: #555;
+}
+
+.wh-fbo-ops-summary-table--editable td {
+  padding: 0.2rem 0.25rem;
+}
+
+.wh-fbo-ops-summary-table--editable .wh-fbo-ops-summary-cell {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  font-size: inherit;
+  padding: 0.14rem 0.2rem;
+  line-height: 1.25;
+  box-sizing: border-box;
+}
+
+.wh-fbo-ops-summary-table--editable textarea.wh-fbo-ops-summary-cell {
+  min-height: 2.4rem;
+  resize: vertical;
+}
+
+.wh-fbo-ops-summary-table--editable input[type="date"].wh-fbo-ops-summary-cell {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.15rem;
+}
+
+.wh-fbo-ops-summary-table--editable select.wh-fbo-ops-summary-cell {
+  max-width: 100%;
+  padding: 0.12rem 0.18rem;
+}
+
+.wh-fbo-ops-summary-table--editable select.wh-crm-status-select {
+  font-size: inherit;
 }
 
 @media (max-width: 900px) {
