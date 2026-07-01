@@ -864,22 +864,28 @@
     return "П";
   }
 
-  function renderCargoesCountInput(val, suffix, attrs, manual) {
+  function renderCargoesCountInput(countVal, suffix, countAttrs, suffixAttrs, manual) {
     var manualClass = manual ? " wh-fbo-ops-manual" : "";
+    var suf = suffix === "К" ? "К" : "П";
     return (
       '<div class="wh-fbo-cargoes-count-cell' +
       manualClass +
       '">' +
       '<input type="number" min="0" step="1"' +
-      attrs +
+      countAttrs +
       ' value="' +
-      esc(val) +
+      esc(countVal) +
       '" />' +
-      '<span class="wh-fbo-cargoes-suffix" title="' +
-      esc(suffix === "К" ? "короба" : "паллеты") +
-      '">' +
-      esc(suffix) +
-      "</span></div>"
+      "<select" +
+      suffixAttrs +
+      ' class="wh-fbo-input wh-fbo-cargoes-suffix-select" title="П — паллеты, К — короба">' +
+      '<option value="П"' +
+      (suf === "П" ? " selected" : "") +
+      ">П</option>" +
+      '<option value="К"' +
+      (suf === "К" ? " selected" : "") +
+      ">К</option>" +
+      "</select></div>"
     );
   }
 
@@ -934,7 +940,8 @@
         renderCargoesCountInput(
           countVal,
           suffix,
-          ' class="wh-fbo-input wh-fbo-ops-input" data-ops-field="' + esc(f.name) + '"',
+          ' class="wh-fbo-input wh-fbo-ops-input" data-ops-field="ops_cargoes_count"',
+          ' data-ops-field="ops_cargoes_suffix"',
           manual
         ) +
         "</label>"
@@ -1007,7 +1014,7 @@
     });
     var picker = section.querySelector(".wh-fbo-packer-picker");
     if (picker) ops.ops_packer_user_ids = collectPackerIdsFromPicker(picker);
-    if (Object.prototype.hasOwnProperty.call(ops, "ops_cargoes_count")) {
+    if (Object.prototype.hasOwnProperty.call(ops, "ops_cargoes_count") || Object.prototype.hasOwnProperty.call(ops, "ops_cargoes_suffix")) {
       ops.ops_cargoes_count_manual = 1;
     }
     return ops;
@@ -1058,15 +1065,12 @@
     return key ? ' data-col-key="' + esc(key) + '"' : "";
   }
 
-  function renderOpsSummaryReadonlyCell(cell, row) {
+  function renderOpsSummaryReadonlyCell(cell) {
     var val = cell.value || "";
     var attrs = summaryCellAttrs(cell);
-    var manualClass = cell.key === "cargoes_desc" && cargoesCountManual(row) ? " wh-fbo-ops-manual" : "";
     if (cell.key === "barcode_link" && val) {
       return (
-        '<td class="wh-fbo-ops-summary-readonly' +
-        manualClass +
-        '"' +
+        '<td class="wh-fbo-ops-summary-readonly"' +
         attrs +
         '><a href="' +
         esc(val) +
@@ -1074,9 +1078,7 @@
       );
     }
     return (
-      '<td class="wh-fbo-ops-summary-readonly' +
-      manualClass +
-      '"' +
+      '<td class="wh-fbo-ops-summary-readonly"' +
       attrs +
       (val ? ' title="' + esc(val) + '"' : "") +
       ">" +
@@ -1085,13 +1087,13 @@
     );
   }
 
-  function renderOpsSummaryEditableCell(row, cell, field) {
+  function renderOpsSummaryEditableCell(row, cell, field, rowKey) {
     var bid = row.batch_id;
     var ops = row.ops_editable || {};
     var fieldName = field.name;
     var val = ops[fieldName] != null && ops[fieldName] !== "" ? String(ops[fieldName]) : "";
     var colAttrs = summaryCellAttrs(cell);
-    var manual = field.type === "cargoes_count" && cargoesCountManual(row);
+    var manual = field.type === "cargoes_count" && rowKey === "packing_row" && cargoesCountManual(row);
     var tdClass = manual ? ' class="wh-fbo-ops-manual"' : "";
     var attrs =
       ' class="wh-fbo-input wh-fbo-ops-summary-cell" data-batch-id="' +
@@ -1139,7 +1141,13 @@
         tdClass +
         colAttrs +
         ">" +
-        renderCargoesCountInput(val, suffix, attrs, manual) +
+        renderCargoesCountInput(
+          val,
+          suffix,
+          ' class="wh-fbo-input wh-fbo-ops-summary-cell" data-batch-id="' + esc(bid) + '" data-ops-field="ops_cargoes_count"',
+          ' class="wh-fbo-input wh-fbo-ops-summary-cell wh-fbo-cargoes-suffix-select" data-batch-id="' + esc(bid) + '" data-ops-field="ops_cargoes_suffix"',
+          manual
+        ) +
         "</td>"
       );
     }
@@ -1167,10 +1175,13 @@
         var cells = (r[rowKey] || [])
           .map(function (cell) {
             var field = fieldMap[cell.key];
-            if (!OPS_SUMMARY_READONLY[cell.key] && field) {
-              return renderOpsSummaryEditableCell(r, cell, field);
+            if (field && field.type === "cargoes_count" && rowKey !== "packing_row") {
+              return renderOpsSummaryReadonlyCell(cell);
             }
-            return renderOpsSummaryReadonlyCell(cell, r);
+            if (!OPS_SUMMARY_READONLY[cell.key] && field) {
+              return renderOpsSummaryEditableCell(r, cell, field, rowKey);
+            }
+            return renderOpsSummaryReadonlyCell(cell);
           })
           .join("");
         return (
@@ -1229,7 +1240,7 @@
       '<div class="wh-fbo-ops-summary-toolbar">' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whFboOpsSummarySave">Сохранить изменения</button>' +
       '<span class="wh-muted" id="whFboOpsSummarySaveMsg"></span></div>' +
-      '<p class="wh-muted wh-fbo-ops-summary-hint">Редактируйте ячейки в таблице. Количество грузомест подставляется из грузомест пакета (П — паллеты, К — короба); жёлтая подсветка — значение изменено вручную и не перезапишется при обновлении из Ozon.</p>' +
+      '<p class="wh-muted wh-fbo-ops-summary-hint">Количество грузомест редактируется в таблице «Поставки» (число и П/К). В «Отгрузке» — только просмотр. Жёлтая подсветка — ручное значение, не перезапишется при обновлении из Ozon.</p>' +
       table("ПОСТАВКИ (упаковщики)", summary.packing_columns || opsPackingColumns, packingRows, "packing_row") +
       table("ОТГРУЗКА (логисты)", summary.logistics_columns || opsLogisticsColumns, logisticsRows, "logistics_row")
     );
@@ -1244,7 +1255,7 @@
       if (key.endsWith("_id")) ops[key] = val ? parseInt(val, 10) : null;
       else ops[key] = val;
     });
-    if (Object.prototype.hasOwnProperty.call(ops, "ops_cargoes_count")) {
+    if (Object.prototype.hasOwnProperty.call(ops, "ops_cargoes_count") || Object.prototype.hasOwnProperty.call(ops, "ops_cargoes_suffix")) {
       ops.ops_cargoes_count_manual = 1;
     }
     var picker = container.querySelector('.wh-fbo-packer-picker[data-batch-id="' + batchId + '"]');

@@ -1958,6 +1958,15 @@ body.wh-body {
   flex-wrap: wrap;
 }
 
+.wh-fbo-cargoes-suffix-select {
+  width: 2.6rem;
+  min-width: 0;
+  padding-left: 0.2rem;
+  padding-right: 0.2rem;
+  text-align: center;
+  font-weight: 600;
+}
+
 .wh-fbo-ops-summary-readonly.wh-fbo-ops-manual,
 .wh-fbo-ops-summary-table td.wh-fbo-ops-manual {
   background: #fff8e1;

@@ -90,6 +90,7 @@ class OzonFboBatch(_Base):
     ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
     ops_cargoes_desc: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ops_cargoes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ops_cargoes_suffix: Mapped[str] = mapped_column(String(4), nullable=False, default="")
     ops_cargoes_count_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ops_packing_status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ops_supply_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -214,6 +215,7 @@ class OzonFboCargo(_Base):
     ozon_cargo_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     labels_file: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    cargo_type: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -260,6 +262,7 @@ class FboCargoRow:
     ozon_cargo_id: str
     labels_file: str
     comment: str
+    cargo_type: str
     sort_order: int
     items: list[FboCargoItemRow] = field(default_factory=list)
 
@@ -306,6 +309,7 @@ class FboBatchRow:
     ops_assembly_date: str
     ops_cargoes_desc: str
     ops_cargoes_count: int
+    ops_cargoes_suffix: str
     ops_cargoes_count_manual: bool
     ops_packing_status_id: int | None
     ops_supply_type_id: int | None
@@ -649,6 +653,22 @@ class OzonFboSupplyRepository:
                         "INTEGER NOT NULL DEFAULT 0"
                     )
                 )
+            batch_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_batches)")).all()
+            }
+            if "ops_cargoes_suffix" not in batch_cols:
+                conn.execute(
+                    text("ALTER TABLE ozon_fbo_batches ADD COLUMN ops_cargoes_suffix VARCHAR(4) NOT NULL DEFAULT ''")
+                )
+            cargo_cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_cargoes)")).all()
+            }
+            if "cargo_type" not in cargo_cols:
+                conn.execute(
+                    text("ALTER TABLE ozon_fbo_cargoes ADD COLUMN cargo_type VARCHAR(16) NOT NULL DEFAULT ''")
+                )
             self._backfill_batch_cargoes_counts(conn)
 
     def _backfill_batch_cargoes_counts(self, conn) -> None:
@@ -688,21 +708,37 @@ class OzonFboSupplyRepository:
                 cargo_count = parse_cargoes_desc_count(desc)
             if cargo_count <= 0:
                 continue
-            kinds = conn.execute(
+            type_rows = conn.execute(
                 text(
-                    "SELECT DISTINCT supply_kind FROM ozon_fbo_supplies "
-                    "WHERE batch_id = :bid AND supply_kind != ''"
+                    "SELECT DISTINCT UPPER(COALESCE(c.cargo_type, '')) "
+                    "FROM ozon_fbo_cargoes c "
+                    "JOIN ozon_fbo_supplies s ON s.id = c.supply_id "
+                    "WHERE s.batch_id = :bid AND TRIM(c.cargo_type) != ''"
                 ),
                 {"bid": batch_id},
             ).all()
-            kind_set = {str(r[0] or "").strip().lower() for r in kinds}
-            suffix = "К" if kind_set == {SUPPLY_KIND_BOX} else "П"
+            types = [str(r[0] or "").strip().upper() for r in type_rows if str(r[0] or "").strip()]
+            if not types:
+                suffix = "П"
+            elif all(t == "BOX" for t in types):
+                suffix = "К"
+            elif all(t == "PALLET" for t in types):
+                suffix = "П"
+            else:
+                box_count = sum(1 for t in types if t == "BOX")
+                suffix = "К" if box_count > len(types) / 2 else "П"
             conn.execute(
                 text(
-                    "UPDATE ozon_fbo_batches SET ops_cargoes_count = :cnt, ops_cargoes_desc = :desc "
+                    "UPDATE ozon_fbo_batches SET ops_cargoes_count = :cnt, ops_cargoes_suffix = :suffix, "
+                    "ops_cargoes_desc = :desc "
                     "WHERE id = :id AND ops_cargoes_count_manual = 0"
                 ),
-                {"cnt": cargo_count, "desc": format_cargoes_desc(cargo_count, suffix), "id": batch_id},
+                {
+                    "cnt": cargo_count,
+                    "suffix": suffix,
+                    "desc": format_cargoes_desc(cargo_count, suffix),
+                    "id": batch_id,
+                },
             )
 
     def list_packing_statuses(self) -> list[FboPackingStatusRow]:
@@ -940,8 +976,8 @@ class OzonFboSupplyRepository:
     def _apply_batch_ops_fields(self, session: Session, row: OzonFboBatch, data: dict[str, Any]) -> None:
         from app.ozon_fbo_ops_sheets import (
             batch_ops_editable_field_names,
-            cargo_suffix_from_supplies,
             format_cargoes_desc,
+            normalize_cargoes_suffix,
             parse_cargoes_count,
         )
 
@@ -961,20 +997,22 @@ class OzonFboSupplyRepository:
             if key == "ops_ship_time":
                 limit = 16
             setattr(row, key, _str(ops_payload.get(key), limit))
+        cargoes_touched = False
         if "ops_cargoes_count" in ops_payload:
-            count = parse_cargoes_count(ops_payload.get("ops_cargoes_count"))
-            row.ops_cargoes_count = count
+            row.ops_cargoes_count = parse_cargoes_count(ops_payload.get("ops_cargoes_count"))
+            cargoes_touched = True
+        if "ops_cargoes_suffix" in ops_payload:
+            row.ops_cargoes_suffix = normalize_cargoes_suffix(ops_payload.get("ops_cargoes_suffix"))
+            cargoes_touched = True
+        if cargoes_touched:
             row.ops_cargoes_count_manual = True
-            supply_rows = session.scalars(
-                select(OzonFboSupply).where(OzonFboSupply.batch_id == int(row.id)).order_by(OzonFboSupply.id)
-            ).all()
-            supplies = [self._row(session, s, include_details=True) for s in supply_rows]
-            suffix = cargo_suffix_from_supplies(supplies)
-            row.ops_cargoes_desc = format_cargoes_desc(count, suffix)
+            suffix = normalize_cargoes_suffix(row.ops_cargoes_suffix or "П")
+            row.ops_cargoes_suffix = suffix
+            row.ops_cargoes_desc = format_cargoes_desc(int(row.ops_cargoes_count or 0), suffix)
 
     def refresh_batch_cargoes_count(self, batch_id: int, *, from_ozon: bool = False) -> None:
         from app.ozon_fbo_ops_sheets import (
-            cargo_suffix_from_supplies,
+            cargo_suffix_from_cargoes,
             count_cargoes_in_supplies,
             format_cargoes_desc,
         )
@@ -990,8 +1028,9 @@ class OzonFboSupplyRepository:
             ).all()
             supplies = [self._row(session, s, include_details=True) for s in supply_rows]
             count = count_cargoes_in_supplies(supplies)
-            suffix = cargo_suffix_from_supplies(supplies)
+            suffix = cargo_suffix_from_cargoes(supplies)
             batch.ops_cargoes_count = count
+            batch.ops_cargoes_suffix = suffix
             batch.ops_cargoes_desc = format_cargoes_desc(count, suffix)
             batch.updated_at_ts = int(time.time())
             session.commit()
@@ -1311,6 +1350,7 @@ class OzonFboSupplyRepository:
                     cargo_number=_str(raw.get("cargo_number"), 64) or str(idx + 1),
                     ozon_cargo_id=_str(raw.get("ozon_cargo_id"), 64),
                     comment=_str(raw.get("comment"), 512),
+                    cargo_type=_str(raw.get("cargo_type"), 16).upper(),
                     sort_order=idx,
                 )
                 session.add(cargo)
@@ -1419,6 +1459,7 @@ class OzonFboSupplyRepository:
             ozon_cargo_id=str(cargo.ozon_cargo_id or ""),
             labels_file=str(cargo.labels_file or ""),
             comment=str(cargo.comment or ""),
+            cargo_type=str(cargo.cargo_type or "").upper(),
             sort_order=int(cargo.sort_order),
             items=[
                 FboCargoItemRow(
@@ -1551,6 +1592,7 @@ class OzonFboSupplyRepository:
             ops_assembly_date=str(row.ops_assembly_date or ""),
             ops_cargoes_desc=str(row.ops_cargoes_desc or ""),
             ops_cargoes_count=int(row.ops_cargoes_count or 0),
+            ops_cargoes_suffix=str(row.ops_cargoes_suffix or ""),
             ops_cargoes_count_manual=bool(row.ops_cargoes_count_manual),
             ops_packing_status_id=int(row.ops_packing_status_id) if row.ops_packing_status_id else None,
             ops_supply_type_id=int(row.ops_supply_type_id) if row.ops_supply_type_id else None,
@@ -1628,6 +1670,7 @@ def supply_to_dict(
                 "id": c.id,
                 "cargo_number": c.cargo_number,
                 "ozon_cargo_id": c.ozon_cargo_id,
+                "cargo_type": c.cargo_type,
                 "comment": c.comment,
                 "sort_order": c.sort_order,
                 "items": [
@@ -1704,6 +1747,7 @@ def batch_to_dict(
         "ops_assembly_date": row.ops_assembly_date,
         "ops_cargoes_desc": row.ops_cargoes_desc,
         "ops_cargoes_count": row.ops_cargoes_count,
+        "ops_cargoes_suffix": row.ops_cargoes_suffix,
         "ops_cargoes_count_manual": row.ops_cargoes_count_manual,
         "ops_packing_status_id": row.ops_packing_status_id,
         "ops_packing_status_name": packing_status_name,

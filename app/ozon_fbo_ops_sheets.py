@@ -97,24 +97,41 @@ def parse_cargoes_desc_count(desc: str) -> int:
         return 0
 
 
-def cargo_suffix_from_supplies(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
-    from app.ozon_fbo_supply_repository import SUPPLY_KIND_BOX
+def normalize_cargoes_suffix(raw: Any) -> str:
+    val = str(raw or "").strip().upper()
+    return "К" if val in {"K", "К"} else "П"
 
-    if not supplies:
+
+def parse_cargoes_desc_suffix(desc: str) -> str:
+    text = str(desc or "").strip()
+    if not text:
+        return ""
+    tail = text.split()[-1] if text.split() else ""
+    return normalize_cargoes_suffix(tail)
+
+
+def cargo_suffix_from_cargoes(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
+    types: list[str] = []
+    for supply in supplies:
+        for cargo in supply.cargoes or []:
+            kind = str(getattr(cargo, "cargo_type", "") or "").strip().upper()
+            if kind in {"BOX", "PALLET"}:
+                types.append(kind)
+    if not types:
         return "П"
-    kinds = {str(s.supply_kind or "").strip().lower() for s in supplies}
-    kinds.discard("")
-    if kinds == {SUPPLY_KIND_BOX}:
+    if all(kind == "BOX" for kind in types):
         return "К"
-    return "П"
+    if all(kind == "PALLET" for kind in types):
+        return "П"
+    box_count = sum(1 for kind in types if kind == "BOX")
+    return "К" if box_count > len(types) / 2 else "П"
 
 
 def format_cargoes_desc(count: int, suffix: str) -> str:
     qty = max(int(count or 0), 0)
     if qty <= 0:
         return ""
-    raw = str(suffix or "П").strip().upper()
-    suf = "К" if raw in {"K", "К"} else "П"
+    suf = normalize_cargoes_suffix(suffix)
     return f"{qty} {suf}"
 
 
@@ -122,16 +139,29 @@ def count_cargoes_in_supplies(supplies: list[FboSupplyRow]) -> int:  # noqa: F82
     return sum(len(s.cargoes or []) for s in supplies)
 
 
+def batch_cargoes_count_and_suffix(
+    batch: FboBatchRow,  # noqa: F821
+    supplies: list[FboSupplyRow],  # noqa: F821
+) -> tuple[int, str]:
+    auto_suffix = cargo_suffix_from_cargoes(supplies)
+    manual = bool(getattr(batch, "ops_cargoes_count_manual", False))
+    stored_suffix = normalize_cargoes_suffix(getattr(batch, "ops_cargoes_suffix", ""))
+    if manual:
+        count = int(getattr(batch, "ops_cargoes_count", 0) or 0)
+        if count <= 0:
+            count = parse_cargoes_desc_count(str(getattr(batch, "ops_cargoes_desc", "") or ""))
+        suffix = stored_suffix or parse_cargoes_desc_suffix(str(getattr(batch, "ops_cargoes_desc", "") or "")) or auto_suffix
+        return count, suffix
+    count = count_cargoes_in_supplies(supplies)
+    suffix = auto_suffix
+    return count, suffix
+
+
 def batch_cargoes_desc(
     batch: FboBatchRow,  # noqa: F821
     supplies: list[FboSupplyRow],  # noqa: F821
 ) -> str:
-    suffix = cargo_suffix_from_supplies(supplies)
-    count = int(getattr(batch, "ops_cargoes_count", 0) or 0)
-    if count <= 0:
-        count = parse_cargoes_desc_count(str(getattr(batch, "ops_cargoes_desc", "") or ""))
-    if count <= 0:
-        count = count_cargoes_in_supplies(supplies)
+    count, suffix = batch_cargoes_count_and_suffix(batch, supplies)
     return format_cargoes_desc(count, suffix)
 
 
@@ -160,12 +190,7 @@ def ops_editable_from_batch(
     supplies: list[FboSupplyRow] | None = None,  # noqa: F821
 ) -> dict[str, str]:
     supply_rows = supplies if supplies is not None else list(getattr(batch, "supplies", None) or [])
-    suffix = cargo_suffix_from_supplies(supply_rows)
-    count = int(getattr(batch, "ops_cargoes_count", 0) or 0)
-    if count <= 0:
-        count = parse_cargoes_desc_count(str(getattr(batch, "ops_cargoes_desc", "") or ""))
-    if count <= 0:
-        count = count_cargoes_in_supplies(supply_rows)
+    count, suffix = batch_cargoes_count_and_suffix(batch, supply_rows)
     out: dict[str, str] = {
         "ops_cargoes_count": str(count) if count > 0 else "",
         "ops_cargoes_suffix": suffix,
