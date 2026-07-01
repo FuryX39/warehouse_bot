@@ -51,6 +51,24 @@ _DEFAULT_PACKING_STATUSES = (
     ("Отгружено", "#1565c0"),
 )
 
+_DEFAULT_SUPPLY_TYPES: tuple[tuple[str, str, str], ...] = (
+    (
+        "Паллета",
+        "#5c6bc0",
+        "Уложить товары на паллету, обмотать стрейч-плёнкой, закрепить углами. Штрихкод на боковую грань.",
+    ),
+    (
+        "Короб MIX",
+        "#26a69a",
+        "Смешанный короб: каждый товар в защиту, пустоты заполнить. Штрихкод на верхнюю грань.",
+    ),
+    (
+        "Моно короб",
+        "#8d6e63",
+        "Один артикул в короб, количество по заявке. Штрихкод на торец короба.",
+    ),
+)
+
 
 class _Base(DeclarativeBase):
     pass
@@ -72,6 +90,7 @@ class OzonFboBatch(_Base):
     ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
     ops_cargoes_desc: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ops_packing_status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ops_supply_type_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ops_barcode_link_2: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     ops_packing_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     ops_counterparty_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -103,6 +122,27 @@ class OzonFboPackingStatus(_Base):
     color: Mapped[str] = mapped_column(String(16), nullable=False, default="#9e9e9e")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class OzonFboSupplyType(_Base):
+    __tablename__ = "ozon_fbo_supply_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    color: Mapped[str] = mapped_column(String(16), nullable=False, default="#9e9e9e")
+    comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class OzonFboSetting(_Base):
+    __tablename__ = "ozon_fbo_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+
+
+SETTING_DEFAULT_COUNTERPARTY_ID = "default_counterparty_id"
 
 
 class OzonFboSupply(_Base):
@@ -222,6 +262,16 @@ class FboPackingStatusRow:
 
 
 @dataclass
+class FboSupplyTypeRow:
+    id: int
+    name: str
+    color: str
+    comment: str
+    sort_order: int
+    is_default: bool = False
+
+
+@dataclass
 class FboUnloadAddressRow:
     id: int
     name: str
@@ -245,6 +295,7 @@ class FboBatchRow:
     ops_assembly_date: str
     ops_cargoes_desc: str
     ops_packing_status_id: int | None
+    ops_supply_type_id: int | None
     ops_barcode_link_2: str
     ops_packing_comment: str
     ops_counterparty_id: int | None
@@ -371,6 +422,23 @@ class OzonFboSupplyRepository:
         _Base.metadata.create_all(self.engine)
         self._ensure_columns()
         self._seed_packing_statuses()
+        self._seed_supply_types()
+
+    def _seed_supply_types(self) -> None:
+        with Session(self.engine) as session:
+            if session.scalar(select(func.count()).select_from(OzonFboSupplyType)):
+                return
+            for i, (name, color, comment) in enumerate(_DEFAULT_SUPPLY_TYPES):
+                session.add(
+                    OzonFboSupplyType(
+                        name=name,
+                        color=color,
+                        comment=comment,
+                        sort_order=i,
+                        is_default=(i == 0),
+                    )
+                )
+            session.commit()
 
     def _seed_packing_statuses(self) -> None:
         with Session(self.engine) as session:
@@ -386,6 +454,92 @@ class OzonFboSupplyRepository:
                     )
                 )
             session.commit()
+
+    def get_setting(self, key: str) -> str:
+        with Session(self.engine) as session:
+            row = session.get(OzonFboSetting, str(key))
+            return str(row.value or "") if row is not None else ""
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        key = str(key)
+        with Session(self.engine) as session:
+            if value is None or not str(value).strip():
+                session.execute(delete(OzonFboSetting).where(OzonFboSetting.key == key))
+            else:
+                row = session.get(OzonFboSetting, key)
+                if row is None:
+                    session.add(OzonFboSetting(key=key, value=str(value).strip()))
+                else:
+                    row.value = str(value).strip()
+            session.commit()
+
+    def default_counterparty_id(self) -> int | None:
+        return _int_or_none(self.get_setting(SETTING_DEFAULT_COUNTERPARTY_ID))
+
+    def set_default_counterparty_id(
+        self,
+        counterparty_id: int | None,
+        *,
+        apply_to_empty: bool = True,
+    ) -> dict[str, Any]:
+        now = int(time.time())
+        updated = 0
+        with Session(self.engine) as session:
+            if counterparty_id:
+                row = session.get(OzonFboSetting, SETTING_DEFAULT_COUNTERPARTY_ID)
+                value = str(int(counterparty_id))
+                if row is None:
+                    session.add(OzonFboSetting(key=SETTING_DEFAULT_COUNTERPARTY_ID, value=value))
+                else:
+                    row.value = value
+            else:
+                session.execute(
+                    delete(OzonFboSetting).where(OzonFboSetting.key == SETTING_DEFAULT_COUNTERPARTY_ID)
+                )
+            if apply_to_empty and counterparty_id:
+                batches = session.scalars(
+                    select(OzonFboBatch).where(OzonFboBatch.ops_counterparty_id.is_(None))
+                ).all()
+                for batch in batches:
+                    batch.ops_counterparty_id = int(counterparty_id)
+                    batch.updated_at_ts = now
+                    updated += 1
+            session.commit()
+        return {
+            "default_counterparty_id": int(counterparty_id) if counterparty_id else None,
+            "updated_batches": updated,
+        }
+
+    def effective_counterparty_id(self, batch: FboBatchRow) -> int | None:
+        cid = int(batch.ops_counterparty_id or 0) or None
+        if cid:
+            return cid
+        return self.default_counterparty_id()
+
+    def _default_counterparty_id_session(self, session: Session) -> int | None:
+        row = session.get(OzonFboSetting, SETTING_DEFAULT_COUNTERPARTY_ID)
+        if row is None:
+            return None
+        return _int_or_none(row.value)
+
+    def _default_supply_type_id_session(self, session: Session) -> int | None:
+        row = session.scalar(
+            select(OzonFboSupplyType.id)
+            .where(OzonFboSupplyType.is_default.is_(True))
+            .order_by(OzonFboSupplyType.sort_order, OzonFboSupplyType.id)
+            .limit(1)
+        )
+        return int(row) if row else None
+
+    def _apply_new_batch_defaults(self, session: Session, row: OzonFboBatch) -> None:
+        if row.ops_counterparty_id is None:
+            default_cp = self._default_counterparty_id_session(session)
+            if default_cp:
+                row.ops_counterparty_id = default_cp
+        if row.ops_supply_type_id is None:
+            default_type = self._default_supply_type_id_session(session)
+            if default_type:
+                row.ops_supply_type_id = default_type
 
     def _ensure_columns(self) -> None:
         with self.engine.begin() as conn:
@@ -450,6 +604,7 @@ class OzonFboSupplyRepository:
                 "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
                 "ops_cargoes_desc": "VARCHAR(64) NOT NULL DEFAULT ''",
                 "ops_packing_status_id": "INTEGER",
+                "ops_supply_type_id": "INTEGER",
                 "ops_barcode_link_2": "VARCHAR(512) NOT NULL DEFAULT ''",
                 "ops_packing_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
                 "ops_counterparty_id": "INTEGER",
@@ -529,6 +684,74 @@ class OzonFboSupplyRepository:
                 "is_default": r.is_default,
             }
             for r in self.list_packing_statuses()
+        ]
+
+    def list_supply_types(self) -> list[FboSupplyTypeRow]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(OzonFboSupplyType).order_by(
+                    OzonFboSupplyType.sort_order, OzonFboSupplyType.name
+                )
+            ).all()
+            return [
+                FboSupplyTypeRow(
+                    id=int(r.id),
+                    name=str(r.name or ""),
+                    color=str(r.color or "#9e9e9e"),
+                    comment=str(r.comment or ""),
+                    sort_order=int(r.sort_order or 0),
+                    is_default=bool(r.is_default),
+                )
+                for r in rows
+            ]
+
+    def supply_type_name(self, type_id: int | None) -> str:
+        if not type_id:
+            return ""
+        for row in self.list_supply_types():
+            if int(row.id) == int(type_id):
+                return row.name
+        return ""
+
+    def save_supply_types(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {int(r.id): r for r in session.scalars(select(OzonFboSupplyType)).all()}
+            keep_ids: set[int] = set()
+            for idx, raw in enumerate(items or []):
+                if not isinstance(raw, dict):
+                    continue
+                name = _str(raw.get("name"), 128)
+                if not name:
+                    continue
+                color = _str(raw.get("color") or "#9e9e9e", 16) or "#9e9e9e"
+                comment = _str(raw.get("comment"), 2048)
+                row = None
+                raw_id = _int_or_none(raw.get("id"))
+                if raw_id and raw_id in existing:
+                    row = existing[raw_id]
+                if row is None:
+                    row = OzonFboSupplyType()
+                    session.add(row)
+                row.name = name
+                row.color = color
+                row.comment = comment
+                row.sort_order = idx
+                session.flush()
+                keep_ids.add(int(row.id))
+            for rid, row in existing.items():
+                if rid not in keep_ids and not row.is_default:
+                    session.delete(row)
+            session.commit()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "color": r.color,
+                "comment": r.comment,
+                "sort_order": r.sort_order,
+                "is_default": r.is_default,
+            }
+            for r in self.list_supply_types()
         ]
 
     def list_unload_addresses(self) -> list[FboUnloadAddressRow]:
@@ -636,6 +859,8 @@ class OzonFboSupplyRepository:
                 updated_at_ts=now,
             )
             session.add(row)
+            session.flush()
+            self._apply_new_batch_defaults(session, row)
             session.commit()
             session.refresh(row)
             return self._batch_row(session, row, include_details=True)
@@ -1144,6 +1369,7 @@ class OzonFboSupplyRepository:
             ops_assembly_date=str(row.ops_assembly_date or ""),
             ops_cargoes_desc=str(row.ops_cargoes_desc or ""),
             ops_packing_status_id=int(row.ops_packing_status_id) if row.ops_packing_status_id else None,
+            ops_supply_type_id=int(row.ops_supply_type_id) if row.ops_supply_type_id else None,
             ops_barcode_link_2=str(row.ops_barcode_link_2 or ""),
             ops_packing_comment=str(row.ops_packing_comment or ""),
             ops_counterparty_id=int(row.ops_counterparty_id) if row.ops_counterparty_id else None,
@@ -1269,8 +1495,11 @@ def batch_to_dict(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    supply_type_name: str = "",
     cluster_name_map: dict[str, str] | None = None,
+    default_counterparty_id: int | None = None,
 ) -> dict[str, Any]:
+    effective_cp_id = row.ops_counterparty_id or default_counterparty_id
     data = {
         "id": row.id,
         "title": row.title,
@@ -1290,9 +1519,11 @@ def batch_to_dict(
         "ops_cargoes_desc": row.ops_cargoes_desc,
         "ops_packing_status_id": row.ops_packing_status_id,
         "ops_packing_status_name": packing_status_name,
+        "ops_supply_type_id": row.ops_supply_type_id,
+        "ops_supply_type_name": supply_type_name,
         "ops_barcode_link_2": row.ops_barcode_link_2,
         "ops_packing_comment": row.ops_packing_comment,
-        "ops_counterparty_id": row.ops_counterparty_id,
+        "ops_counterparty_id": effective_cp_id,
         "ops_counterparty_name": counterparty_name,
         "ops_weight_kg": row.ops_weight_kg,
         "ops_unload_address_id": row.ops_unload_address_id,
@@ -1311,14 +1542,19 @@ def batch_to_dict(
         from app.ozon_fbo_ops_sheets import batch_ship_date, ops_editable_from_batch, ops_sheet_for_batch
 
         data["ops_ship_date"] = batch_ship_date(row)
-        data["ops_editable"] = ops_editable_from_batch(row)
+        data["ops_editable"] = ops_editable_from_batch(
+            row,
+            default_counterparty_id=default_counterparty_id,
+        )
         data["ops_sheet"] = ops_sheet_for_batch(
             row,
             row.supplies,
             counterparty_name=counterparty_name,
             unload_address=unload_address,
             packing_status_name=packing_status_name,
+            supply_type_name=supply_type_name,
             cluster_name_map=cluster_name_map,
+            default_counterparty_id=default_counterparty_id,
         )
         data["supplies"] = [
             supply_to_dict(s, include_details=True, catalog_map=catalog_map) for s in row.supplies

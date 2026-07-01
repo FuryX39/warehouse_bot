@@ -182,6 +182,174 @@
     });
   }
 
+  function supplyTypeById(typeId) {
+    var found = null;
+    (meta.supply_types || []).forEach(function (t) {
+      if (String(t.id) === String(typeId || "")) found = t;
+    });
+    return found;
+  }
+
+  function supplyTypeComment(typeId) {
+    var item = supplyTypeById(typeId);
+    return item && item.comment ? String(item.comment) : "";
+  }
+
+  function buildSupplyTypeOptions(selectedId) {
+    var html = '<option value="">—</option>';
+    (meta.supply_types || []).forEach(function (it) {
+      var sel = String(selectedId || "") === String(it.id) ? " selected" : "";
+      var bg = it.color || "#9e9e9e";
+      var fg = textOnBg(bg);
+      html +=
+        '<option value="' +
+        esc(it.id) +
+        '" data-color="' +
+        esc(bg) +
+        '" style="background-color:' +
+        esc(bg) +
+        ";color:" +
+        esc(fg) +
+        '"' +
+        sel +
+        ">" +
+        esc(it.name) +
+        "</option>";
+    });
+    html +=
+      '<option value="' + CONFIGURE_VALUE + '" class="wh-crm-status-configure">Настроить…</option>';
+    return html;
+  }
+
+  function renderSupplyTypeHelpMarkup(typeId) {
+    var comment = supplyTypeComment(typeId);
+    return (
+      '<span class="wh-fbo-help-tip' +
+      (comment ? "" : " wh-fbo-help-tip--empty") +
+      '">' +
+      '<span class="wh-fbo-help-tip__icon" aria-hidden="true">?</span>' +
+      '<span class="wh-fbo-help-tip__bubble">' +
+      esc(comment || "Комментарий не задан") +
+      "</span></span>"
+    );
+  }
+
+  function syncSupplyTypeHelp(wrapEl, typeId) {
+    if (!wrapEl) return;
+    var tip = wrapEl.querySelector(".wh-fbo-help-tip");
+    if (!tip) return;
+    var comment = supplyTypeComment(typeId);
+    var bubble = tip.querySelector(".wh-fbo-help-tip__bubble");
+    if (bubble) bubble.textContent = comment || "Комментарий не задан";
+    tip.classList.toggle("wh-fbo-help-tip--empty", !comment);
+  }
+
+  function initSupplyTypeSelect(selectEl, onConfigure) {
+    if (!selectEl) return;
+    selectEl.classList.add("wh-crm-status-select");
+    var wrap = selectEl.closest(".wh-fbo-supply-type-cell");
+    syncStatusSelectAppearance(selectEl);
+    syncSupplyTypeHelp(wrap, selectEl.value);
+    selectEl.addEventListener("change", function () {
+      if (selectEl.value === CONFIGURE_VALUE) {
+        var prev = selectEl.getAttribute("data-prev") || "";
+        selectEl.value = prev;
+        syncStatusSelectAppearance(selectEl);
+        syncSupplyTypeHelp(wrap, selectEl.value);
+        onConfigure();
+        return;
+      }
+      selectEl.setAttribute("data-prev", selectEl.value);
+      syncStatusSelectAppearance(selectEl);
+      syncSupplyTypeHelp(wrap, selectEl.value);
+    });
+  }
+
+  function bindSupplyTypeCells(container, onConfigure) {
+    if (!container) return;
+    container.querySelectorAll('[data-ops-field="ops_supply_type_id"]').forEach(function (sel) {
+      sel.setAttribute("data-prev", sel.value || "");
+      initSupplyTypeSelect(sel, onConfigure || function () {});
+    });
+  }
+
+  function modalSupplyTypesEditor(onDone) {
+    var rows = (meta.supply_types || []).map(function (s) {
+      return (
+        '<div class="wh-modal-row wh-crm-dict-row wh-fbo-supply-type-row" data-id="' +
+        esc(s.id) +
+        '">' +
+        '<input type="text" class="wh-crm-dict-name" value="' +
+        esc(s.name) +
+        '" placeholder="Название" />' +
+        '<input type="color" class="wh-crm-dict-color" value="' +
+        esc(s.color || "#9e9e9e") +
+        '" title="Цвет" />' +
+        '<textarea class="wh-fbo-supply-type-comment" rows="2" placeholder="Подсказка для упаковщиков">' +
+        esc(s.comment || "") +
+        "</textarea>" +
+        (s.is_default
+          ? '<span class="wh-crm-dict-tag">по умолчанию</span>'
+          : '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>') +
+        "</div>"
+      );
+    });
+    openModal(
+      "Типы поставки",
+      '<p class="wh-muted">Название, цвет в таблице и комментарий — подсказка для упаковщиков при наведении на «?».</p>' +
+        '<div id="whFboSupplyTypeRows">' +
+        rows.join("") +
+        "</div>" +
+        '<button type="button" class="wh-btn wh-btn-sm" id="whFboSupplyTypeAdd">+ Добавить тип</button>',
+      function (backdrop, close) {
+        var items = [];
+        backdrop.querySelectorAll(".wh-fbo-supply-type-row").forEach(function (row) {
+          var name = row.querySelector(".wh-crm-dict-name").value.trim();
+          if (!name) return;
+          var item = {
+            name: name,
+            color: row.querySelector(".wh-crm-dict-color").value,
+            comment: row.querySelector(".wh-fbo-supply-type-comment").value.trim(),
+          };
+          var id = row.getAttribute("data-id");
+          if (id) item.id = parseInt(id, 10);
+          items.push(item);
+        });
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supply-types", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: items }),
+        })
+          .then(function (data) {
+            meta.supply_types = data.supply_types || [];
+            close();
+            if (onDone) onDone();
+          })
+          .catch(function (err) {
+            alert(err.message || "Ошибка сохранения");
+          });
+      }
+    );
+    var backdrop = document.querySelector(".wh-modal-backdrop:last-of-type");
+    if (!backdrop) return;
+    backdrop.querySelector("#whFboSupplyTypeAdd").addEventListener("click", function () {
+      var row = document.createElement("div");
+      row.className = "wh-modal-row wh-crm-dict-row wh-fbo-supply-type-row";
+      row.innerHTML =
+        '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
+        '<input type="color" class="wh-crm-dict-color" value="#9e9e9e" title="Цвет" />' +
+        '<textarea class="wh-fbo-supply-type-comment" rows="2" placeholder="Подсказка для упаковщиков"></textarea>' +
+        '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
+      backdrop.querySelector("#whFboSupplyTypeRows").appendChild(row);
+    });
+    backdrop.addEventListener("click", function (e) {
+      if (e.target && e.target.classList.contains("wh-crm-dict-remove")) {
+        var row = e.target.closest(".wh-fbo-supply-type-row");
+        if (row) row.remove();
+      }
+    });
+  }
+
   function esc(s) {
     return String(s || "")
       .replace(/&/g, "&amp;")
@@ -600,6 +768,21 @@
     if (f.type === "packing_status") {
       return opsSelect(f.name, f.label, buildPackingStatusOptions(val));
     }
+    if (f.type === "supply_type") {
+      return (
+        '<label class="wh-fbo-ops-field wh-fbo-ops-field--supply-type"><span class="wh-fbo-ops-label">' +
+        esc(f.label) +
+        "</span>" +
+        '<div class="wh-fbo-supply-type-cell">' +
+        '<select class="wh-fbo-input wh-fbo-ops-input" data-ops-field="' +
+        esc(f.name) +
+        '">' +
+        buildSupplyTypeOptions(val) +
+        "</select>" +
+        renderSupplyTypeHelpMarkup(val) +
+        "</div></label>"
+      );
+    }
     if (f.name === "ops_assembly_date") {
       return opsDateInput(f.name, f.label, val, ph && val ? "" : ph);
     }
@@ -747,6 +930,19 @@
       '"';
     if (field.type === "packing_status") {
       return "<td" + colAttrs + "><select" + attrs + ">" + buildPackingStatusOptions(val) + "</select></td>";
+    }
+    if (field.type === "supply_type") {
+      return (
+        "<td" +
+        colAttrs +
+        '><div class="wh-fbo-supply-type-cell"><select' +
+        attrs +
+        ">" +
+        buildSupplyTypeOptions(val) +
+        "</select>" +
+        renderSupplyTypeHelpMarkup(val) +
+        "</div></td>"
+      );
     }
     if (field.type === "counterparty") {
       return "<td" + colAttrs + "><select" + attrs + ">" + buildCounterpartyOptions(val) + "</select></td>";
@@ -915,6 +1111,11 @@
         });
       });
     });
+    bindSupplyTypeCells(container, function () {
+      modalSupplyTypesEditor(function () {
+        reloadSummary();
+      });
+    });
   }
 
   function opsSummaryFromBatch(batch) {
@@ -995,6 +1196,53 @@
     });
   }
 
+  function renderDefaultClientSettings() {
+    return (
+      '<section class="wh-crm-section wh-fbo-default-client-section">' +
+      '<h4 class="wh-crm-section-title">Клиент по умолчанию</h4>' +
+      '<p class="wh-muted">Подставляется во все новые пакеты FBO и в пакеты, где клиент ещё не выбран.</p>' +
+      '<div class="wh-fbo-default-client-row">' +
+      '<label class="wh-fbo-default-client-field"><span class="wh-muted">Клиент</span>' +
+      '<select id="whFboDefaultClient" class="wh-fbo-input">' +
+      buildCounterpartyOptions(meta.default_counterparty_id || "") +
+      "</select></label>" +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whFboSaveDefaultClient">Сохранить</button>' +
+      '<span class="wh-muted" id="whFboDefaultClientMsg"></span></div></section>'
+    );
+  }
+
+  function bindDefaultClientSettings(tab, item, root) {
+    var sel = root.querySelector("#whFboDefaultClient");
+    var btn = root.querySelector("#whFboSaveDefaultClient");
+    if (!sel || !btn || btn.getAttribute("data-bound")) return;
+    btn.setAttribute("data-bound", "1");
+    sel.value = meta.default_counterparty_id ? String(meta.default_counterparty_id) : "";
+    btn.addEventListener("click", function () {
+      var msg = root.querySelector("#whFboDefaultClientMsg");
+      var raw = sel.value.trim();
+      setMsg(msg, "Сохранение…", false);
+      fetchJson("/api/warehouse/marketplaces/ozon-fbo/settings/default-counterparty", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          counterparty_id: raw ? parseInt(raw, 10) : null,
+          apply_to_existing: true,
+        }),
+      })
+        .then(function (data) {
+          meta.default_counterparty_id = data.default_counterparty_id || null;
+          var note = "Клиент по умолчанию сохранён.";
+          if (data.updated_batches) {
+            note += " Обновлено пакетов без клиента: " + data.updated_batches + ".";
+          }
+          setMsg(msg, note, false);
+        })
+        .catch(function (err) {
+          setMsg(msg, err.message, true);
+        });
+    });
+  }
+
   function bindGlobalOpsSummary(tab, item, root) {
     var btn = root.querySelector("#whFboLoadOpsSummary");
     if (!btn) return;
@@ -1053,6 +1301,7 @@
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboNewBatch">+ Создать пакет заявок</button>' +
           '<button type="button" class="wh-btn" id="whFboRefreshBatches">Обновить</button></div>' +
           '<p class="wh-msg" id="whFboListMsg"></p>' +
+          renderDefaultClientSettings() +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Пакеты в системе</h4>' +
           (batchRows
             ? '<table class="wh-employees-table wh-crm-table wh-fbo-batch-table"><thead><tr>' +
@@ -1077,6 +1326,7 @@
           renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
         });
         bindOzonListEvents(tab, item, root);
+        bindDefaultClientSettings(tab, item, root);
         bindGlobalOpsSummary(tab, item, root);
         root.querySelectorAll(".wh-fbo-batch-table tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
@@ -2307,6 +2557,9 @@
         modalPackingStatusesEditor(refreshForm);
       });
     }
+    bindSupplyTypeCells(section, function () {
+      modalSupplyTypesEditor(refreshForm);
+    });
     var saveBtn = root.querySelector("#whFboSaveBatchOps");
     if (!saveBtn || saveBtn.getAttribute("data-bound") === "1") return;
     saveBtn.setAttribute("data-bound", "1");

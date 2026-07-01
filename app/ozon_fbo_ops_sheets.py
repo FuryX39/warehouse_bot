@@ -83,6 +83,7 @@ def batch_ops_editable_field_names() -> tuple[str, ...]:
         "ops_assembly_date",
         "ops_cargoes_desc",
         "ops_packing_status_id",
+        "ops_supply_type_id",
         "ops_barcode_link_2",
         "ops_packing_comment",
         "ops_counterparty_id",
@@ -96,10 +97,19 @@ def batch_ops_editable_field_names() -> tuple[str, ...]:
     )
 
 
-def ops_editable_from_batch(batch: FboBatchRow) -> dict[str, str]:  # noqa: F821
+def ops_editable_from_batch(
+    batch: FboBatchRow,  # noqa: F821
+    *,
+    default_counterparty_id: int | None = None,
+) -> dict[str, str]:
     out: dict[str, str] = {}
     for name in batch_ops_editable_field_names():
         val = getattr(batch, name, "")
+        if name == "ops_counterparty_id":
+            if val is None or val == "":
+                val = default_counterparty_id
+            out[name] = str(val) if val is not None and val != "" else ""
+            continue
         if name.endswith("_id"):
             out[name] = str(val) if val is not None and val != "" else ""
         else:
@@ -132,6 +142,7 @@ def resolved_batch_summary_values(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    supply_type_name: str = "",
     cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
     editable = ops_editable_from_batch(batch)
@@ -154,6 +165,7 @@ def resolved_batch_summary_values(
         "units_count": str(units_total) if units_total > 0 else "",
         "cargoes_desc": cargoes_desc,
         "packing_status": packing_status_name,
+        "supply_type": supply_type_name,
         "barcode_link": labels_url,
         "barcode_link_2": editable["ops_barcode_link_2"],
         "packing_comment": editable["ops_packing_comment"],
@@ -180,6 +192,7 @@ PACKING_COLUMNS: tuple[tuple[str, str], ...] = (
     ("units_count", "количество единиц"),
     ("cargoes_desc", "количество грузомест"),
     ("packing_status", "статус"),
+    ("supply_type", "Тип поставки"),
     ("barcode_link", "ссылка на ШК"),
     ("barcode_link_2", "ссылка на ШК 2"),
     ("packing_comment", "коментарий"),
@@ -203,6 +216,7 @@ BATCH_PACKING_EDITABLE: tuple[tuple[str, str, str, str], ...] = (
     ("ops_assembly_date", "assembly_date", "дата сборки", "date"),
     ("ops_cargoes_desc", "cargoes_desc", "количество грузомест", "text"),
     ("ops_packing_status_id", "packing_status", "статус", "packing_status"),
+    ("ops_supply_type_id", "supply_type", "Тип поставки", "supply_type"),
     ("ops_barcode_link_2", "barcode_link_2", "ссылка на ШК 2", "text"),
     ("ops_packing_comment", "packing_comment", "коментарий", "text"),
 )
@@ -265,9 +279,14 @@ def ops_sheet_for_batch(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    supply_type_name: str = "",
     cluster_name_map: dict[str, str] | None = None,
+    default_counterparty_id: int | None = None,
 ) -> dict[str, Any]:
-    editable = ops_editable_from_batch(batch)
+    editable = ops_editable_from_batch(
+        batch,
+        default_counterparty_id=default_counterparty_id,
+    )
     supply_details = [
         {
             "supply_id": s.id,
@@ -285,6 +304,7 @@ def ops_sheet_for_batch(
         counterparty_name=counterparty_name,
         unload_address=unload_address,
         packing_status_name=packing_status_name,
+        supply_type_name=supply_type_name,
         cluster_name_map=cluster_name_map,
     )
     summary_row = _summary_row_dict(
@@ -317,7 +337,9 @@ def ops_summary_for_batch(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    supply_type_name: str = "",
     cluster_name_map: dict[str, str] | None = None,
+    default_counterparty_id: int | None = None,
 ) -> dict[str, Any]:
     sheet = ops_sheet_for_batch(
         batch,
@@ -325,7 +347,9 @@ def ops_summary_for_batch(
         counterparty_name=counterparty_name,
         unload_address=unload_address,
         packing_status_name=packing_status_name,
+        supply_type_name=supply_type_name,
         cluster_name_map=cluster_name_map,
+        default_counterparty_id=default_counterparty_id,
     )
     summary_row = sheet["summary_row"]
     summary_rows = [summary_row]
@@ -354,11 +378,14 @@ def ops_summary_for_batches(
     counterparty_names: dict[int, str] | None = None,
     unload_addresses: dict[int, str] | None = None,
     packing_status_names: dict[int, str] | None = None,
+    supply_type_names: dict[int, str] | None = None,
     cluster_name_map: dict[str, str] | None = None,
+    default_counterparty_id: int | None = None,
 ) -> dict[str, Any]:
     counterparty_names = counterparty_names or {}
     unload_addresses = unload_addresses or {}
     packing_status_names = packing_status_names or {}
+    supply_type_names = supply_type_names or {}
     cluster_name_map = cluster_name_map or {}
     summary_rows: list[dict[str, Any]] = []
     supply_count = 0
@@ -367,16 +394,20 @@ def ops_summary_for_batches(
         if not supplies:
             continue
         supply_count += len(supplies)
-        cp_name = counterparty_names.get(int(batch.ops_counterparty_id or 0), "")
+        cp_id = int(batch.ops_counterparty_id or 0) or int(default_counterparty_id or 0)
+        cp_name = counterparty_names.get(cp_id, "")
         addr = unload_addresses.get(int(batch.ops_unload_address_id or 0), "")
         status_name = packing_status_names.get(int(batch.ops_packing_status_id or 0), "")
+        type_name = supply_type_names.get(int(batch.ops_supply_type_id or 0), "")
         sheet = ops_sheet_for_batch(
             batch,
             supplies,
             counterparty_name=cp_name,
             unload_address=addr,
             packing_status_name=status_name,
+            supply_type_name=type_name,
             cluster_name_map=cluster_name_map,
+            default_counterparty_id=default_counterparty_id,
         )
         row = sheet["summary_row"]
         summary_rows.append(row)
