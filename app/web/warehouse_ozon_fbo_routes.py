@@ -51,7 +51,7 @@ from app.ozon_fbo_ops_sheets import (
     LOGISTICS_COLUMNS,
     PACKING_COLUMNS,
     ops_summary_for_batch,
-    ops_summary_for_supplies,
+    ops_summary_for_batches,
 )
 from app.ozon_fbo_supply_repository import (
     BATCH_STATUS_PACKING,
@@ -111,6 +111,7 @@ def register_warehouse_ozon_fbo_routes(
             catalog_map=catalog_map,
             counterparty_name=_counterparty_name(row.ops_counterparty_id),
             unload_address=_unload_address_text(row.ops_unload_address_id),
+            packing_status_name=fbo_repo.packing_status_name(row.ops_packing_status_id),
         )
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/meta")
@@ -147,6 +148,16 @@ def register_warehouse_ozon_fbo_routes(
             "unload_addresses": [
                 {"id": r.id, "name": r.name, "address": r.address}
                 for r in fbo_repo.list_unload_addresses()
+            ],
+            "packing_statuses": [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "color": r.color,
+                    "sort_order": r.sort_order,
+                    "is_default": r.is_default,
+                }
+                for r in fbo_repo.list_packing_statuses()
             ],
             "ops_packing_fields": [
                 {"name": name, "value_key": value_key, "label": label, "type": ftype}
@@ -834,7 +845,11 @@ def register_warehouse_ozon_fbo_routes(
                 full.append(supply)
         return full
 
+    def _packing_status_names() -> dict[int, str]:
+        return {int(r.id): r.name for r in fbo_repo.list_packing_statuses()}
+
     def _ops_summary(*, batch_id: int | None = None) -> dict[str, Any]:
+        status_names = _packing_status_names()
         if batch_id is not None:
             batch = fbo_repo.get_batch(batch_id)
             if batch is None:
@@ -844,27 +859,66 @@ def register_warehouse_ozon_fbo_routes(
                 batch.supplies,
                 counterparty_name=_counterparty_name(batch.ops_counterparty_id),
                 unload_address=_unload_address_text(batch.ops_unload_address_id),
+                packing_status_name=status_names.get(int(batch.ops_packing_status_id or 0), ""),
             )
         supplies = _supplies_for_ops()
-        batches: dict[int, Any] = {}
-        counterparty_names: dict[int, str] = {}
+        batch_ids: list[int] = []
+        seen: set[int] = set()
+        supplies_by_batch: dict[int, list] = {}
         for supply in supplies:
             bid = int(supply.batch_id or 0)
-            if not bid or bid in batches:
+            if not bid:
                 continue
+            supplies_by_batch.setdefault(bid, []).append(supply)
+            if bid not in seen:
+                seen.add(bid)
+                batch_ids.append(bid)
+        batches: list = []
+        counterparty_names: dict[int, str] = {}
+        for bid in batch_ids:
             batch = fbo_repo.get_batch(bid)
             if batch is None:
                 continue
-            batches[bid] = batch
+            batches.append(batch)
             cp_id = int(batch.ops_counterparty_id or 0)
             if cp_id:
                 counterparty_names[cp_id] = _counterparty_name(cp_id)
-        return ops_summary_for_supplies(
-            supplies,
+        return ops_summary_for_batches(
             batches,
+            supplies_by_batch,
             counterparty_names=counterparty_names,
             unload_addresses=fbo_repo.unload_addresses_map(),
+            packing_status_names=status_names,
         )
+
+    @app.get("/api/warehouse/marketplaces/ozon-fbo/packing-statuses")
+    async def api_ozon_fbo_packing_statuses(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        rows = fbo_repo.list_packing_statuses()
+        return {
+            "packing_statuses": [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "color": r.color,
+                    "sort_order": r.sort_order,
+                    "is_default": r.is_default,
+                }
+                for r in rows
+            ]
+        }
+
+    @app.put("/api/warehouse/marketplaces/ozon-fbo/packing-statuses")
+    async def api_ozon_fbo_save_packing_statuses(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        items = body.get("items")
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="items должен быть массивом")
+        saved = fbo_repo.save_packing_statuses(items)
+        return {"ok": True, "packing_statuses": saved}
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/unload-addresses")
     async def api_ozon_fbo_unload_addresses(

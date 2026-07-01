@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from sqlalchemy import ForeignKey, Integer, String, delete, func, select, text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
@@ -45,6 +45,12 @@ BATCH_STATUS_PACKING = "packing"
 BATCH_STATUS_DONE = "done"
 BATCH_STATUSES = {BATCH_STATUS_PLANNING, BATCH_STATUS_SUBMITTED, BATCH_STATUS_PACKING, BATCH_STATUS_DONE}
 
+_DEFAULT_PACKING_STATUSES = (
+    ("В сборке", "#f9a825"),
+    ("Готово", "#2e7d32"),
+    ("Отгружено", "#1565c0"),
+)
+
 
 class _Base(DeclarativeBase):
     pass
@@ -64,8 +70,7 @@ class OzonFboBatch(_Base):
     manager_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
-    ops_ship_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
-    ops_packing_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    ops_packing_status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ops_barcode_link_2: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     ops_packing_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     ops_counterparty_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -87,6 +92,16 @@ class OzonFboUnloadAddress(_Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     address: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class OzonFboPackingStatus(_Base):
+    __tablename__ = "ozon_fbo_packing_statuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    color: Mapped[str] = mapped_column(String(16), nullable=False, default="#9e9e9e")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class OzonFboSupply(_Base):
@@ -197,6 +212,15 @@ class FboCargoRow:
     items: list[FboCargoItemRow] = field(default_factory=list)
 
 @dataclass
+class FboPackingStatusRow:
+    id: int
+    name: str
+    color: str
+    sort_order: int
+    is_default: bool = False
+
+
+@dataclass
 class FboUnloadAddressRow:
     id: int
     name: str
@@ -218,8 +242,7 @@ class FboBatchRow:
     manager_user_name: str
     comment: str
     ops_assembly_date: str
-    ops_ship_date: str
-    ops_packing_status: str
+    ops_packing_status_id: int | None
     ops_barcode_link_2: str
     ops_packing_comment: str
     ops_counterparty_id: int | None
@@ -345,6 +368,22 @@ class OzonFboSupplyRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._ensure_columns()
+        self._seed_packing_statuses()
+
+    def _seed_packing_statuses(self) -> None:
+        with Session(self.engine) as session:
+            if session.scalar(select(func.count()).select_from(OzonFboPackingStatus)):
+                return
+            for i, (name, color) in enumerate(_DEFAULT_PACKING_STATUSES):
+                session.add(
+                    OzonFboPackingStatus(
+                        name=name,
+                        color=color,
+                        sort_order=i,
+                        is_default=(i == 0),
+                    )
+                )
+            session.commit()
 
     def _ensure_columns(self) -> None:
         with self.engine.begin() as conn:
@@ -407,8 +446,7 @@ class OzonFboSupplyRepository:
             }
             batch_ops_cols = {
                 "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
-                "ops_ship_date": "VARCHAR(10) NOT NULL DEFAULT ''",
-                "ops_packing_status": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "ops_packing_status_id": "INTEGER",
                 "ops_barcode_link_2": "VARCHAR(512) NOT NULL DEFAULT ''",
                 "ops_packing_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
                 "ops_counterparty_id": "INTEGER",
@@ -423,6 +461,72 @@ class OzonFboSupplyRepository:
             for name, ddl in batch_ops_cols.items():
                 if name not in batch_cols:
                     conn.execute(text(f"ALTER TABLE ozon_fbo_batches ADD COLUMN {name} {ddl}"))
+
+    def list_packing_statuses(self) -> list[FboPackingStatusRow]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(OzonFboPackingStatus).order_by(
+                    OzonFboPackingStatus.sort_order, OzonFboPackingStatus.name
+                )
+            ).all()
+            return [
+                FboPackingStatusRow(
+                    id=int(r.id),
+                    name=str(r.name or ""),
+                    color=str(r.color or "#9e9e9e"),
+                    sort_order=int(r.sort_order or 0),
+                    is_default=bool(r.is_default),
+                )
+                for r in rows
+            ]
+
+    def packing_status_name(self, status_id: int | None) -> str:
+        if not status_id:
+            return ""
+        for row in self.list_packing_statuses():
+            if int(row.id) == int(status_id):
+                return row.name
+        return ""
+
+    def save_packing_statuses(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {
+                int(r.id): r for r in session.scalars(select(OzonFboPackingStatus)).all()
+            }
+            keep_ids: set[int] = set()
+            for idx, raw in enumerate(items or []):
+                if not isinstance(raw, dict):
+                    continue
+                name = _str(raw.get("name"), 128)
+                if not name:
+                    continue
+                color = _str(raw.get("color") or "#9e9e9e", 16) or "#9e9e9e"
+                row = None
+                raw_id = _int_or_none(raw.get("id"))
+                if raw_id and raw_id in existing:
+                    row = existing[raw_id]
+                if row is None:
+                    row = OzonFboPackingStatus()
+                    session.add(row)
+                row.name = name
+                row.color = color
+                row.sort_order = idx
+                session.flush()
+                keep_ids.add(int(row.id))
+            for rid, row in existing.items():
+                if rid not in keep_ids and not row.is_default:
+                    session.delete(row)
+            session.commit()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "color": r.color,
+                "sort_order": r.sort_order,
+                "is_default": r.is_default,
+            }
+            for r in self.list_packing_statuses()
+        ]
 
     def list_unload_addresses(self) -> list[FboUnloadAddressRow]:
         with Session(self.engine) as session:
@@ -487,7 +591,7 @@ class OzonFboSupplyRepository:
                 setattr(row, key, _int_or_none(ops_payload.get(key)))
                 continue
             limit = 1024 if "comment" in key else 512 if "link" in key else 256 if key == "ops_car_driver" else 64
-            if key in {"ops_assembly_date", "ops_ship_date"}:
+            if key in {"ops_assembly_date"}:
                 limit = 10
             if key == "ops_weight_kg":
                 limit = 32
@@ -1035,8 +1139,7 @@ class OzonFboSupplyRepository:
             manager_user_name=manager_name,
             comment=str(row.comment or ""),
             ops_assembly_date=str(row.ops_assembly_date or ""),
-            ops_ship_date=str(row.ops_ship_date or ""),
-            ops_packing_status=str(row.ops_packing_status or ""),
+            ops_packing_status_id=int(row.ops_packing_status_id) if row.ops_packing_status_id else None,
             ops_barcode_link_2=str(row.ops_barcode_link_2 or ""),
             ops_packing_comment=str(row.ops_packing_comment or ""),
             ops_counterparty_id=int(row.ops_counterparty_id) if row.ops_counterparty_id else None,
@@ -1161,6 +1264,7 @@ def batch_to_dict(
     catalog_map: dict[str, dict[str, Any]] | None = None,
     counterparty_name: str = "",
     unload_address: str = "",
+    packing_status_name: str = "",
 ) -> dict[str, Any]:
     data = {
         "id": row.id,
@@ -1178,8 +1282,8 @@ def batch_to_dict(
         "manager_user_name": row.manager_user_name,
         "comment": row.comment,
         "ops_assembly_date": row.ops_assembly_date,
-        "ops_ship_date": row.ops_ship_date,
-        "ops_packing_status": row.ops_packing_status,
+        "ops_packing_status_id": row.ops_packing_status_id,
+        "ops_packing_status_name": packing_status_name,
         "ops_barcode_link_2": row.ops_barcode_link_2,
         "ops_packing_comment": row.ops_packing_comment,
         "ops_counterparty_id": row.ops_counterparty_id,
@@ -1198,14 +1302,16 @@ def batch_to_dict(
         "labels_url": row.labels_url,
     }
     if include_details:
-        from app.ozon_fbo_ops_sheets import ops_editable_from_batch, ops_sheet_for_batch
+        from app.ozon_fbo_ops_sheets import batch_ship_date, ops_editable_from_batch, ops_sheet_for_batch
 
+        data["ops_ship_date"] = batch_ship_date(row)
         data["ops_editable"] = ops_editable_from_batch(row)
         data["ops_sheet"] = ops_sheet_for_batch(
             row,
             row.supplies,
             counterparty_name=counterparty_name,
             unload_address=unload_address,
+            packing_status_name=packing_status_name,
         )
         data["supplies"] = [
             supply_to_dict(s, include_details=True, catalog_map=catalog_map) for s in row.supplies

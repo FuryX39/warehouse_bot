@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from app.ozon_fbo_labels_storage import supply_labels_url
-
 if TYPE_CHECKING:
     from app.ozon_fbo_supply_repository import FboBatchRow, FboSupplyRow
 
@@ -24,13 +22,6 @@ def _date_part(ts: str) -> str:
     return val
 
 
-def _time_part(ts: str) -> str:
-    val = _str(ts, 32)
-    if "T" in val and len(val) >= 16:
-        return val[11:16]
-    return ""
-
-
 def default_cargoes_desc(supply_kind: str, cargo_count: int) -> str:
     if cargo_count <= 0:
         return ""
@@ -42,11 +33,29 @@ def total_units(supply: FboSupplyRow) -> int:  # noqa: F821
     return sum(int(i.quantity or 0) for i in supply.items)
 
 
+def _unique_join(parts: list[str], sep: str = ", ") -> str:
+    seen: list[str] = []
+    for part in parts:
+        val = _str(part)
+        if val and val not in seen:
+            seen.append(val)
+    return sep.join(seen)
+
+
+def aggregate_cargoes_desc(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
+    parts = [default_cargoes_desc(s.supply_kind, len(s.cargoes)) for s in supplies]
+    parts = [p for p in parts if p]
+    return " + ".join(parts)
+
+
+def batch_ship_date(batch: FboBatchRow) -> str:  # noqa: F821
+    return _date_part(batch.timeslot_from)
+
+
 def batch_ops_editable_field_names() -> tuple[str, ...]:
     return (
         "ops_assembly_date",
-        "ops_ship_date",
-        "ops_packing_status",
+        "ops_packing_status_id",
         "ops_barcode_link_2",
         "ops_packing_comment",
         "ops_counterparty_id",
@@ -71,35 +80,55 @@ def ops_editable_from_batch(batch: FboBatchRow) -> dict[str, str]:  # noqa: F821
     return out
 
 
-def resolved_ops_values(
+def resolved_supply_detail_values(
     supply: FboSupplyRow,  # noqa: F821
     batch: FboBatchRow,  # noqa: F821
     *,
-    counterparty_name: str = "",
-    unload_address: str = "",
+    packing_status_name: str = "",
 ) -> dict[str, str]:
+    """Автоматические поля по одной заявке (для подсказки в форме пакета)."""
     cargo_count = len(supply.cargoes)
     units = total_units(supply)
-    labels_url = supply_labels_url(supply.id) if _str(supply.labels_file) else ""
+    return {
+        "cluster": _str(supply.ozon_cluster_name, 256),
+        "warehouse": _str(supply.ozon_warehouse_name, 256),
+        "supply_id": _str(supply.ozon_supply_id, 64),
+        "packer": _str(supply.assigned_user_name, 128),
+        "units_count": str(units) if units > 0 else "",
+        "cargoes_desc": default_cargoes_desc(supply.supply_kind, cargo_count),
+        "packing_status": packing_status_name,
+        "ship_date": batch_ship_date(batch),
+    }
+
+
+def resolved_batch_summary_values(
+    batch: FboBatchRow,  # noqa: F821
+    supplies: list[FboSupplyRow],  # noqa: F821
+    *,
+    counterparty_name: str = "",
+    unload_address: str = "",
+    packing_status_name: str = "",
+) -> dict[str, str]:
     editable = ops_editable_from_batch(batch)
-    ship_date = editable["ops_ship_date"] or _date_part(batch.timeslot_from or supply.timeslot_from)
-    ship_time = editable["ops_ship_time"] or _time_part(batch.timeslot_from or supply.timeslot_from)
-    cargoes_desc = default_cargoes_desc(supply.supply_kind, cargo_count)
-    units_count = str(units) if units > 0 else ""
+    ship_date = batch_ship_date(batch)
+    ship_time = editable["ops_ship_time"]
+    units_total = sum(total_units(s) for s in supplies)
+    cargoes_desc = aggregate_cargoes_desc(supplies)
     if not unload_address:
-        unload_address = _str(batch.dropoff_warehouse_name or supply.dropoff_warehouse_name, 256)
+        unload_address = _str(batch.dropoff_warehouse_name, 256)
+    labels_url = batch.labels_url or ""
     client = counterparty_name or "—"
     return {
         "assembly_date": editable["ops_assembly_date"],
-        "cluster": _str(supply.ozon_cluster_name, 256),
-        "warehouse": _str(supply.ozon_warehouse_name, 256),
+        "cluster": _unique_join([s.ozon_cluster_name for s in supplies]),
+        "warehouse": _unique_join([s.ozon_warehouse_name for s in supplies]),
         "ship_date": ship_date,
-        "supply_id": _str(supply.ozon_supply_id, 64),
+        "supply_id": _unique_join([s.ozon_supply_id for s in supplies]),
         "movement_number": "",
-        "packer": _str(supply.assigned_user_name, 128),
-        "units_count": units_count,
+        "packer": _unique_join([s.assigned_user_name for s in supplies]),
+        "units_count": str(units_total) if units_total > 0 else "",
         "cargoes_desc": cargoes_desc,
-        "packing_status": editable["ops_packing_status"],
+        "packing_status": packing_status_name,
         "barcode_link": labels_url,
         "barcode_link_2": editable["ops_barcode_link_2"],
         "packing_comment": editable["ops_packing_comment"],
@@ -107,7 +136,7 @@ def resolved_ops_values(
         "weight_kg": editable["ops_weight_kg"],
         "unload_address": unload_address,
         "ship_time": ship_time,
-        "logistics_cluster": _str(supply.ozon_cluster_name, 256),
+        "logistics_cluster": _unique_join([s.ozon_cluster_name for s in supplies]),
         "expense_doc_number": editable["ops_expense_doc_number"],
         "pallets_ready_time": editable["ops_pallets_ready_time"],
         "logistics_comment": editable["ops_logistics_comment"],
@@ -147,8 +176,7 @@ LOGISTICS_COLUMNS: tuple[tuple[str, str], ...] = (
 
 BATCH_PACKING_EDITABLE: tuple[tuple[str, str, str, str], ...] = (
     ("ops_assembly_date", "assembly_date", "дата сборки", "date"),
-    ("ops_ship_date", "ship_date", "дата отгрузки", "date"),
-    ("ops_packing_status", "packing_status", "статус", "text"),
+    ("ops_packing_status_id", "packing_status", "статус", "packing_status"),
     ("ops_barcode_link_2", "barcode_link_2", "ссылка на ШК 2", "text"),
     ("ops_packing_comment", "packing_comment", "коментарий", "text"),
 )
@@ -184,24 +212,16 @@ def logistics_row_ordered(values: dict[str, str]) -> list[dict[str, str]]:
     return [{"key": key, "label": label, "value": values.get(key, "")} for key, label in LOGISTICS_COLUMNS]
 
 
-def ops_sheet_for_supply(
-    supply: FboSupplyRow,  # noqa: F821
-    batch: FboBatchRow,  # noqa: F821
+def _summary_row_dict(
     *,
-    counterparty_name: str = "",
-    unload_address: str = "",
+    batch_id: int,
+    batch_title: str,
+    values: dict[str, str],
 ) -> dict[str, Any]:
-    values = resolved_ops_values(
-        supply,
-        batch,
-        counterparty_name=counterparty_name,
-        unload_address=unload_address,
-    )
     return {
-        "supply_id": supply.id,
-        "batch_id": supply.batch_id,
-        "ozon_supply_id": supply.ozon_supply_id,
-        "title": supply.title,
+        "batch_id": batch_id,
+        "batch_title": batch_title,
+        "title": batch_title,
         "values": values,
         "packing_row": packing_row_ordered(values),
         "logistics_row": logistics_row_ordered(values),
@@ -216,25 +236,45 @@ def ops_sheet_for_batch(
     *,
     counterparty_name: str = "",
     unload_address: str = "",
+    packing_status_name: str = "",
 ) -> dict[str, Any]:
     editable = ops_editable_from_batch(batch)
-    rows = [
-        ops_sheet_for_supply(
-            s,
-            batch,
-            counterparty_name=counterparty_name,
-            unload_address=unload_address,
-        )
+    supply_details = [
+        {
+            "supply_id": s.id,
+            "ozon_supply_id": s.ozon_supply_id,
+            "title": s.title,
+            "values": resolved_supply_detail_values(
+                s, batch, packing_status_name=packing_status_name
+            ),
+        }
         for s in supplies
     ]
+    summary_values = resolved_batch_summary_values(
+        batch,
+        supplies,
+        counterparty_name=counterparty_name,
+        unload_address=unload_address,
+        packing_status_name=packing_status_name,
+    )
+    summary_row = _summary_row_dict(
+        batch_id=int(batch.id),
+        batch_title=str(batch.title or ""),
+        values=summary_values,
+    )
     return {
         "batch_id": batch.id,
+        "batch_title": batch.title,
+        "ship_date": batch_ship_date(batch),
         "editable": editable,
         "counterparty_name": counterparty_name,
         "unload_address": unload_address,
-        "supply_rows": rows,
-        "packing_rows": [r["packing_export"] for r in rows],
-        "logistics_rows": [r["logistics_export"] for r in rows],
+        "packing_status_name": packing_status_name,
+        "supply_details": supply_details,
+        "summary_row": summary_row,
+        "summary_rows": [summary_row],
+        "packing_rows": [summary_row["packing_export"]],
+        "logistics_rows": [summary_row["logistics_export"]],
     }
 
 
@@ -244,54 +284,70 @@ def ops_summary_for_batch(
     *,
     counterparty_name: str = "",
     unload_address: str = "",
+    packing_status_name: str = "",
 ) -> dict[str, Any]:
     sheet = ops_sheet_for_batch(
         batch,
         supplies,
         counterparty_name=counterparty_name,
         unload_address=unload_address,
+        packing_status_name=packing_status_name,
     )
+    summary_row = sheet["summary_row"]
     return {
         "supply_count": len(supplies),
+        "batch_count": 1,
         "batch_id": batch.id,
         "packing_columns": [{"key": k, "label": l} for k, l in PACKING_COLUMNS],
         "logistics_columns": [{"key": k, "label": l} for k, l in LOGISTICS_COLUMNS],
         "batch_ops": sheet,
-        "rows": sheet["supply_rows"],
+        "rows": sheet["summary_rows"],
         "packing_rows": sheet["packing_rows"],
         "logistics_rows": sheet["logistics_rows"],
+        "summary_row": summary_row,
     }
 
 
-def ops_summary_for_supplies(
-    supplies: list[FboSupplyRow],  # noqa: F821
-    batches: dict[int, FboBatchRow],  # noqa: F821
+def ops_summary_for_batches(
+    batches: list[FboBatchRow],  # noqa: F821
+    supplies_by_batch: dict[int, list[FboSupplyRow]],  # noqa: F821
     *,
     counterparty_names: dict[int, str] | None = None,
     unload_addresses: dict[int, str] | None = None,
+    packing_status_names: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     counterparty_names = counterparty_names or {}
     unload_addresses = unload_addresses or {}
-    rows: list[dict[str, Any]] = []
-    for supply in supplies:
-        batch = batches.get(int(supply.batch_id or 0))
-        if batch is None:
+    packing_status_names = packing_status_names or {}
+    summary_rows: list[dict[str, Any]] = []
+    packing_rows: list[dict[str, str]] = []
+    logistics_rows: list[dict[str, str]] = []
+    supply_count = 0
+    for batch in batches:
+        supplies = supplies_by_batch.get(int(batch.id), [])
+        if not supplies:
             continue
+        supply_count += len(supplies)
         cp_name = counterparty_names.get(int(batch.ops_counterparty_id or 0), "")
         addr = unload_addresses.get(int(batch.ops_unload_address_id or 0), "")
-        rows.append(
-            ops_sheet_for_supply(
-                supply,
-                batch,
-                counterparty_name=cp_name,
-                unload_address=addr,
-            )
+        status_name = packing_status_names.get(int(batch.ops_packing_status_id or 0), "")
+        sheet = ops_sheet_for_batch(
+            batch,
+            supplies,
+            counterparty_name=cp_name,
+            unload_address=addr,
+            packing_status_name=status_name,
         )
+        row = sheet["summary_row"]
+        summary_rows.append(row)
+        packing_rows.append(row["packing_export"])
+        logistics_rows.append(row["logistics_export"])
     return {
-        "supply_count": len(rows),
+        "supply_count": supply_count,
+        "batch_count": len(summary_rows),
         "packing_columns": [{"key": k, "label": l} for k, l in PACKING_COLUMNS],
         "logistics_columns": [{"key": k, "label": l} for k, l in LOGISTICS_COLUMNS],
-        "rows": rows,
-        "packing_rows": [r["packing_export"] for r in rows],
-        "logistics_rows": [r["logistics_export"] for r in rows],
+        "rows": summary_rows,
+        "packing_rows": packing_rows,
+        "logistics_rows": logistics_rows,
     }

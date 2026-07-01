@@ -22,6 +22,155 @@
   var opsLogisticsColumns = [];
   var CONFIGURE_VALUE = "__configure__";
 
+  function textOnBg(hex) {
+    var h = String(hex || "").replace("#", "").trim();
+    if (h.length === 3) {
+      h = h
+        .split("")
+        .map(function (c) {
+          return c + c;
+        })
+        .join("");
+    }
+    if (h.length !== 6) return "#1c2434";
+    var r = parseInt(h.slice(0, 2), 16);
+    var g = parseInt(h.slice(2, 4), 16);
+    var b = parseInt(h.slice(4, 6), 16);
+    if (isNaN(r) || isNaN(g) || isNaN(b)) return "#1c2434";
+    var lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return lum > 0.58 ? "#1c2434" : "#ffffff";
+  }
+
+  function buildPackingStatusOptions(selectedId) {
+    var html = '<option value="">—</option>';
+    (meta.packing_statuses || []).forEach(function (it) {
+      var sel = String(selectedId || "") === String(it.id) ? " selected" : "";
+      var bg = it.color || "#9e9e9e";
+      var fg = textOnBg(bg);
+      html +=
+        '<option value="' +
+        esc(it.id) +
+        '" data-color="' +
+        esc(bg) +
+        '" style="background-color:' +
+        esc(bg) +
+        ";color:" +
+        esc(fg) +
+        '"' +
+        sel +
+        ">" +
+        esc(it.name) +
+        "</option>";
+    });
+    html +=
+      '<option value="' + CONFIGURE_VALUE + '" class="wh-crm-status-configure">Настроить…</option>';
+    return html;
+  }
+
+  function syncStatusSelectAppearance(selectEl) {
+    if (!selectEl) return;
+    var opt = selectEl.options[selectEl.selectedIndex];
+    var color = opt && opt.getAttribute("data-color");
+    if (!color || !selectEl.value || selectEl.value === CONFIGURE_VALUE) {
+      selectEl.style.backgroundColor = "";
+      selectEl.style.color = "";
+      selectEl.style.borderColor = "";
+      return;
+    }
+    selectEl.style.backgroundColor = color;
+    selectEl.style.color = textOnBg(color);
+    selectEl.style.borderColor = color;
+  }
+
+  function initPackingStatusSelect(selectEl, onConfigure) {
+    if (!selectEl) return;
+    selectEl.classList.add("wh-crm-status-select");
+    syncStatusSelectAppearance(selectEl);
+    selectEl.addEventListener("change", function () {
+      if (selectEl.value === CONFIGURE_VALUE) {
+        var prev = selectEl.getAttribute("data-prev") || "";
+        selectEl.value = prev;
+        syncStatusSelectAppearance(selectEl);
+        onConfigure();
+        return;
+      }
+      selectEl.setAttribute("data-prev", selectEl.value);
+      syncStatusSelectAppearance(selectEl);
+    });
+  }
+
+  function modalPackingStatusesEditor(onDone) {
+    var rows = (meta.packing_statuses || []).map(function (s) {
+      return (
+        '<div class="wh-modal-row wh-crm-dict-row" data-id="' +
+        esc(s.id) +
+        '">' +
+        '<input type="text" class="wh-crm-dict-name" value="' +
+        esc(s.name) +
+        '" placeholder="Название" />' +
+        '<input type="color" class="wh-crm-dict-color" value="' +
+        esc(s.color || "#9e9e9e") +
+        '" title="Цвет" />' +
+        (s.is_default
+          ? '<span class="wh-crm-dict-tag">по умолчанию</span>'
+          : '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>') +
+        "</div>"
+      );
+    });
+    openModal(
+      "Статусы поставок",
+      '<p class="wh-muted">Название и цвет — как у статусов контрагентов в CRM.</p>' +
+        '<div id="whFboPackingStatusRows">' +
+        rows.join("") +
+        "</div>" +
+        '<button type="button" class="wh-btn wh-btn-sm" id="whFboPackingStatusAdd">+ Добавить статус</button>',
+      function (backdrop, close) {
+        var items = [];
+        backdrop.querySelectorAll(".wh-crm-dict-row").forEach(function (row) {
+          var name = row.querySelector(".wh-crm-dict-name").value.trim();
+          if (!name) return;
+          var item = {
+            name: name,
+            color: row.querySelector(".wh-crm-dict-color").value,
+          };
+          var id = row.getAttribute("data-id");
+          if (id) item.id = parseInt(id, 10);
+          items.push(item);
+        });
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/packing-statuses", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: items }),
+        })
+          .then(function (data) {
+            meta.packing_statuses = data.packing_statuses || [];
+            close();
+            if (onDone) onDone();
+          })
+          .catch(function (err) {
+            alert(err.message || "Ошибка сохранения");
+          });
+      }
+    );
+    var backdrop = document.querySelector(".wh-modal-backdrop:last-of-type");
+    if (!backdrop) return;
+    backdrop.querySelector("#whFboPackingStatusAdd").addEventListener("click", function () {
+      var row = document.createElement("div");
+      row.className = "wh-modal-row wh-crm-dict-row";
+      row.innerHTML =
+        '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
+        '<input type="color" class="wh-crm-dict-color" value="#9e9e9e" />' +
+        '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
+      backdrop.querySelector("#whFboPackingStatusRows").appendChild(row);
+    });
+    backdrop.addEventListener("click", function (e) {
+      if (e.target && e.target.classList.contains("wh-crm-dict-remove")) {
+        var row = e.target.closest(".wh-crm-dict-row");
+        if (row) row.remove();
+      }
+    });
+  }
+
   function esc(s) {
     return String(s || "")
       .replace(/&/g, "&amp;")
@@ -437,7 +586,10 @@
     if (f.type === "unload_address") {
       return opsSelect(f.name, f.label, buildUnloadAddressOptions(val));
     }
-    if (f.name === "ops_assembly_date" || f.name === "ops_ship_date") {
+    if (f.type === "packing_status") {
+      return opsSelect(f.name, f.label, buildPackingStatusOptions(val));
+    }
+    if (f.name === "ops_assembly_date") {
       return opsDateInput(f.name, f.label, val, ph && val ? "" : ph);
     }
     return opsInput(f.name, f.label, val, ph && val ? "" : ph);
@@ -446,11 +598,10 @@
   function renderBatchOpsForm(batch) {
     var ops = batch.ops_sheet || {};
     var editable = ops.editable || {};
-    var values = {};
-    var supplyRows = ops.supply_rows || [];
-    if (supplyRows.length) values = supplyRows[0].values || {};
+    var summaryValues = (ops.summary_row && ops.summary_row.values) || {};
+    var supplyDetails = ops.supply_details || [];
     var packingHtml = opsPackingFields.map(function (f) {
-      return renderOpsField(f, editable, values);
+      return renderOpsField(f, editable, summaryValues);
     }).join("");
     var packingNames = {};
     opsPackingFields.forEach(function (f) {
@@ -461,10 +612,11 @@
         return !packingNames[f.name];
       })
       .map(function (f) {
-        return renderOpsField(f, editable, values);
+        return renderOpsField(f, editable, summaryValues);
       })
       .join("");
-    var autoHtml = supplyRows
+    var shipDate = ops.ship_date || batch.ops_ship_date || summaryValues.ship_date || "—";
+    var autoHtml = supplyDetails
       .map(function (r) {
         var v = r.values || {};
         return (
@@ -477,7 +629,8 @@
     return (
       '<details class="wh-fbo-ops-sheet wh-fbo-batch-ops" open>' +
       "<summary>Данные для таблиц (на весь пакет)</summary>" +
-      '<p class="wh-muted wh-fbo-ops-auto">Общие поля применяются ко всем заявкам пакета. По каждой заявке автоматически:</p>' +
+      '<p class="wh-muted wh-fbo-ops-auto">Дата отгрузки из таймслота: <b>' + esc(shipDate) +
+      "</b>. Время отгрузки указывает логист. Общие поля — на весь пакет. По заявкам автоматически:</p>" +
       (autoHtml ? '<ul class="wh-fbo-ops-auto-list">' + autoHtml + "</ul>" : "") +
       '<div class="wh-fbo-ops-grid">' +
       '<div class="wh-fbo-ops-col"><h5 class="wh-fbo-ops-col-title">Поставки (упаковщики)</h5>' + packingHtml + "</div>" +
@@ -525,13 +678,13 @@
               return "<td>" + esc(val || "—") + "</td>";
             })
             .join("");
-          return "<tr><td>" + esc(r.ozon_supply_id || r.title || r.supply_id) + "</td>" + cells + "</tr>";
+          return "<tr><td>" + esc(r.batch_title || r.title || ("Пакет #" + (r.batch_id || "—"))) + "</td>" + cells + "</tr>";
         })
         .join("");
       return (
         '<div class="wh-fbo-ops-summary-block"><h5 class="wh-fbo-ops-col-title">' + esc(title) + "</h5>" +
         '<div class="wh-fbo-ops-table-wrap"><table class="wh-employees-table wh-crm-table wh-fbo-ops-summary-table">' +
-        "<thead><tr><th>Заявка</th>" + head + "</tr></thead><tbody>" + body + "</tbody></table></div></div>"
+        "<thead><tr><th>Пакет</th>" + head + "</tr></thead><tbody>" + body + "</tbody></table></div></div>"
       );
     }
     return (
@@ -545,7 +698,7 @@
     return {
       packing_columns: opsPackingColumns,
       logistics_columns: opsLogisticsColumns,
-      rows: ops.supply_rows || [],
+      rows: ops.summary_rows || (ops.summary_row ? [ops.summary_row] : []),
     };
   }
 
@@ -580,7 +733,11 @@
       fetchJson("/api/warehouse/marketplaces/ozon-fbo/ops-summary")
         .then(function (data) {
           if (box) box.innerHTML = renderOpsSummaryTables(data);
-          setMsg(msg, "Сводка обновлена (" + (data.supply_count || 0) + " заявок).", false);
+          setMsg(
+            msg,
+            "Сводка обновлена (" + (data.batch_count || 0) + " пакетов, " + (data.supply_count || 0) + " заявок).",
+            false
+          );
         })
         .catch(function (err) {
           if (box) box.innerHTML = "";
@@ -1854,18 +2011,26 @@
   function bindBatchOpsForm(tab, item, root, batchId) {
     var section = root.querySelector(".wh-fbo-batch-ops");
     if (!section) return;
+    var refreshForm = function () {
+      var batch = root._batchData;
+      if (!batch) return;
+      var opsBox = root.querySelector(".wh-fbo-batch-ops");
+      if (opsBox) {
+        opsBox.outerHTML = renderBatchOpsForm(batch);
+        bindBatchOpsForm(tab, item, root, batchId);
+      }
+    };
     var addrSelect = section.querySelector('[data-ops-field="ops_unload_address_id"]');
     bindConfigureSelect(addrSelect, function () {
-      modalUnloadAddressEditor(function () {
-        var batch = root._batchData;
-        if (!batch) return;
-        var opsBox = root.querySelector(".wh-fbo-batch-ops");
-        if (opsBox) {
-          opsBox.outerHTML = renderBatchOpsForm(batch);
-          bindBatchOpsForm(tab, item, root, batchId);
-        }
-      });
+      modalUnloadAddressEditor(refreshForm);
     });
+    var statusSelect = section.querySelector('[data-ops-field="ops_packing_status_id"]');
+    if (statusSelect) {
+      statusSelect.setAttribute("data-prev", statusSelect.value || "");
+      initPackingStatusSelect(statusSelect, function () {
+        modalPackingStatusesEditor(refreshForm);
+      });
+    }
     var saveBtn = root.querySelector("#whFboSaveBatchOps");
     if (!saveBtn || saveBtn.getAttribute("data-bound") === "1") return;
     saveBtn.setAttribute("data-bound", "1");
