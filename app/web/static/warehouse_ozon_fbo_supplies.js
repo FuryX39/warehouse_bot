@@ -2410,7 +2410,250 @@
     var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
     if (!section) return;
     section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
-    bindCargoBoard(root, batch, tab, item, batchId);
+  }
+
+  function updateCargoBoardCtx(root, batch, tab, item, batchId) {
+    root._cargoBoardCtx = { batch: batch, tab: tab, item: item, batchId: batchId };
+  }
+
+  function bindCargoBoard(root, batch, tab, item, batchId) {
+    updateCargoBoardCtx(root, batch, tab, item, batchId);
+    if (root.getAttribute("data-fbo-cargo-bound") === "1") return;
+    root.setAttribute("data-fbo-cargo-bound", "1");
+
+    root.addEventListener("dragstart", function (e) {
+      var el = e.target.closest(".wh-fbo-pool-item");
+      if (!el || !root.contains(el)) return;
+      var payload = poolPayloadFromEl(el);
+      if (e.shiftKey) payload.quantity = payload.maxQty;
+      dragPayload = payload;
+      e.dataTransfer.setData("text/plain", dragPayload.sku);
+    });
+
+    root.addEventListener("dragover", function (e) {
+      var zone = e.target.closest(".wh-fbo-cargo-drop-body");
+      if (!zone || !root.contains(zone)) return;
+      e.preventDefault();
+      zone.classList.add("wh-fbo-drop--over");
+    });
+
+    root.addEventListener("dragleave", function (e) {
+      var zone = e.target.closest(".wh-fbo-cargo-drop-body");
+      if (!zone || !root.contains(zone)) return;
+      var rel = e.relatedTarget;
+      if (rel && zone.contains(rel)) return;
+      zone.classList.remove("wh-fbo-drop--over");
+    });
+
+    root.addEventListener("drop", function (e) {
+      var zone = e.target.closest(".wh-fbo-cargo-drop-body");
+      if (!zone || !root.contains(zone)) return;
+      e.preventDefault();
+      zone.classList.remove("wh-fbo-drop--over");
+      if (!dragPayload) return;
+      var ctx = root._cargoBoardCtx || {};
+      var cargoEl = zone.closest(".wh-fbo-cargo-drop");
+      var board = zone.closest(".wh-fbo-cargo-board");
+      var supplyId = board.getAttribute("data-supply-id");
+      var supply = getSupplyDraft(root, supplyId);
+      if (!supply || !cargoEl) return;
+      var cIdx = parseInt(cargoEl.getAttribute("data-cargo"), 10);
+      var left = maxAllocatable(supply, dragPayload.sku, -1, -1);
+      if (left < 1) {
+        dragPayload = null;
+        return;
+      }
+      var payload = dragPayload;
+      dragPayload = null;
+      showCargoAddDialog({
+        sku: payload.sku,
+        name: payload.name,
+        image_url: payload.image_url,
+        product_id: payload.product_id,
+        maxQty: left,
+        qty: payload.quantity,
+      }).then(function (result) {
+        addItemToCargo(supply, cIdx, payload, result.quantity, result.expiration_date);
+        rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, supplyId);
+      }).catch(function () {});
+    });
+
+    root.addEventListener("click", function (e) {
+      var ctx = root._cargoBoardCtx || {};
+      var poolAdd = e.target.closest(".wh-fbo-pool-add");
+      if (poolAdd && root.contains(poolAdd)) {
+        e.stopPropagation();
+        var poolItem = poolAdd.closest(".wh-fbo-pool-item");
+        var board = poolAdd.closest(".wh-fbo-cargo-board");
+        if (!poolItem || !board) return;
+        var supplyId = board.getAttribute("data-supply-id");
+        var supply = getSupplyDraft(root, supplyId);
+        if (!supply) return;
+        if (!requireCargoDraft(root, supply)) return;
+        var payload = poolPayloadFromEl(poolItem);
+        var left = maxAllocatable(supply, payload.sku, -1, -1);
+        if (left < 1) return;
+        showCargoAddDialog({
+          sku: payload.sku,
+          name: payload.name,
+          image_url: payload.image_url,
+          product_id: payload.product_id,
+          maxQty: left,
+          qty: payload.quantity,
+        }).then(function (result) {
+          addItemToCargo(supply, 0, payload, result.quantity, result.expiration_date);
+          rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, supplyId);
+        }).catch(function () {});
+        return;
+      }
+
+      var addCargoBtn = e.target.closest(".wh-fbo-add-cargo-box, .wh-fbo-add-cargo-pallet");
+      if (addCargoBtn && root.contains(addCargoBtn)) {
+        var supplyId = addCargoBtn.getAttribute("data-supply-id");
+        var supply = getSupplyDraft(root, supplyId);
+        if (!supply) return;
+        addCargoToSupply(supply, addCargoBtn.getAttribute("data-cargo-type"));
+        rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, supplyId);
+        return;
+      }
+
+      var delCargoBtn = e.target.closest(".wh-fbo-cargo-del");
+      if (delCargoBtn && root.contains(delCargoBtn)) {
+        var section = delCargoBtn.closest(".wh-fbo-supply-section");
+        var supply = getSupplyDraft(root, section.getAttribute("data-supply-id"));
+        if (!supply) return;
+        var cIdx = parseInt(delCargoBtn.getAttribute("data-cargo"), 10);
+        supply._cargoesDraft.splice(cIdx, 1);
+        rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, section.getAttribute("data-supply-id"));
+        return;
+      }
+
+      var removeLineBtn = e.target.closest(".wh-fbo-line-remove");
+      if (removeLineBtn && root.contains(removeLineBtn)) {
+        var section = removeLineBtn.closest(".wh-fbo-supply-section");
+        var supply = getSupplyDraft(root, section.getAttribute("data-supply-id"));
+        if (!supply) return;
+        var cIdx = parseInt(removeLineBtn.getAttribute("data-cargo"), 10);
+        var iIdx = parseInt(removeLineBtn.getAttribute("data-item"), 10);
+        supply._cargoesDraft[cIdx].items.splice(iIdx, 1);
+        rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, section.getAttribute("data-supply-id"));
+        return;
+      }
+
+      var saveBtn = e.target.closest(".wh-fbo-save-cargoes");
+      if (saveBtn && root.contains(saveBtn)) {
+        syncCargoDraftFromDom(root);
+        var supplyId = saveBtn.getAttribute("data-supply-id");
+        var supply = getSupplyDraft(root, supplyId);
+        if (!supply) return;
+        var msg = root.querySelector("#whFboBatchMsg");
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/cargoes", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cargoes: supply._cargoesDraft }),
+        }).then(function () {
+          setMsg(msg, "Грузоместа сохранены для заявки #" + supplyId, false);
+        }).catch(function (err) { setMsg(msg, err.message, true); });
+        return;
+      }
+
+      var sendBtn = e.target.closest(".wh-fbo-send-cargoes");
+      if (sendBtn && root.contains(sendBtn)) {
+        syncCargoDraftFromDom(root);
+        var supplyId = sendBtn.getAttribute("data-supply-id");
+        var supply = getSupplyDraft(root, supplyId);
+        if (!supply) return;
+        var msg = root.querySelector("#whFboBatchMsg");
+        var err = validateCargoesForOzon(supply);
+        if (err) {
+          setMsg(msg, err, true);
+          return;
+        }
+        setMsg(msg, "Сохранение и отправка…", false);
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/cargoes", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cargoes: supply._cargoesDraft }),
+        })
+          .then(function () {
+            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ozon/cargoes", { method: "POST", body: "{}" });
+          })
+          .then(function () {
+            setMsg(msg, "Грузоместа отправлены в Ozon для заявки #" + supplyId, false);
+          })
+          .catch(function (err) { setMsg(msg, err.message, true); });
+        return;
+      }
+
+      var syncBtn = e.target.closest(".wh-fbo-sync-cargoes");
+      if (syncBtn && root.contains(syncBtn)) {
+        var supplyId = syncBtn.getAttribute("data-supply-id");
+        var msg = root.querySelector("#whFboBatchMsg");
+        setMsg(msg, "Обновление из Ozon…", false);
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ozon/cargoes/sync", {
+          method: "POST",
+          body: "{}",
+        })
+          .then(function () {
+            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + ctx.batchId);
+          })
+          .then(function (fresh) {
+            paintBatchDetail(ctx.tab, ctx.item, ctx.batchId, root, fresh.batch);
+            setMsg(msg, "Данные обновлены из Ozon.", false);
+          })
+          .catch(function (err) { setMsg(msg, err.message, true); });
+        return;
+      }
+
+      var delSupplyBtn = e.target.closest(".wh-fbo-del-supply");
+      if (delSupplyBtn && root.contains(delSupplyBtn)) {
+        var supplyId = delSupplyBtn.getAttribute("data-supply-id");
+        if (!confirm("Удалить заявку #" + supplyId + " из системы? В Ozon она останется.")) return;
+        var msg = root.querySelector("#whFboBatchMsg");
+        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId, { method: "DELETE" })
+          .then(function () {
+            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + ctx.batchId);
+          })
+          .then(function (fresh) {
+            if (!fresh.batch || !(fresh.batch.supplies || []).length) {
+              renderBatchList(ctx.tab, ctx.item);
+              return;
+            }
+            paintBatchDetail(ctx.tab, ctx.item, ctx.batchId, root, fresh.batch);
+            setMsg(msg, "Заявка удалена из системы.", false);
+          })
+          .catch(function (err) { setMsg(msg, err.message, true); });
+      }
+    });
+
+    root.addEventListener("change", function (e) {
+      var ctx = root._cargoBoardCtx || {};
+      var qtyInp = e.target.closest(".wh-fbo-line-qty");
+      if (qtyInp && root.contains(qtyInp)) {
+        var line = qtyInp.closest(".wh-fbo-cargo-line");
+        var section = qtyInp.closest(".wh-fbo-supply-section");
+        var supply = getSupplyDraft(root, section.getAttribute("data-supply-id"));
+        if (!supply || !line) return;
+        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
+        var iIdx = parseInt(line.getAttribute("data-item"), 10);
+        var lineItem = supply._cargoesDraft[cIdx].items[iIdx];
+        var maxQ = maxAllocatable(supply, lineItem.sku, cIdx, iIdx) + Number(lineItem.quantity || 0);
+        var newQty = Math.max(1, parseInt(qtyInp.value || "1", 10) || 1);
+        lineItem.quantity = Math.min(newQty, maxQ);
+        rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, section.getAttribute("data-supply-id"));
+        return;
+      }
+      var expInp = e.target.closest(".wh-fbo-line-exp");
+      if (expInp && root.contains(expInp)) {
+        var line = expInp.closest(".wh-fbo-cargo-line");
+        var section = expInp.closest(".wh-fbo-supply-section");
+        var supply = getSupplyDraft(root, section.getAttribute("data-supply-id"));
+        if (!supply || !line) return;
+        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
+        var iIdx = parseInt(line.getAttribute("data-item"), 10);
+        supply._cargoesDraft[cIdx].items[iIdx].expiration_date = expInp.value || "";
+      }
+    });
   }
 
   function renderBatchDetail(tab, item, batchId) {
@@ -2631,217 +2874,6 @@
     }
     if (!hasItems) return "Распределите товары по грузоместам перед отправкой в Ozon.";
     return "";
-  }
-
-  function bindCargoBoard(root, batch, tab, item, batchId) {
-    root.querySelectorAll(".wh-fbo-pool-item").forEach(function (el) {
-      el.addEventListener("dragstart", function (e) {
-        var payload = poolPayloadFromEl(el);
-        if (e.shiftKey) payload.quantity = payload.maxQty;
-        dragPayload = payload;
-        e.dataTransfer.setData("text/plain", dragPayload.sku);
-      });
-      el.querySelectorAll(".wh-fbo-pool-qty, .wh-fbo-pool-add").forEach(function (inp) {
-        inp.addEventListener("mousedown", function (e) { e.stopPropagation(); });
-        inp.addEventListener("click", function (e) { e.stopPropagation(); });
-      });
-      var addBtn = el.querySelector(".wh-fbo-pool-add");
-      if (addBtn) {
-        addBtn.addEventListener("click", function () {
-          var board = el.closest(".wh-fbo-cargo-board");
-          var supplyId = board.getAttribute("data-supply-id");
-          var supply = getSupplyDraft(root, supplyId);
-          if (!supply) return;
-          if (!requireCargoDraft(root, supply)) return;
-          var payload = poolPayloadFromEl(el);
-          var left = maxAllocatable(supply, payload.sku, -1, -1);
-          if (left < 1) return;
-          var cIdx = 0;
-          showCargoAddDialog({
-            sku: payload.sku,
-            name: payload.name,
-            image_url: payload.image_url,
-            product_id: payload.product_id,
-            maxQty: left,
-            qty: payload.quantity,
-          }).then(function (result) {
-            addItemToCargo(supply, cIdx, payload, result.quantity, result.expiration_date);
-            rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
-          }).catch(function () {});
-        });
-      }
-    });
-    root.querySelectorAll(".wh-fbo-cargo-drop-body").forEach(function (zone) {
-      zone.addEventListener("dragover", function (e) { e.preventDefault(); zone.classList.add("wh-fbo-drop--over"); });
-      zone.addEventListener("dragleave", function () { zone.classList.remove("wh-fbo-drop--over"); });
-      zone.addEventListener("drop", function (e) {
-        e.preventDefault();
-        zone.classList.remove("wh-fbo-drop--over");
-        if (!dragPayload) return;
-        var cargoEl = zone.closest(".wh-fbo-cargo-drop");
-        var board = zone.closest(".wh-fbo-cargo-board");
-        var supplyId = board.getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply) return;
-        var cIdx = parseInt(cargoEl.getAttribute("data-cargo"), 10);
-        var left = maxAllocatable(supply, dragPayload.sku, -1, -1);
-        if (left < 1) {
-          dragPayload = null;
-          return;
-        }
-        var payload = dragPayload;
-        dragPayload = null;
-        showCargoAddDialog({
-          sku: payload.sku,
-          name: payload.name,
-          image_url: payload.image_url,
-          product_id: payload.product_id,
-          maxQty: left,
-          qty: payload.quantity,
-        }).then(function (result) {
-          addItemToCargo(supply, cIdx, payload, result.quantity, result.expiration_date);
-          rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
-        }).catch(function () {});
-      });
-    });
-    root.querySelectorAll(".wh-fbo-line-qty").forEach(function (inp) {
-      inp.addEventListener("change", function () {
-        var line = inp.closest(".wh-fbo-cargo-line");
-        var supplyId = inp.closest(".wh-fbo-supply-section").getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply || !line) return;
-        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
-        var iIdx = parseInt(line.getAttribute("data-item"), 10);
-        var lineItem = supply._cargoesDraft[cIdx].items[iIdx];
-        var maxQ = maxAllocatable(supply, lineItem.sku, cIdx, iIdx) + Number(lineItem.quantity || 0);
-        var newQty = Math.max(1, parseInt(inp.value || "1", 10) || 1);
-        lineItem.quantity = Math.min(newQty, maxQ);
-        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
-      });
-    });
-    root.querySelectorAll(".wh-fbo-line-exp").forEach(function (inp) {
-      inp.addEventListener("change", function () {
-        var line = inp.closest(".wh-fbo-cargo-line");
-        var supplyId = inp.closest(".wh-fbo-supply-section").getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply || !line) return;
-        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
-        var iIdx = parseInt(line.getAttribute("data-item"), 10);
-        supply._cargoesDraft[cIdx].items[iIdx].expiration_date = inp.value || "";
-      });
-    });
-    root.querySelectorAll(".wh-fbo-line-remove").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var supplyId = btn.closest(".wh-fbo-supply-section").getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply) return;
-        var cIdx = parseInt(btn.getAttribute("data-cargo"), 10);
-        var iIdx = parseInt(btn.getAttribute("data-item"), 10);
-        supply._cargoesDraft[cIdx].items.splice(iIdx, 1);
-        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
-      });
-    });
-    root.querySelectorAll(".wh-fbo-add-cargo-box, .wh-fbo-add-cargo-pallet").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var supplyId = btn.getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply) return;
-        addCargoToSupply(supply, btn.getAttribute("data-cargo-type"));
-        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
-      });
-    });
-    root.querySelectorAll(".wh-fbo-cargo-del").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var supplyId = btn.closest(".wh-fbo-supply-section").getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply) return;
-        var cIdx = parseInt(btn.getAttribute("data-cargo"), 10);
-        supply._cargoesDraft.splice(cIdx, 1);
-        rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
-      });
-    });
-        root.querySelectorAll(".wh-fbo-save-cargoes").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        syncCargoDraftFromDom(root);
-        var supplyId = btn.getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply) return;
-        var msg = root.querySelector("#whFboBatchMsg");
-        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/cargoes", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cargoes: supply._cargoesDraft }),
-        }).then(function () {
-          setMsg(msg, "Грузоместа сохранены для заявки #" + supplyId, false);
-        }).catch(function (err) { setMsg(msg, err.message, true); });
-      });
-    });
-    root.querySelectorAll(".wh-fbo-send-cargoes").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        syncCargoDraftFromDom(root);
-        var supplyId = btn.getAttribute("data-supply-id");
-        var supply = getSupplyDraft(root, supplyId);
-        if (!supply) return;
-        var msg = root.querySelector("#whFboBatchMsg");
-        var err = validateCargoesForOzon(supply);
-        if (err) {
-          setMsg(msg, err, true);
-          return;
-        }
-        setMsg(msg, "Сохранение и отправка…", false);
-        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/cargoes", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cargoes: supply._cargoesDraft }),
-        })
-          .then(function () {
-            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ozon/cargoes", { method: "POST", body: "{}" });
-          })
-          .then(function () {
-            setMsg(msg, "Грузоместа отправлены в Ozon для заявки #" + supplyId, false);
-          })
-          .catch(function (err) { setMsg(msg, err.message, true); });
-      });
-    });
-    root.querySelectorAll(".wh-fbo-sync-cargoes").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var supplyId = btn.getAttribute("data-supply-id");
-        var msg = root.querySelector("#whFboBatchMsg");
-        setMsg(msg, "Обновление из Ozon…", false);
-        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId + "/ozon/cargoes/sync", {
-          method: "POST",
-          body: "{}",
-        })
-          .then(function () {
-            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
-          })
-          .then(function (fresh) {
-            paintBatchDetail(tab, item, batchId, root, fresh.batch);
-            setMsg(msg, "Данные обновлены из Ozon.", false);
-          })
-          .catch(function (err) { setMsg(msg, err.message, true); });
-      });
-    });
-    root.querySelectorAll(".wh-fbo-del-supply").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var supplyId = btn.getAttribute("data-supply-id");
-        if (!confirm("Удалить заявку #" + supplyId + " из системы? В Ozon она останется.")) return;
-        var msg = root.querySelector("#whFboBatchMsg");
-        fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies/" + supplyId, { method: "DELETE" })
-          .then(function () {
-            return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId);
-          })
-          .then(function (fresh) {
-            if (!fresh.batch || !(fresh.batch.supplies || []).length) {
-              renderBatchList(tab, item);
-              return;
-            }
-            paintBatchDetail(tab, item, batchId, root, fresh.batch);
-            setMsg(msg, "Заявка удалена из системы.", false);
-          })
-          .catch(function (err) { setMsg(msg, err.message, true); });
-      });
-    });
   }
 
   function bindBatchOpsForm(tab, item, root, batchId) {
