@@ -655,19 +655,42 @@
     return ops;
   }
 
+  function opsSummaryRowDate(row, dateKey) {
+    if (row && row.values && row.values[dateKey]) return row.values[dateKey];
+    var cells = row.packing_row || row.logistics_row || [];
+    for (var i = 0; i < cells.length; i++) {
+      if (cells[i].key === dateKey) return cells[i].value || "";
+    }
+    return "";
+  }
+
+  function sortOpsSummaryRows(rows, dateKey) {
+    return (rows || []).slice().sort(function (a, b) {
+      var av = opsSummaryRowDate(a, dateKey);
+      var bv = opsSummaryRowDate(b, dateKey);
+      var aKey = av && av.length >= 10 ? "0" + av : "1";
+      var bKey = bv && bv.length >= 10 ? "0" + bv : "1";
+      if (aKey !== bKey) return aKey < bKey ? -1 : 1;
+      if (av !== bv) return av < bv ? -1 : av > bv ? 1 : 0;
+      return String(a.batch_id || "").localeCompare(String(b.batch_id || ""), "ru");
+    });
+  }
+
   function renderOpsSummaryTables(summary) {
     summary = summary || {};
     var rows = summary.rows || [];
     if (!rows.length) {
       return '<p class="wh-muted">Нет данных. Заполните поля пакета и сохраните.</p>';
     }
-    function table(title, columns, rowKey) {
+    var packingRows = summary.packing_summary_rows || sortOpsSummaryRows(rows, "assembly_date");
+    var logisticsRows = summary.logistics_summary_rows || sortOpsSummaryRows(rows, "ship_date");
+    function table(title, columns, rowList, rowKey) {
       var head = columns
         .map(function (c) {
           return "<th>" + esc(c.label) + "</th>";
         })
         .join("");
-      var body = rows
+      var body = rowList
         .map(function (r) {
           var cells = (r[rowKey] || [])
             .map(function (cell) {
@@ -688,17 +711,20 @@
       );
     }
     return (
-      table("ПОСТАВКИ (упаковщики)", summary.packing_columns || opsPackingColumns, "packing_row") +
-      table("ОТГРУЗКА (логисты)", summary.logistics_columns || opsLogisticsColumns, "logistics_row")
+      table("ПОСТАВКИ (упаковщики)", summary.packing_columns || opsPackingColumns, packingRows, "packing_row") +
+      table("ОТГРУЗКА (логисты)", summary.logistics_columns || opsLogisticsColumns, logisticsRows, "logistics_row")
     );
   }
 
   function opsSummaryFromBatch(batch) {
     var ops = (batch && batch.ops_sheet) || {};
+    var rows = ops.summary_rows || (ops.summary_row ? [ops.summary_row] : []);
     return {
       packing_columns: opsPackingColumns,
       logistics_columns: opsLogisticsColumns,
-      rows: ops.summary_rows || (ops.summary_row ? [ops.summary_row] : []),
+      rows: rows,
+      packing_summary_rows: sortOpsSummaryRows(rows, "assembly_date"),
+      logistics_summary_rows: sortOpsSummaryRows(rows, "ship_date"),
     };
   }
 

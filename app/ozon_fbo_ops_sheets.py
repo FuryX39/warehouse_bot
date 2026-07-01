@@ -32,6 +32,38 @@ def _unique_join(parts: list[str], sep: str = ", ") -> str:
     return sep.join(seen)
 
 
+def _date_sort_key(val: str) -> tuple[int, str]:
+    s = _str(val, 10)
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return (0, s)
+    return (1, s)
+
+
+def supply_cluster_display(supply: FboSupplyRow) -> str:  # noqa: F821
+    """Название кластера из заявки, без числового ID."""
+    name = _str(supply.ozon_cluster_name, 256)
+    cid = _str(supply.ozon_cluster_id, 64)
+    if name and name != cid and not name.isdigit():
+        return name
+    title = _str(supply.title, 256)
+    if " — " in title:
+        part = title.split(" — ", 1)[1].strip()
+        if part and part != cid and not part.isdigit():
+            return part
+    return ""
+
+
+def cluster_labels_from_supplies(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
+    return _unique_join([supply_cluster_display(s) for s in supplies])
+
+
+def sort_summary_rows(rows: list[dict[str, Any]], *, date_key: str) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: _date_sort_key(str((row.get("values") or {}).get(date_key, ""))),
+    )
+
+
 def batch_ship_date(batch: FboBatchRow) -> str:  # noqa: F821
     return _date_part(batch.timeslot_from)
 
@@ -72,7 +104,7 @@ def resolved_supply_detail_values(
     """Автоматические поля по одной заявке (для подсказки в форме пакета)."""
     units = total_units(supply)
     return {
-        "cluster": _str(supply.ozon_cluster_name, 256),
+        "cluster": supply_cluster_display(supply),
         "warehouse": _str(supply.ozon_warehouse_name, 256),
         "supply_id": _str(supply.ozon_supply_id, 64),
         "packer": _str(supply.assigned_user_name, 128),
@@ -100,7 +132,7 @@ def resolved_batch_summary_values(
     client = counterparty_name or "—"
     return {
         "assembly_date": editable["ops_assembly_date"],
-        "cluster": _unique_join([s.ozon_cluster_name for s in supplies]),
+        "cluster": cluster_labels_from_supplies(supplies),
         "warehouse": _unique_join([s.ozon_warehouse_name for s in supplies]),
         "ship_date": ship_date,
         "supply_id": _unique_join([s.ozon_supply_id for s in supplies]),
@@ -116,7 +148,7 @@ def resolved_batch_summary_values(
         "weight_kg": editable["ops_weight_kg"],
         "unload_address": unload_address,
         "ship_time": ship_time,
-        "logistics_cluster": _unique_join([s.ozon_cluster_name for s in supplies]),
+        "logistics_cluster": cluster_labels_from_supplies(supplies),
         "expense_doc_number": editable["ops_expense_doc_number"],
         "pallets_ready_time": editable["ops_pallets_ready_time"],
         "logistics_comment": editable["ops_logistics_comment"],
@@ -274,6 +306,9 @@ def ops_summary_for_batch(
         packing_status_name=packing_status_name,
     )
     summary_row = sheet["summary_row"]
+    summary_rows = [summary_row]
+    packing_summary_rows = sort_summary_rows(summary_rows, date_key="assembly_date")
+    logistics_summary_rows = sort_summary_rows(summary_rows, date_key="ship_date")
     return {
         "supply_count": len(supplies),
         "batch_count": 1,
@@ -281,9 +316,11 @@ def ops_summary_for_batch(
         "packing_columns": [{"key": k, "label": l} for k, l in PACKING_COLUMNS],
         "logistics_columns": [{"key": k, "label": l} for k, l in LOGISTICS_COLUMNS],
         "batch_ops": sheet,
-        "rows": sheet["summary_rows"],
-        "packing_rows": sheet["packing_rows"],
-        "logistics_rows": sheet["logistics_rows"],
+        "rows": summary_rows,
+        "packing_summary_rows": packing_summary_rows,
+        "logistics_summary_rows": logistics_summary_rows,
+        "packing_rows": [r["packing_export"] for r in packing_summary_rows],
+        "logistics_rows": [r["logistics_export"] for r in logistics_summary_rows],
         "summary_row": summary_row,
     }
 
@@ -300,8 +337,6 @@ def ops_summary_for_batches(
     unload_addresses = unload_addresses or {}
     packing_status_names = packing_status_names or {}
     summary_rows: list[dict[str, Any]] = []
-    packing_rows: list[dict[str, str]] = []
-    logistics_rows: list[dict[str, str]] = []
     supply_count = 0
     for batch in batches:
         supplies = supplies_by_batch.get(int(batch.id), [])
@@ -320,14 +355,16 @@ def ops_summary_for_batches(
         )
         row = sheet["summary_row"]
         summary_rows.append(row)
-        packing_rows.append(row["packing_export"])
-        logistics_rows.append(row["logistics_export"])
+    packing_summary_rows = sort_summary_rows(summary_rows, date_key="assembly_date")
+    logistics_summary_rows = sort_summary_rows(summary_rows, date_key="ship_date")
     return {
         "supply_count": supply_count,
         "batch_count": len(summary_rows),
         "packing_columns": [{"key": k, "label": l} for k, l in PACKING_COLUMNS],
         "logistics_columns": [{"key": k, "label": l} for k, l in LOGISTICS_COLUMNS],
         "rows": summary_rows,
-        "packing_rows": packing_rows,
-        "logistics_rows": logistics_rows,
+        "packing_summary_rows": packing_summary_rows,
+        "logistics_summary_rows": logistics_summary_rows,
+        "packing_rows": [r["packing_export"] for r in packing_summary_rows],
+        "logistics_rows": [r["logistics_export"] for r in logistics_summary_rows],
     }
