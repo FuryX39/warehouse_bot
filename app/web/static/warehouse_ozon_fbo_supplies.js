@@ -2168,50 +2168,16 @@
     return '<span class="wh-fbo-product-thumb wh-fbo-product-thumb--empty">' + esc(letter) + "</span>";
   }
 
-  function showCargoAddDialog(info) {
-    return new Promise(function (resolve, reject) {
-      var overlay = document.createElement("div");
-      overlay.className = "wh-fbo-modal-overlay";
-      var defaultQty = Math.max(1, Math.min(info.maxQty || 1, info.qty || 1));
-      overlay.innerHTML =
-        '<div class="wh-fbo-modal" role="dialog">' +
-        '<div class="wh-fbo-modal-product">' +
-        renderProductThumb(info.image_url, info.name) +
-        "<div><strong>" + esc(info.name || info.sku) + "</strong>" +
-        '<div class="wh-muted">Артикул ' + esc(info.sku) + "</div></div></div>" +
-        '<label class="wh-fbo-modal-field">Количество' +
-        ' <input type="number" class="wh-fbo-modal-qty" min="1" max="' + esc(info.maxQty) + '" value="' + esc(defaultQty) + '" /></label>' +
-        '<label class="wh-fbo-modal-field">Годен до' +
-        ' <input type="date" class="wh-fbo-modal-exp" value="' + esc(info.expiration_date || "") + '" /></label>' +
-        '<p class="wh-muted wh-fbo-modal-hint">Доступно к распределению: ' + esc(info.maxQty) + " шт.</p>" +
-        '<div class="wh-fbo-modal-actions">' +
-        '<button type="button" class="wh-btn wh-fbo-modal-cancel">Отмена</button>' +
-        '<button type="button" class="wh-btn wh-btn-primary wh-fbo-modal-ok">Добавить</button>' +
-        "</div></div>";
-      document.body.appendChild(overlay);
-      var qtyInp = overlay.querySelector(".wh-fbo-modal-qty");
-      var expInp = overlay.querySelector(".wh-fbo-modal-exp");
-      function close() {
-        overlay.remove();
-      }
-      overlay.querySelector(".wh-fbo-modal-cancel").addEventListener("click", function () {
-        close();
-        reject(new Error("cancelled"));
-      });
-      overlay.addEventListener("click", function (e) {
-        if (e.target === overlay) {
-          close();
-          reject(new Error("cancelled"));
-        }
-      });
-      overlay.querySelector(".wh-fbo-modal-ok").addEventListener("click", function () {
-        var qty = Math.max(1, parseInt(qtyInp.value || "1", 10) || 1);
-        qty = Math.min(qty, info.maxQty || qty);
-        close();
-        resolve({ quantity: qty, expiration_date: expInp.value || "" });
-      });
-      setTimeout(function () { qtyInp.focus(); qtyInp.select(); }, 0);
-    });
+  function movePoolPayloadToCargo(root, ctx, supplyId, cIdx, payload) {
+    var supply = getSupplyDraft(root, supplyId);
+    if (!supply) return false;
+    if (!requireCargoDraft(root, supply)) return false;
+    var left = maxAllocatable(supply, payload.sku, -1, -1);
+    if (left < 1) return false;
+    var qty = Math.max(1, Math.min(payload.quantity || 1, left));
+    addItemToCargo(supply, cIdx, payload, qty, "");
+    rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, supplyId);
+    return true;
   }
 
   function syncCargoDraftFromDom(root) {
@@ -2304,21 +2270,21 @@
           .map(function (it) {
             return (
               '<div class="wh-fbo-pool-item" draggable="true" data-sku="' + esc(it.sku) + '" data-name="' + esc(it.name) + '" data-product-id="' + esc(it.product_id || "") + '" data-image="' + esc(it.image_url || "") + '" data-max="' + esc(it.quantity) + '">' +
-              '<div class="wh-fbo-product-row">' +
+              '<div class="wh-fbo-pool-card">' +
               renderProductThumb(it.image_url, it.name) +
               '<div class="wh-fbo-product-meta">' +
-              '<div class="wh-fbo-product-sku">' + esc(it.sku) + "</div>" +
-              '<div class="wh-fbo-product-name">' + esc(it.name || it.sku) + "</div>" +
-              '<div class="wh-muted">Остаток: ' + esc(it.quantity) + " шт.</div>" +
+              '<div class="wh-fbo-product-sku" title="' + esc(it.sku) + '">' + esc(it.sku) + "</div>" +
+              '<div class="wh-fbo-product-name" title="' + esc(it.name || it.sku) + '">' + esc(it.name || it.sku) + "</div>" +
               "</div></div>" +
               '<div class="wh-fbo-pool-actions">' +
-              '<label class="wh-fbo-pool-qty-label">Взять <input type="number" min="1" max="' + esc(it.quantity) + '" class="wh-fbo-pool-qty" value="1" /> шт.</label>' +
-              '<button type="button" class="wh-btn wh-btn-sm wh-fbo-pool-add" title="Добавить в грузоместо">+</button>' +
+              '<input type="number" min="1" max="' + esc(it.quantity) + '" class="wh-fbo-pool-qty" value="1" title="Количество" />' +
+              '<span class="wh-muted wh-fbo-pool-max">/ ' + esc(it.quantity) + "</span>" +
+              '<button type="button" class="wh-btn wh-btn-sm wh-fbo-pool-add" title="В первое грузоместо">+</button>' +
               "</div></div>"
             );
           })
           .join("")
-      : '<p class="wh-muted">Все товары распределены.</p>';
+      : '<p class="wh-muted wh-fbo-pool-empty">Все товары распределены.</p>';
     var cargoesHtml = cargoes
       .map(function (cargo, cIdx) {
         var itemsHtml = (cargo.items || [])
@@ -2326,15 +2292,13 @@
             var maxQ = maxAllocatable(supply, it.sku, cIdx, iIdx) + Number(it.quantity || 0);
             return (
               '<div class="wh-fbo-cargo-line" data-cargo="' + cIdx + '" data-item="' + iIdx + '">' +
-              '<div class="wh-fbo-product-row">' +
               renderProductThumb(it.image_url, it.name) +
-              '<div class="wh-fbo-product-meta">' +
-              '<div class="wh-fbo-product-sku">' + esc(it.sku) + "</div>" +
-              '<div class="wh-fbo-product-name">' + esc(it.name || it.sku) + "</div>" +
+              '<div class="wh-fbo-cargo-line-main">' +
+              '<div class="wh-fbo-product-sku" title="' + esc(it.sku) + '">' + esc(it.sku) + "</div>" +
               '<div class="wh-fbo-cargo-line-fields">' +
-              '<label>Кол-во <input type="number" min="1" max="' + esc(maxQ) + '" class="wh-fbo-line-qty" value="' + esc(it.quantity) + '" /></label>' +
-              '<label>Годен до <input type="date" class="wh-fbo-line-exp" value="' + esc(it.expiration_date || "") + '" /></label>' +
-              "</div></div></div>" +
+              '<input type="number" min="1" max="' + esc(maxQ) + '" class="wh-fbo-line-qty" value="' + esc(it.quantity) + '" title="Кол-во" />' +
+              '<input type="date" class="wh-fbo-line-exp" value="' + esc(it.expiration_date || "") + '" title="Годен до" />' +
+              "</div></div>" +
               '<button type="button" class="wh-btn wh-btn-sm wh-fbo-line-remove" data-cargo="' + cIdx + '" data-item="' + iIdx + '" title="Убрать">×</button></div>'
             );
           })
@@ -2353,14 +2317,16 @@
       .join("");
     return (
       '<div class="wh-fbo-cargo-board" data-supply-id="' + esc(supply.id) + '">' +
-      '<div class="wh-fbo-pool"><h5>Нераспределено</h5><p class="wh-muted wh-fbo-pool-hint">Сначала добавьте короб или паллет, затем перетащите товар. Shift — весь остаток.</p>' +
+      '<div class="wh-fbo-pool"><h5>Нераспределено</h5><p class="wh-muted wh-fbo-pool-hint">Укажите количество и перетащите в грузоместо. Shift — весь остаток.</p>' +
       '<div class="wh-fbo-pool-list">' + poolHtml + "</div></div>" +
       '<div class="wh-fbo-cargoes-col"><h5>Грузоместа</h5>' +
       '<div class="wh-fbo-cargo-add-actions">' +
       '<button type="button" class="wh-btn wh-btn-sm wh-fbo-add-cargo-box" data-supply-id="' + esc(supply.id) + '" data-cargo-type="BOX">+ короб</button>' +
       '<button type="button" class="wh-btn wh-btn-sm wh-fbo-add-cargo-pallet" data-supply-id="' + esc(supply.id) + '" data-cargo-type="PALLET">+ паллет</button>' +
       "</div>" +
-      (cargoesHtml || '<p class="wh-muted wh-fbo-cargo-empty">Нет грузомест. Нажмите «+ короб» или «+ паллет».</p>') +
+      (cargoes.length
+        ? '<div class="wh-fbo-cargoes-grid">' + cargoesHtml + "</div>"
+        : '<p class="wh-muted wh-fbo-cargo-empty">Нет грузомест. Нажмите «+ короб» или «+ паллет».</p>') +
       "</div></div>"
     );
   }
@@ -2422,6 +2388,10 @@
     root.setAttribute("data-fbo-cargo-bound", "1");
 
     root.addEventListener("dragstart", function (e) {
+      if (e.target.closest(".wh-fbo-pool-qty, .wh-fbo-pool-add")) {
+        e.preventDefault();
+        return;
+      }
       var el = e.target.closest(".wh-fbo-pool-item");
       if (!el || !root.contains(el)) return;
       var payload = poolPayloadFromEl(el);
@@ -2465,17 +2435,7 @@
       }
       var payload = dragPayload;
       dragPayload = null;
-      showCargoAddDialog({
-        sku: payload.sku,
-        name: payload.name,
-        image_url: payload.image_url,
-        product_id: payload.product_id,
-        maxQty: left,
-        qty: payload.quantity,
-      }).then(function (result) {
-        addItemToCargo(supply, cIdx, payload, result.quantity, result.expiration_date);
-        rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, supplyId);
-      }).catch(function () {});
+      movePoolPayloadToCargo(root, ctx, supplyId, cIdx, payload);
     });
 
     root.addEventListener("click", function (e) {
@@ -2491,19 +2451,7 @@
         if (!supply) return;
         if (!requireCargoDraft(root, supply)) return;
         var payload = poolPayloadFromEl(poolItem);
-        var left = maxAllocatable(supply, payload.sku, -1, -1);
-        if (left < 1) return;
-        showCargoAddDialog({
-          sku: payload.sku,
-          name: payload.name,
-          image_url: payload.image_url,
-          product_id: payload.product_id,
-          maxQty: left,
-          qty: payload.quantity,
-        }).then(function (result) {
-          addItemToCargo(supply, 0, payload, result.quantity, result.expiration_date);
-          rerenderCargoSection(root, ctx.batch, ctx.tab, ctx.item, ctx.batchId, supplyId);
-        }).catch(function () {});
+        movePoolPayloadToCargo(root, ctx, supplyId, 0, payload);
         return;
       }
 

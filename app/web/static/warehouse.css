@@ -1657,33 +1657,73 @@ body.wh-body {
 }
 
 .wh-fbo-cargo-board {
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   margin: 0.75rem 0;
 }
 
+.wh-fbo-pool-list,
+.wh-fbo-cargoes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
 .wh-fbo-pool-list {
-  min-height: 120px;
+  min-height: 72px;
   border: 1px dashed var(--wh-border);
   border-radius: 8px;
-  padding: 0.5rem;
+  padding: 0.45rem;
   background: #fafbfc;
 }
 
+.wh-fbo-pool-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.84rem;
+}
+
 .wh-fbo-pool-item {
-  padding: 0.45rem 0.55rem;
-  margin-bottom: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0.4rem;
   background: #fff;
   border: 1px solid var(--wh-border);
   border-radius: 6px;
   cursor: grab;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
+  min-height: 0;
+}
+
+.wh-fbo-pool-card {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.wh-fbo-pool-item .wh-fbo-product-thumb {
+  width: 36px;
+  height: 36px;
+  font-size: 0.85rem;
+}
+
+.wh-fbo-pool-item .wh-fbo-product-name {
+  font-size: 0.78rem;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .wh-fbo-pool-hint {
-  font-size: 0.82rem;
-  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  margin: 0 0 0.35rem;
 }
 
 .wh-fbo-product-row {
@@ -1731,20 +1771,19 @@ body.wh-body {
 .wh-fbo-pool-actions {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  margin-top: 0.35rem;
-  flex-wrap: wrap;
+  gap: 0.25rem;
+  flex-wrap: nowrap;
 }
 
-.wh-fbo-pool-qty-label {
-  font-size: 0.82rem;
-  margin-left: 0.35rem;
+.wh-fbo-pool-max {
+  font-size: 0.76rem;
+  white-space: nowrap;
 }
 
 .wh-fbo-pool-qty {
-  width: 3.2rem;
-  padding: 0.15rem 0.25rem;
-  font-size: 0.82rem;
+  width: 2.8rem;
+  padding: 0.12rem 0.2rem;
+  font-size: 0.8rem;
 }
 
 .wh-fbo-supply-actions {
@@ -1812,24 +1851,29 @@ body.wh-body {
 .wh-fbo-cargo-drop {
   border: 1px solid var(--wh-border);
   border-radius: 8px;
-  margin-bottom: 0.5rem;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .wh-fbo-cargo-drop-head {
-  padding: 0.4rem 0.6rem;
+  padding: 0.3rem 0.45rem;
   background: #f4f6f9;
   border-bottom: 1px solid var(--wh-border);
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.8rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
 }
 
 .wh-fbo-cargo-drop-body {
-  min-height: 64px;
-  padding: 0.5rem;
+  min-height: 52px;
+  padding: 0.35rem;
+  flex: 1;
 }
 
 .wh-fbo-cargo-drop-body.wh-fbo-drop--over {
@@ -1839,12 +1883,22 @@ body.wh-body {
 
 .wh-fbo-cargo-line {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.45rem 0;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0;
   border-bottom: 1px solid #f0f2f5;
-  font-size: 0.88rem;
+  font-size: 0.8rem;
+}
+
+.wh-fbo-cargo-line .wh-fbo-product-thumb {
+  width: 28px;
+  height: 28px;
+  font-size: 0.75rem;
+}
+
+.wh-fbo-cargo-line-main {
+  flex: 1;
+  min-width: 0;
 }
 
 .wh-fbo-cargo-line:last-child {
@@ -1854,17 +1908,24 @@ body.wh-body {
 .wh-fbo-cargo-line-fields {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 0.75rem;
-  margin-top: 0.35rem;
-  font-size: 0.82rem;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
 }
 
 .wh-fbo-cargo-line-fields input[type="number"] {
-  width: 4rem;
+  width: 2.8rem;
+  padding: 0.1rem 0.2rem;
+  font-size: 0.78rem;
 }
 
 .wh-fbo-cargo-line-fields input[type="date"] {
-  font-size: 0.82rem;
+  font-size: 0.72rem;
+  padding: 0.08rem 0.15rem;
+  max-width: 100%;
+}
+
+.wh-fbo-cargo-drop-body > .wh-muted {
+  font-size: 0.78rem;
 }
 
 .wh-fbo-modal-overlay {
@@ -2305,11 +2366,21 @@ body.wh-body {
   min-width: 16rem;
 }
 
-@media (max-width: 900px) {
-  .wh-fbo-cargo-board {
+@media (max-width: 1100px) {
+  .wh-fbo-pool-list,
+  .wh-fbo-cargoes-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .wh-fbo-pool-list,
+  .wh-fbo-cargoes-grid {
     grid-template-columns: 1fr;
   }
+}
 
+@media (max-width: 900px) {
   .wh-fbo-ops-grid {
     grid-template-columns: 1fr;
   }
