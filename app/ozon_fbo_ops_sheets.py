@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.ozon_fbo_labels_storage import supply_labels_url
-from app.ozon_fbo_supply_repository import (
-    FboSupplyRow,
-    SUPPLY_KIND_BOX,
-    SUPPLY_KIND_PALLET,
-)
+
+if TYPE_CHECKING:
+    from app.ozon_fbo_supply_repository import FboSupplyRow
+
+SUPPLY_KIND_PALLET = "pallet"
+SUPPLY_KIND_BOX = "box"
 
 OPS_CLIENT_DEFAULT = "OZON"
 
@@ -39,7 +40,7 @@ def default_cargoes_desc(supply_kind: str, cargo_count: int) -> str:
     return f"{cargo_count} {suffix}"
 
 
-def total_units(supply: FboSupplyRow) -> int:
+def total_units(supply: FboSupplyRow) -> int:  # noqa: F821
     return sum(int(i.quantity or 0) for i in supply.items)
 
 
@@ -65,11 +66,11 @@ def ops_editable_field_names() -> tuple[str, ...]:
     )
 
 
-def ops_editable_from_supply(supply: FboSupplyRow) -> dict[str, str]:
+def ops_editable_from_supply(supply: FboSupplyRow) -> dict[str, str]:  # noqa: F821
     return {name: _str(getattr(supply, name, "")) for name in ops_editable_field_names()}
 
 
-def resolved_ops_values(supply: FboSupplyRow) -> dict[str, str]:
+def resolved_ops_values(supply: FboSupplyRow) -> dict[str, str]:  # noqa: F821
     cargo_count = len(supply.cargoes)
     units = total_units(supply)
     labels_url = supply_labels_url(supply.id) if _str(supply.labels_file) else ""
@@ -179,7 +180,7 @@ def logistics_row_ordered(values: dict[str, str]) -> list[dict[str, str]]:
     return [{"key": key, "label": label, "value": values.get(key, "")} for key, label in LOGISTICS_COLUMNS]
 
 
-def ops_sheet_for_supply(supply: FboSupplyRow) -> dict[str, Any]:
+def ops_sheet_for_supply(supply: FboSupplyRow) -> dict[str, Any]:  # noqa: F821
     values = resolved_ops_values(supply)
     return {
         "supply_id": supply.id,
@@ -195,7 +196,7 @@ def ops_sheet_for_supply(supply: FboSupplyRow) -> dict[str, Any]:
     }
 
 
-def ops_summary_for_supplies(supplies: list[FboSupplyRow]) -> dict[str, Any]:
+def ops_summary_for_supplies(supplies: list[FboSupplyRow]) -> dict[str, Any]:  # noqa: F821
     rows = [ops_sheet_for_supply(s) for s in supplies]
     return {
         "supply_count": len(rows),

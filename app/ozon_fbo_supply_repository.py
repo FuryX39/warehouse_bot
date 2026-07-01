@@ -11,7 +11,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
 from app.ozon_fbo_labels_storage import batch_labels_url, supply_labels_url
-from app.ozon_fbo_ops_sheets import ops_editable_field_names, ops_sheet_for_supply
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 SUPPLY_KIND_PALLET = "pallet"
@@ -584,8 +583,11 @@ class OzonFboSupplyRepository:
             ):
                 if key in data:
                     setattr(row, key, _str(data.get(key), limit))
-            for key in ops_editable_field_names():
-                if key in data:
+            from app.ozon_fbo_ops_sheets import ops_editable_field_names
+
+            ops_field_names = ops_editable_field_names()
+            for key in data:
+                if key.startswith("ops_") and key in ops_field_names:
                     limit = 1024 if "comment" in key or "link" in key or "address" in key or "driver" in key else 64
                     if key in {"ops_barcode_link", "ops_barcode_link_2"}:
                         limit = 512
@@ -600,7 +602,7 @@ class OzonFboSupplyRepository:
                     setattr(row, key, _str(data.get(key), limit))
             ops_payload = data.get("ops")
             if isinstance(ops_payload, dict):
-                for key in ops_editable_field_names():
+                for key in ops_field_names:
                     if key in ops_payload:
                         limit = 512 if "link" in key else 256 if key == "ops_unload_address" or key == "ops_car_driver" else 1024 if "comment" in key else 64
                         if key in {"ops_assembly_date", "ops_ship_date"}:
@@ -1027,6 +1029,8 @@ def supply_to_dict(
         "cargo_count": len(row.cargoes),
     }
     if include_details:
+        from app.ozon_fbo_ops_sheets import ops_sheet_for_supply
+
         data["ops_sheet"] = ops_sheet_for_supply(row)
         data["items"] = [
             _supply_item_dict(i, catalog_map)
