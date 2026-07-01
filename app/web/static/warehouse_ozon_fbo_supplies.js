@@ -2133,6 +2133,29 @@
     return pool;
   }
 
+  function supplyHasUnallocated(supply) {
+    var cargoes = supply._cargoesDraft || cargoStateFromSupply(supply);
+    return allocatedMap(cargoes, supply.items || []).length > 0;
+  }
+
+  function supplySectionClassName(supply, index) {
+    var classes = ["wh-crm-section", "wh-fbo-supply-section"];
+    classes.push(index % 2 === 0 ? "wh-fbo-supply-section--even" : "wh-fbo-supply-section--odd");
+    if (supplyHasUnallocated(supply)) {
+      classes.push("wh-fbo-supply-section--incomplete");
+    }
+    return classes.join(" ");
+  }
+
+  function refreshSupplySectionStyle(root, supplyId) {
+    var supply = getSupplyDraft(root, supplyId);
+    if (!supply) return;
+    var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
+    if (!section) return;
+    var idx = parseInt(section.getAttribute("data-supply-idx") || "0", 10);
+    section.className = supplySectionClassName(supply, idx);
+  }
+
   function planQtyForSku(supply, sku) {
     var total = 0;
     (supply.items || []).forEach(function (it) {
@@ -2376,6 +2399,7 @@
     var section = root.querySelector('.wh-fbo-supply-section[data-supply-id="' + supplyId + '"]');
     if (!section) return;
     section.querySelector(".wh-fbo-cargo-board").outerHTML = renderCargoBoard(supply, supply._cargoesDraft);
+    refreshSupplySectionStyle(root, supplyId);
   }
 
   function updateCargoBoardCtx(root, batch, tab, item, batchId) {
@@ -2621,11 +2645,11 @@
   function paintBatchDetail(tab, item, batchId, root, batch) {
         var supplies = batch.supplies || [];
         var supplySections = supplies
-          .map(function (s) {
+          .map(function (s, idx) {
             var cargoes = cargoStateFromSupply(s);
             s._cargoesDraft = cargoes;
             return (
-              '<section class="wh-crm-section wh-fbo-supply-section" data-supply-id="' + esc(s.id) + '">' +
+              '<section class="' + supplySectionClassName(s, idx) + '" data-supply-id="' + esc(s.id) + '" data-supply-idx="' + idx + '">' +
               "<h4>" + esc(s.ozon_cluster_name || s.title) +
               " · Ozon поставка #" + esc(s.ozon_supply_id || "—") +
               (s.ozon_order_id ? " (заявка " + esc(s.ozon_order_id) + ")" : "") +

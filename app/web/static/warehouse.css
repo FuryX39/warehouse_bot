@@ -1656,6 +1656,31 @@ body.wh-body {
   padding: 0.4rem;
 }
 
+.wh-fbo-supply-section {
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border-bottom: none;
+  margin-bottom: 0.65rem;
+}
+
+.wh-fbo-supply-section--even {
+  background: #f0f2f5;
+}
+
+.wh-fbo-supply-section--odd {
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--wh-border);
+}
+
+.wh-fbo-supply-section--incomplete {
+  background: #fae8e8;
+  box-shadow: inset 0 0 0 1px #e8c8c8;
+}
+
+.wh-fbo-supply-section h4 {
+  margin-top: 0;
+}
+
 .wh-fbo-cargo-board {
   display: flex;
   flex-direction: column;
