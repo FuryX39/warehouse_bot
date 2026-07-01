@@ -365,6 +365,8 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if cargoes:
             updated = fbo_repo.save_cargoes(supply_id, cargoes)
+            if row.batch_id:
+                fbo_repo.refresh_batch_cargoes_count(int(row.batch_id), from_ozon=True)
             return {
                 "supply_id": supply_id,
                 "cargo_count": len(cargoes),
@@ -500,6 +502,8 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if row is None:
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
+        if row.batch_id:
+            fbo_repo.refresh_batch_cargoes_count(int(row.batch_id), from_ozon=False)
         return {"supply": supply_to_dict(row, include_details=True)}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/ozon/draft")
@@ -1135,6 +1139,7 @@ def register_warehouse_ozon_fbo_routes(
                     results.append({"supply_id": supply.id, "error": str(exc.detail)})
                 except Exception as exc:  # noqa: BLE001
                     results.append({"supply_id": supply.id, "error": str(exc)})
+            fbo_repo.refresh_batch_cargoes_count(batch_id, from_ozon=True)
             return {"ok": True, "batch_id": batch_id, "results": results}
 
         job_id = start_job("batch_sync_cargoes", worker)

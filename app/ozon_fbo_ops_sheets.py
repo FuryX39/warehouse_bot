@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -78,10 +79,65 @@ def batch_ship_date(batch: FboBatchRow) -> str:  # noqa: F821
     return _date_part(batch.timeslot_from)
 
 
+def parse_cargoes_count(raw: Any) -> int:
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        val = 0
+    return val if val > 0 else 0
+
+
+def parse_cargoes_desc_count(desc: str) -> int:
+    m = re.match(r"^\s*(\d+)", str(desc or "").strip())
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return 0
+
+
+def cargo_suffix_from_supplies(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
+    from app.ozon_fbo_supply_repository import SUPPLY_KIND_BOX
+
+    if not supplies:
+        return "П"
+    kinds = {str(s.supply_kind or "").strip().lower() for s in supplies}
+    kinds.discard("")
+    if kinds == {SUPPLY_KIND_BOX}:
+        return "К"
+    return "П"
+
+
+def format_cargoes_desc(count: int, suffix: str) -> str:
+    qty = max(int(count or 0), 0)
+    if qty <= 0:
+        return ""
+    raw = str(suffix or "П").strip().upper()
+    suf = "К" if raw in {"K", "К"} else "П"
+    return f"{qty} {suf}"
+
+
+def count_cargoes_in_supplies(supplies: list[FboSupplyRow]) -> int:  # noqa: F821
+    return sum(len(s.cargoes or []) for s in supplies)
+
+
+def batch_cargoes_desc(
+    batch: FboBatchRow,  # noqa: F821
+    supplies: list[FboSupplyRow],  # noqa: F821
+) -> str:
+    suffix = cargo_suffix_from_supplies(supplies)
+    count = int(getattr(batch, "ops_cargoes_count", 0) or 0)
+    if count <= 0:
+        count = parse_cargoes_desc_count(str(getattr(batch, "ops_cargoes_desc", "") or ""))
+    if count <= 0:
+        count = count_cargoes_in_supplies(supplies)
+    return format_cargoes_desc(count, suffix)
+
+
 def batch_ops_editable_field_names() -> tuple[str, ...]:
     return (
         "ops_assembly_date",
-        "ops_cargoes_desc",
         "ops_packing_status_id",
         "ops_supply_type_id",
         "ops_barcode_link_2",
@@ -101,8 +157,20 @@ def ops_editable_from_batch(
     batch: FboBatchRow,  # noqa: F821
     *,
     default_counterparty_id: int | None = None,
+    supplies: list[FboSupplyRow] | None = None,  # noqa: F821
 ) -> dict[str, str]:
-    out: dict[str, str] = {}
+    supply_rows = supplies if supplies is not None else list(getattr(batch, "supplies", None) or [])
+    suffix = cargo_suffix_from_supplies(supply_rows)
+    count = int(getattr(batch, "ops_cargoes_count", 0) or 0)
+    if count <= 0:
+        count = parse_cargoes_desc_count(str(getattr(batch, "ops_cargoes_desc", "") or ""))
+    if count <= 0:
+        count = count_cargoes_in_supplies(supply_rows)
+    out: dict[str, str] = {
+        "ops_cargoes_count": str(count) if count > 0 else "",
+        "ops_cargoes_suffix": suffix,
+        "ops_cargoes_count_manual": "1" if bool(getattr(batch, "ops_cargoes_count_manual", False)) else "",
+    }
     for name in batch_ops_editable_field_names():
         val = getattr(batch, name, "")
         if name == "ops_counterparty_id":
@@ -146,11 +214,11 @@ def resolved_batch_summary_values(
     packer_display: str = "",
     cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    editable = ops_editable_from_batch(batch)
+    editable = ops_editable_from_batch(batch, supplies=supplies)
     ship_date = batch_ship_date(batch)
     ship_time = editable["ops_ship_time"]
     units_total = sum(total_units(s) for s in supplies)
-    cargoes_desc = editable["ops_cargoes_desc"]
+    cargoes_desc = batch_cargoes_desc(batch, supplies)
     if not unload_address:
         unload_address = _str(batch.dropoff_warehouse_name, 256)
     labels_url = batch.labels_url or ""
@@ -215,7 +283,7 @@ LOGISTICS_COLUMNS: tuple[tuple[str, str], ...] = (
 
 BATCH_PACKING_EDITABLE: tuple[tuple[str, str, str, str], ...] = (
     ("ops_assembly_date", "assembly_date", "дата сборки", "date"),
-    ("ops_cargoes_desc", "cargoes_desc", "количество грузомест", "text"),
+    ("ops_cargoes_count", "cargoes_desc", "количество грузомест", "cargoes_count"),
     ("ops_packing_status_id", "packing_status", "статус", "packing_status"),
     ("ops_supply_type_id", "supply_type", "Тип поставки", "supply_type"),
     ("ops_barcode_link_2", "barcode_link_2", "ссылка на ШК 2", "text"),
@@ -261,6 +329,7 @@ def _summary_row_dict(
     values: dict[str, str],
     ops_editable: dict[str, str] | None = None,
     packer_user_ids: list[int] | None = None,
+    cargoes_count_manual: bool = False,
 ) -> dict[str, Any]:
     row_dict: dict[str, Any] = {
         "batch_id": batch_id,
@@ -268,6 +337,7 @@ def _summary_row_dict(
         "title": batch_title,
         "values": values,
         "ops_editable": ops_editable or {},
+        "ops_cargoes_count_manual": bool(cargoes_count_manual),
         "packing_row": packing_row_ordered(values),
         "logistics_row": logistics_row_ordered(values),
         "packing_export": packing_row(values),
@@ -292,6 +362,7 @@ def ops_sheet_for_batch(
     editable = ops_editable_from_batch(
         batch,
         default_counterparty_id=default_counterparty_id,
+        supplies=supplies,
     )
     supply_details = [
         {
@@ -320,12 +391,13 @@ def ops_sheet_for_batch(
         values=summary_values,
         ops_editable=editable,
         packer_user_ids=list(batch.ops_packer_user_ids or []),
+        cargoes_count_manual=bool(getattr(batch, "ops_cargoes_count_manual", False)),
     )
     return {
         "batch_id": batch.id,
         "batch_title": batch.title,
         "ship_date": batch_ship_date(batch),
-        "cargoes_desc": editable["ops_cargoes_desc"],
+        "cargoes_desc": summary_values.get("cargoes_desc", ""),
         "editable": editable,
         "counterparty_name": counterparty_name,
         "unload_address": unload_address,

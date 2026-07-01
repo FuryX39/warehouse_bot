@@ -1958,6 +1958,44 @@ body.wh-body {
   flex-wrap: wrap;
 }
 
+.wh-fbo-ops-summary-readonly.wh-fbo-ops-manual,
+.wh-fbo-ops-summary-table td.wh-fbo-ops-manual {
+  background: #fff8e1;
+  box-shadow: inset 0 0 0 1px #ffcc80;
+}
+
+.wh-fbo-cargoes-count-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+.wh-fbo-cargoes-count-cell input[type="number"] {
+  width: 3.2rem;
+  min-width: 0;
+  text-align: center;
+}
+
+.wh-fbo-cargoes-suffix {
+  font-weight: 600;
+  color: #5d4037;
+  white-space: nowrap;
+}
+
+.wh-fbo-ops-manual-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #e65100;
+  margin-left: 0.25rem;
+}
+
+.wh-fbo-ops-field--cargoes-count.wh-fbo-ops-manual .wh-fbo-cargoes-count-cell {
+  background: #fff8e1;
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+}
+
 .wh-fbo-ops-summary-hint {
   margin: 0 0 1rem;
   font-size: 0.85rem;
