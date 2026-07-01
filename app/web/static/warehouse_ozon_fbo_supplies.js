@@ -21,6 +21,17 @@
   var opsPackingColumns = [];
   var opsLogisticsColumns = [];
   var CONFIGURE_VALUE = "__configure__";
+  var OPS_SUMMARY_READONLY = {
+    cluster: true,
+    warehouse: true,
+    ship_date: true,
+    supply_id: true,
+    movement_number: true,
+    packer: true,
+    units_count: true,
+    barcode_link: true,
+    logistics_cluster: true,
+  };
 
   function textOnBg(hex) {
     var h = String(hex || "").replace("#", "").trim();
@@ -676,6 +687,73 @@
     });
   }
 
+  function opsFieldMapByValueKey() {
+    var map = {};
+    opsPackingFields.concat(opsLogisticsFields).forEach(function (f) {
+      map[f.value_key] = f;
+    });
+    return map;
+  }
+
+  function renderOpsSummaryReadonlyCell(cell) {
+    var val = cell.value || "";
+    if (cell.key === "barcode_link" && val) {
+      return '<td class="wh-fbo-ops-summary-readonly"><a href="' + esc(val) + '" target="_blank" rel="noopener">ссылка</a></td>';
+    }
+    return '<td class="wh-fbo-ops-summary-readonly">' + esc(val || "—") + "</td>";
+  }
+
+  function renderOpsSummaryEditableCell(row, cell, field) {
+    var bid = row.batch_id;
+    var ops = row.ops_editable || {};
+    var fieldName = field.name;
+    var val = ops[fieldName] != null && ops[fieldName] !== "" ? String(ops[fieldName]) : "";
+    var attrs =
+      ' class="wh-fbo-input wh-fbo-ops-summary-cell" data-batch-id="' +
+      esc(bid) +
+      '" data-ops-field="' +
+      esc(fieldName) +
+      '"';
+    if (field.type === "packing_status") {
+      return "<td><select" + attrs + ">" + buildPackingStatusOptions(val) + "</select></td>";
+    }
+    if (field.type === "counterparty") {
+      return "<td><select" + attrs + ">" + buildCounterpartyOptions(val) + "</select></td>";
+    }
+    if (field.type === "unload_address") {
+      return "<td><select" + attrs + ">" + buildUnloadAddressOptions(val) + "</select></td>";
+    }
+    if (field.type === "date") {
+      return "<td><input type=\"date\"" + attrs + ' value="' + esc(val) + '" /></td>';
+    }
+    return "<td><input type=\"text\"" + attrs + ' value="' + esc(val) + '" /></td>';
+  }
+
+  function renderOpsSummaryTableBody(rowList, rowKey, fieldMap) {
+    return rowList
+      .map(function (r) {
+        var cells = (r[rowKey] || [])
+          .map(function (cell) {
+            var field = fieldMap[cell.key];
+            if (!OPS_SUMMARY_READONLY[cell.key] && field) {
+              return renderOpsSummaryEditableCell(r, cell, field);
+            }
+            return renderOpsSummaryReadonlyCell(cell);
+          })
+          .join("");
+        return (
+          '<tr data-batch-id="' +
+          esc(r.batch_id) +
+          '"><td class="wh-fbo-ops-summary-readonly">' +
+          esc(r.batch_title || r.title || ("Пакет #" + (r.batch_id || "—"))) +
+          "</td>" +
+          cells +
+          "</tr>"
+        );
+      })
+      .join("");
+  }
+
   function renderOpsSummaryTables(summary) {
     summary = summary || {};
     var rows = summary.rows || [];
@@ -684,36 +762,106 @@
     }
     var packingRows = summary.packing_summary_rows || sortOpsSummaryRows(rows, "assembly_date");
     var logisticsRows = summary.logistics_summary_rows || sortOpsSummaryRows(rows, "ship_date");
+    var fieldMap = opsFieldMapByValueKey();
     function table(title, columns, rowList, rowKey) {
       var head = columns
         .map(function (c) {
           return "<th>" + esc(c.label) + "</th>";
         })
         .join("");
-      var body = rowList
-        .map(function (r) {
-          var cells = (r[rowKey] || [])
-            .map(function (cell) {
-              var val = cell.value || "";
-              if ((cell.key === "barcode_link" || cell.key === "barcode_link_2") && val) {
-                return '<td><a href="' + esc(val) + '" target="_blank" rel="noopener">ссылка</a></td>';
-              }
-              return "<td>" + esc(val || "—") + "</td>";
-            })
-            .join("");
-          return "<tr><td>" + esc(r.batch_title || r.title || ("Пакет #" + (r.batch_id || "—"))) + "</td>" + cells + "</tr>";
-        })
-        .join("");
+      var body = renderOpsSummaryTableBody(rowList, rowKey, fieldMap);
       return (
-        '<div class="wh-fbo-ops-summary-block"><h5 class="wh-fbo-ops-col-title">' + esc(title) + "</h5>" +
-        '<div class="wh-fbo-ops-table-wrap"><table class="wh-employees-table wh-crm-table wh-fbo-ops-summary-table">' +
-        "<thead><tr><th>Пакет</th>" + head + "</tr></thead><tbody>" + body + "</tbody></table></div></div>"
+        '<div class="wh-fbo-ops-summary-block"><h5 class="wh-fbo-ops-col-title">' +
+        esc(title) +
+        "</h5>" +
+        '<div class="wh-fbo-ops-table-wrap"><table class="wh-employees-table wh-crm-table wh-fbo-ops-summary-table wh-fbo-ops-summary-table--editable">' +
+        "<thead><tr><th>Пакет</th>" +
+        head +
+        "</tr></thead><tbody>" +
+        body +
+        "</tbody></table></div></div>"
       );
     }
     return (
+      '<div class="wh-fbo-ops-summary-toolbar">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whFboOpsSummarySave">Сохранить изменения</button>' +
+      '<span class="wh-muted" id="whFboOpsSummarySaveMsg"></span></div>' +
+      '<p class="wh-muted wh-fbo-ops-summary-hint">Редактируйте ячейки прямо в таблице — одна строка на пакет. Серые поля заполняются автоматически.</p>' +
       table("ПОСТАВКИ (упаковщики)", summary.packing_columns || opsPackingColumns, packingRows, "packing_row") +
       table("ОТГРУЗКА (логисты)", summary.logistics_columns || opsLogisticsColumns, logisticsRows, "logistics_row")
     );
+  }
+
+  function collectBatchOpsFromSummary(container, batchId) {
+    var ops = {};
+    container.querySelectorAll('[data-batch-id="' + batchId + '"][data-ops-field]').forEach(function (inp) {
+      var key = inp.getAttribute("data-ops-field");
+      if (!key) return;
+      var val = inp.value.trim();
+      if (key.endsWith("_id")) ops[key] = val ? parseInt(val, 10) : null;
+      else ops[key] = val;
+    });
+    return ops;
+  }
+
+  function saveOpsSummaryEdits(container, opts) {
+    opts = opts || {};
+    var msgEl = container.querySelector("#whFboOpsSummarySaveMsg");
+    var batchIds = {};
+    container.querySelectorAll("[data-batch-id][data-ops-field]").forEach(function (el) {
+      batchIds[el.getAttribute("data-batch-id")] = true;
+    });
+    var ids = Object.keys(batchIds).filter(Boolean);
+    if (!ids.length) return Promise.resolve();
+    setMsg(msgEl, "Сохранение…", false);
+    return Promise.all(
+      ids.map(function (bid) {
+        return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + bid + "/ops", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ops: collectBatchOpsFromSummary(container, bid) }),
+        });
+      })
+    )
+      .then(function () {
+        setMsg(msgEl, "Сохранено: " + ids.length + " пакет(ов).", false);
+        if (opts.onSaved) return opts.onSaved();
+      })
+      .catch(function (err) {
+        setMsg(msgEl, err.message, true);
+        throw err;
+      });
+  }
+
+  function bindOpsSummaryEditor(container, tab, item, opts) {
+    if (!container) return;
+    opts = opts || {};
+    var saveBtn = container.querySelector("#whFboOpsSummarySave");
+    if (saveBtn && !saveBtn.getAttribute("data-bound")) {
+      saveBtn.setAttribute("data-bound", "1");
+      saveBtn.addEventListener("click", function () {
+        saveOpsSummaryEdits(container, opts);
+      });
+    }
+    var reloadSummary = function () {
+      if (opts.reload) return opts.reload();
+      return Promise.resolve();
+    };
+    container.querySelectorAll('[data-ops-field="ops_unload_address_id"]').forEach(function (sel) {
+      bindConfigureSelect(sel, function () {
+        modalUnloadAddressEditor(function () {
+          reloadSummary();
+        });
+      });
+    });
+    container.querySelectorAll('[data-ops-field="ops_packing_status_id"]').forEach(function (sel) {
+      sel.setAttribute("data-prev", sel.value || "");
+      initPackingStatusSelect(sel, function () {
+        modalPackingStatusesEditor(function () {
+          reloadSummary();
+        });
+      });
+    });
   }
 
   function opsSummaryFromBatch(batch) {
@@ -740,12 +888,57 @@
       })
         .then(function (data) {
           var box = root.querySelector("#whFboOpsSummaryTables");
-          if (box) box.innerHTML = renderOpsSummaryTables(data);
+          if (box) {
+            box.innerHTML = renderOpsSummaryTables(data);
+            refreshBatchOpsSummaryBox(box, tab, item, batchId, root);
+          }
           setMsg(msg, data.message || "Данные подготовлены.", false);
         })
         .catch(function (err) {
           setMsg(msg, err.message, true);
         });
+    });
+  }
+
+  function refreshGlobalOpsSummaryBox(box, tab, item) {
+    if (!box) return;
+    bindOpsSummaryEditor(box, tab, item, {
+      onSaved: function () {
+        return fetchJson("/api/warehouse/marketplaces/ozon-fbo/ops-summary").then(function (data) {
+          box.innerHTML = renderOpsSummaryTables(data);
+          refreshGlobalOpsSummaryBox(box, tab, item);
+        });
+      },
+      reload: function () {
+        return fetchJson("/api/warehouse/marketplaces/ozon-fbo/ops-summary").then(function (data) {
+          box.innerHTML = renderOpsSummaryTables(data);
+          refreshGlobalOpsSummaryBox(box, tab, item);
+        });
+      },
+    });
+  }
+
+  function refreshBatchOpsSummaryBox(box, tab, item, batchId, root) {
+    if (!box) return;
+    bindOpsSummaryEditor(box, tab, item, {
+      onSaved: function () {
+        return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId).then(function (fresh) {
+          if (fresh.batch) {
+            root._batchData = fresh.batch;
+            box.innerHTML = renderOpsSummaryTables(opsSummaryFromBatch(fresh.batch));
+            refreshBatchOpsSummaryBox(box, tab, item, batchId, root);
+          }
+        });
+      },
+      reload: function () {
+        return fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches/" + batchId).then(function (fresh) {
+          if (fresh.batch) {
+            root._batchData = fresh.batch;
+            box.innerHTML = renderOpsSummaryTables(opsSummaryFromBatch(fresh.batch));
+            refreshBatchOpsSummaryBox(box, tab, item, batchId, root);
+          }
+        });
+      },
     });
   }
 
@@ -758,7 +951,10 @@
       if (box) box.innerHTML = '<p class="wh-msg">Загрузка…</p>';
       fetchJson("/api/warehouse/marketplaces/ozon-fbo/ops-summary")
         .then(function (data) {
-          if (box) box.innerHTML = renderOpsSummaryTables(data);
+          if (box) {
+            box.innerHTML = renderOpsSummaryTables(data);
+            refreshGlobalOpsSummaryBox(box, tab, item);
+          }
           setMsg(
             msg,
             "Сводка обновлена (" + (data.batch_count || 0) + " пакетов, " + (data.supply_count || 0) + " заявок).",
@@ -812,7 +1008,7 @@
             : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
           "</section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
-          '<p class="wh-muted">Все значения для таблиц «ПОСТАВКИ» и «ОТГРУЗКА» по заявкам в системе.</p>' +
+          '<p class="wh-muted">Все пакеты в одной таблице — редактируйте ячейки и сохраните без входа в каждый пакет.</p>' +
           '<button type="button" class="wh-btn" id="whFboLoadOpsSummary">Показать сводку</button>' +
           '<div id="whFboGlobalOpsSummary" class="wh-fbo-ops-summary-root"></div></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Заявки в Ozon <span class="wh-muted" id="whFboOzonCount">(' +
@@ -1694,7 +1890,7 @@
           renderBatchOpsForm(batch) +
           "</section>" +
           '<section class="wh-crm-section wh-fbo-ops-summary-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
-          '<p class="wh-muted">Итоговые строки для «ПОСТАВКИ» и «ОТГРУЗКА» по этому пакету.</p>' +
+          '<p class="wh-muted">Редактируйте ячейки в таблице ниже или в форме выше — одна строка на пакет.</p>' +
           '<div id="whFboOpsSummaryTables">' + renderOpsSummaryTables(opsSummaryFromBatch(batch)) + "</div></section>" +
           supplySections +
           "</div>";
@@ -1817,6 +2013,7 @@
         bindCargoBoard(root, batch, tab, item, batchId);
         bindOpsSummaryExport(tab, item, root, batchId);
         bindBatchOpsForm(tab, item, root, batchId);
+        refreshBatchOpsSummaryBox(root.querySelector("#whFboOpsSummaryTables"), tab, item, batchId, root);
   }
 
   function getSupplyDraft(root, supplyId) {
@@ -2078,6 +2275,7 @@
             var summaryBox = root.querySelector("#whFboOpsSummaryTables");
             if (summaryBox) {
               summaryBox.innerHTML = renderOpsSummaryTables(opsSummaryFromBatch(batch));
+              refreshBatchOpsSummaryBox(summaryBox, tab, item, batchId, root);
             }
             var opsBox = root.querySelector(".wh-fbo-batch-ops");
             if (opsBox) {

@@ -243,12 +243,14 @@ def _summary_row_dict(
     batch_id: int,
     batch_title: str,
     values: dict[str, str],
+    ops_editable: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "batch_id": batch_id,
         "batch_title": batch_title,
         "title": batch_title,
         "values": values,
+        "ops_editable": ops_editable or {},
         "packing_row": packing_row_ordered(values),
         "logistics_row": logistics_row_ordered(values),
         "packing_export": packing_row(values),
@@ -289,6 +291,7 @@ def ops_sheet_for_batch(
         batch_id=int(batch.id),
         batch_title=str(batch.title or ""),
         values=summary_values,
+        ops_editable=editable,
     )
     return {
         "batch_id": batch.id,
