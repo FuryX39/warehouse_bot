@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from app.ozon_fbo_supply_repository import FboBatchRow, FboSupplyRow
 
-SUPPLY_KIND_PALLET = "pallet"
-SUPPLY_KIND_BOX = "box"
-
 
 def _str(raw: Any, limit: int = 512) -> str:
     return str(raw or "").strip()[:limit]
@@ -20,13 +17,6 @@ def _date_part(ts: str) -> str:
     if len(val) >= 10:
         return val[:10]
     return val
-
-
-def default_cargoes_desc(supply_kind: str, cargo_count: int) -> str:
-    if cargo_count <= 0:
-        return ""
-    suffix = "П" if supply_kind == SUPPLY_KIND_PALLET else "К"
-    return f"{cargo_count} {suffix}"
 
 
 def total_units(supply: FboSupplyRow) -> int:  # noqa: F821
@@ -42,12 +32,6 @@ def _unique_join(parts: list[str], sep: str = ", ") -> str:
     return sep.join(seen)
 
 
-def aggregate_cargoes_desc(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
-    parts = [default_cargoes_desc(s.supply_kind, len(s.cargoes)) for s in supplies]
-    parts = [p for p in parts if p]
-    return " + ".join(parts)
-
-
 def batch_ship_date(batch: FboBatchRow) -> str:  # noqa: F821
     return _date_part(batch.timeslot_from)
 
@@ -55,6 +39,7 @@ def batch_ship_date(batch: FboBatchRow) -> str:  # noqa: F821
 def batch_ops_editable_field_names() -> tuple[str, ...]:
     return (
         "ops_assembly_date",
+        "ops_cargoes_desc",
         "ops_packing_status_id",
         "ops_barcode_link_2",
         "ops_packing_comment",
@@ -83,11 +68,8 @@ def ops_editable_from_batch(batch: FboBatchRow) -> dict[str, str]:  # noqa: F821
 def resolved_supply_detail_values(
     supply: FboSupplyRow,  # noqa: F821
     batch: FboBatchRow,  # noqa: F821
-    *,
-    packing_status_name: str = "",
 ) -> dict[str, str]:
     """Автоматические поля по одной заявке (для подсказки в форме пакета)."""
-    cargo_count = len(supply.cargoes)
     units = total_units(supply)
     return {
         "cluster": _str(supply.ozon_cluster_name, 256),
@@ -95,8 +77,6 @@ def resolved_supply_detail_values(
         "supply_id": _str(supply.ozon_supply_id, 64),
         "packer": _str(supply.assigned_user_name, 128),
         "units_count": str(units) if units > 0 else "",
-        "cargoes_desc": default_cargoes_desc(supply.supply_kind, cargo_count),
-        "packing_status": packing_status_name,
         "ship_date": batch_ship_date(batch),
     }
 
@@ -113,7 +93,7 @@ def resolved_batch_summary_values(
     ship_date = batch_ship_date(batch)
     ship_time = editable["ops_ship_time"]
     units_total = sum(total_units(s) for s in supplies)
-    cargoes_desc = aggregate_cargoes_desc(supplies)
+    cargoes_desc = editable["ops_cargoes_desc"]
     if not unload_address:
         unload_address = _str(batch.dropoff_warehouse_name, 256)
     labels_url = batch.labels_url or ""
@@ -176,6 +156,7 @@ LOGISTICS_COLUMNS: tuple[tuple[str, str], ...] = (
 
 BATCH_PACKING_EDITABLE: tuple[tuple[str, str, str, str], ...] = (
     ("ops_assembly_date", "assembly_date", "дата сборки", "date"),
+    ("ops_cargoes_desc", "cargoes_desc", "количество грузомест", "text"),
     ("ops_packing_status_id", "packing_status", "статус", "packing_status"),
     ("ops_barcode_link_2", "barcode_link_2", "ссылка на ШК 2", "text"),
     ("ops_packing_comment", "packing_comment", "коментарий", "text"),
@@ -244,9 +225,7 @@ def ops_sheet_for_batch(
             "supply_id": s.id,
             "ozon_supply_id": s.ozon_supply_id,
             "title": s.title,
-            "values": resolved_supply_detail_values(
-                s, batch, packing_status_name=packing_status_name
-            ),
+            "values": resolved_supply_detail_values(s, batch),
         }
         for s in supplies
     ]
@@ -266,6 +245,7 @@ def ops_sheet_for_batch(
         "batch_id": batch.id,
         "batch_title": batch.title,
         "ship_date": batch_ship_date(batch),
+        "cargoes_desc": editable["ops_cargoes_desc"],
         "editable": editable,
         "counterparty_name": counterparty_name,
         "unload_address": unload_address,

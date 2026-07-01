@@ -622,7 +622,7 @@
         return (
           "<li><b>" + esc(v.cluster || "—") + "</b> · " + esc(v.warehouse || "—") +
           " · ID " + esc(v.supply_id || "—") + " · упаковщик " + esc(v.packer || "—") +
-          " · " + esc(v.cargoes_desc || "—") + " · " + esc(v.units_count || "—") + " ед.</li>"
+          " · " + esc(v.units_count || "—") + " ед.</li>"
         );
       })
       .join("");
@@ -630,7 +630,7 @@
       '<details class="wh-fbo-ops-sheet wh-fbo-batch-ops" open>' +
       "<summary>Данные для таблиц (на весь пакет)</summary>" +
       '<p class="wh-muted wh-fbo-ops-auto">Дата отгрузки из таймслота: <b>' + esc(shipDate) +
-      "</b>. Время отгрузки указывает логист. Общие поля — на весь пакет. По заявкам автоматически:</p>" +
+      "</b>. Время отгрузки указывает логист. Количество грузомест — одно на весь пакет. По заявкам автоматически:</p>" +
       (autoHtml ? '<ul class="wh-fbo-ops-auto-list">' + autoHtml + "</ul>" : "") +
       '<div class="wh-fbo-ops-grid">' +
       '<div class="wh-fbo-ops-col"><h5 class="wh-fbo-ops-col-title">Поставки (упаковщики)</h5>' + packingHtml + "</div>" +

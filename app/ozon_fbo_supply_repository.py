@@ -70,6 +70,7 @@ class OzonFboBatch(_Base):
     manager_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     ops_assembly_date: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    ops_cargoes_desc: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     ops_packing_status_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ops_barcode_link_2: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     ops_packing_comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
@@ -242,6 +243,7 @@ class FboBatchRow:
     manager_user_name: str
     comment: str
     ops_assembly_date: str
+    ops_cargoes_desc: str
     ops_packing_status_id: int | None
     ops_barcode_link_2: str
     ops_packing_comment: str
@@ -446,6 +448,7 @@ class OzonFboSupplyRepository:
             }
             batch_ops_cols = {
                 "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
+                "ops_cargoes_desc": "VARCHAR(64) NOT NULL DEFAULT ''",
                 "ops_packing_status_id": "INTEGER",
                 "ops_barcode_link_2": "VARCHAR(512) NOT NULL DEFAULT ''",
                 "ops_packing_comment": "VARCHAR(1024) NOT NULL DEFAULT ''",
@@ -1139,6 +1142,7 @@ class OzonFboSupplyRepository:
             manager_user_name=manager_name,
             comment=str(row.comment or ""),
             ops_assembly_date=str(row.ops_assembly_date or ""),
+            ops_cargoes_desc=str(row.ops_cargoes_desc or ""),
             ops_packing_status_id=int(row.ops_packing_status_id) if row.ops_packing_status_id else None,
             ops_barcode_link_2=str(row.ops_barcode_link_2 or ""),
             ops_packing_comment=str(row.ops_packing_comment or ""),
@@ -1282,6 +1286,7 @@ def batch_to_dict(
         "manager_user_name": row.manager_user_name,
         "comment": row.comment,
         "ops_assembly_date": row.ops_assembly_date,
+        "ops_cargoes_desc": row.ops_cargoes_desc,
         "ops_packing_status_id": row.ops_packing_status_id,
         "ops_packing_status_name": packing_status_name,
         "ops_barcode_link_2": row.ops_barcode_link_2,
