@@ -315,10 +315,10 @@ class FboBatchRow:
     ops_pallets_ready_time: str
     ops_logistics_comment: str
     ops_car_driver: str
-    ops_packer_user_ids: list[int] = field(default_factory=list)
-    ops_packer_display: str = ""
     created_at_ts: int
     updated_at_ts: int
+    ops_packer_user_ids: list[int] = field(default_factory=list)
+    ops_packer_display: str = ""
     supply_count: int = 0
     labels_url: str = ""
     supplies: list["FboSupplyRow"] = field(default_factory=list)
