@@ -850,6 +850,30 @@ def cargo_api_key(cargo: dict[str, Any], idx: int, *, supply_id: int = 0) -> str
     return f"gm-{supply_id}-{idx + 1}"
 
 
+def expiration_date_from_ozon(raw: Any) -> str:
+    """YYYY-MM-DD для локального хранения из expires_at Ozon."""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if "T" in s:
+        return s.split("T", 1)[0][:10]
+    return s[:10]
+
+
+def cargo_expires_at_for_ozon(item: dict[str, Any]) -> str:
+    """ISO datetime для поля expires_at в /v1/cargoes/create."""
+    exp = str(item.get("expiration_date") or item.get("expires_at") or "").strip()
+    if not exp:
+        return ""
+    if "T" in exp:
+        if exp.endswith("Z") or "+" in exp[10:]:
+            return exp
+        return f"{exp}Z"
+    if len(exp) == 10 and exp[4] == "-" and exp[7] == "-":
+        return f"{exp}T00:00:00.000Z"
+    return exp
+
+
 def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int) -> dict[str, Any]:
     default_kind = cargo_type_for_supply_kind(str(supply.get("supply_kind") or "box"))
     local_id = int(supply.get("id") or 0)
@@ -862,9 +886,9 @@ def build_cargoes_create_payload(supply: dict[str, Any], *, inner_supply_id: int
             if not offer_id or qty <= 0:
                 continue
             row: dict[str, Any] = {"offer_id": offer_id, "quantity": qty}
-            exp = str(item.get("expiration_date") or "").strip()
-            if exp:
-                row["expiration_date"] = exp
+            exp_at = cargo_expires_at_for_ozon(item)
+            if exp_at:
+                row["expires_at"] = exp_at
             items.append(row)
         if not items:
             continue
@@ -944,11 +968,13 @@ def fetch_ozon_cargoes(
                     qty = int(bi.get("quantity") or 0)
                     if not offer or qty <= 0:
                         continue
+                    exp = expiration_date_from_ozon(bi.get("expires_at") or bi.get("expiration_date"))
                     items.append(
                         {
                             "sku": offer,
                             "name": str(bi.get("name") or ""),
                             "quantity": qty,
+                            "expiration_date": exp,
                         }
                     )
             if not cargo_id and not items:

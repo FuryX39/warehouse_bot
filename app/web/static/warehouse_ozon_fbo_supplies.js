@@ -27,7 +27,6 @@
     ship_date: true,
     supply_id: true,
     movement_number: true,
-    packer: true,
     units_count: true,
     barcode_link: true,
     logistics_cluster: true,
@@ -756,9 +755,118 @@
     });
   }
 
-  function renderOpsField(f, editable, values) {
+  function packerUserIdsFromRow(row) {
+    var ids = row && row.packer_user_ids;
+    if (!ids || !ids.length) return [];
+    return ids
+      .map(function (x) {
+        return parseInt(x, 10);
+      })
+      .filter(Boolean);
+  }
+
+  function packerNamesLabel(ids) {
+    ids = ids || [];
+    if (!ids.length) return "Выбрать…";
+    var names = [];
+    (meta.assignees || []).forEach(function (a) {
+      if (ids.indexOf(a.id) >= 0 || ids.indexOf(parseInt(a.id, 10)) >= 0) {
+        names.push(a.display_name);
+      }
+    });
+    return names.length ? names.join(", ") : "Выбрать…";
+  }
+
+  function renderPackerPicker(selectedIds, extraAttrs) {
+    selectedIds = (selectedIds || [])
+      .map(function (x) {
+        return parseInt(x, 10);
+      })
+      .filter(Boolean);
+    if (!(meta.assignees || []).length) {
+      return '<span class="wh-muted">Нет сотрудников</span>';
+    }
+    var checks = (meta.assignees || [])
+      .map(function (a) {
+        var checked = selectedIds.indexOf(a.id) >= 0 ? " checked" : "";
+        return (
+          '<label class="wh-fbo-packer-option">' +
+          '<input type="checkbox" class="wh-fbo-packer-cb" value="' +
+          esc(a.id) +
+          '"' +
+          checked +
+          " /> " +
+          esc(a.display_name) +
+          "</label>"
+        );
+      })
+      .join("");
+    return (
+      '<details class="wh-fbo-packer-picker"' +
+      (extraAttrs || "") +
+      ">" +
+      '<summary class="wh-fbo-packer-picker__summary">' +
+      esc(packerNamesLabel(selectedIds)) +
+      "</summary>" +
+      '<div class="wh-fbo-packer-picker__panel">' +
+      checks +
+      "</div></details>"
+    );
+  }
+
+  function syncPackerPickerSummary(picker) {
+    if (!picker) return;
+    var ids = [];
+    picker.querySelectorAll(".wh-fbo-packer-cb:checked").forEach(function (cb) {
+      var id = parseInt(cb.value, 10);
+      if (id) ids.push(id);
+    });
+    var summary = picker.querySelector(".wh-fbo-packer-picker__summary");
+    if (summary) summary.textContent = packerNamesLabel(ids);
+  }
+
+  function collectPackerIdsFromPicker(picker) {
+    var ids = [];
+    if (!picker) return ids;
+    picker.querySelectorAll(".wh-fbo-packer-cb:checked").forEach(function (cb) {
+      var id = parseInt(cb.value, 10);
+      if (id) ids.push(id);
+    });
+    return ids;
+  }
+
+  function bindPackerPickers(container) {
+    if (!container) return;
+    container.querySelectorAll(".wh-fbo-packer-picker").forEach(function (picker) {
+      if (picker.getAttribute("data-bound")) return;
+      picker.setAttribute("data-bound", "1");
+      picker.querySelectorAll(".wh-fbo-packer-cb").forEach(function (cb) {
+        cb.addEventListener("change", function () {
+          syncPackerPickerSummary(picker);
+        });
+      });
+      var panel = picker.querySelector(".wh-fbo-packer-picker__panel");
+      if (panel) {
+        panel.addEventListener("click", function (e) {
+          e.stopPropagation();
+        });
+      }
+    });
+  }
+
+  function renderOpsField(f, editable, values, ctx) {
+    ctx = ctx || {};
     var ph = values[f.value_key] || "";
     var val = editable[f.name];
+    if (f.type === "packers") {
+      return (
+        '<label class="wh-fbo-ops-field wh-fbo-ops-field--packers"><span class="wh-fbo-ops-label">' +
+        esc(f.label) +
+        "</span>" +
+        renderPackerPicker(ctx.packerIds || [], "") +
+        "</label>"
+      );
+    }
     if (f.type === "counterparty") {
       return opsSelect(f.name, f.label, buildCounterpartyOptions(val));
     }
@@ -794,8 +902,10 @@
     var editable = ops.editable || {};
     var summaryValues = (ops.summary_row && ops.summary_row.values) || {};
     var supplyDetails = ops.supply_details || [];
+    var packerIds = batch.ops_packer_user_ids || packerUserIdsFromRow(ops.summary_row || {});
+    var fieldCtx = { packerIds: packerIds };
     var packingHtml = opsPackingFields.map(function (f) {
-      return renderOpsField(f, editable, summaryValues);
+      return renderOpsField(f, editable, summaryValues, fieldCtx);
     }).join("");
     var packingNames = {};
     opsPackingFields.forEach(function (f) {
@@ -806,7 +916,7 @@
         return !packingNames[f.name];
       })
       .map(function (f) {
-        return renderOpsField(f, editable, summaryValues);
+        return renderOpsField(f, editable, summaryValues, fieldCtx);
       })
       .join("");
     var shipDate = ops.ship_date || batch.ops_ship_date || summaryValues.ship_date || "—";
@@ -846,6 +956,8 @@
         ops[key] = val;
       }
     });
+    var picker = section.querySelector(".wh-fbo-packer-picker");
+    if (picker) ops.ops_packer_user_ids = collectPackerIdsFromPicker(picker);
     return ops;
   }
 
@@ -942,6 +1054,15 @@
         "</select>" +
         renderSupplyTypeHelpMarkup(val) +
         "</div></td>"
+      );
+    }
+    if (field.type === "packers") {
+      return (
+        "<td" +
+        colAttrs +
+        ">" +
+        renderPackerPicker(packerUserIdsFromRow(row), ' data-batch-id="' + esc(bid) + '"') +
+        "</td>"
       );
     }
     if (field.type === "counterparty") {
@@ -1050,6 +1171,8 @@
       if (key.endsWith("_id")) ops[key] = val ? parseInt(val, 10) : null;
       else ops[key] = val;
     });
+    var picker = container.querySelector('.wh-fbo-packer-picker[data-batch-id="' + batchId + '"]');
+    if (picker) ops.ops_packer_user_ids = collectPackerIdsFromPicker(picker);
     return ops;
   }
 
@@ -1058,6 +1181,9 @@
     var msgEl = container.querySelector("#whFboOpsSummarySaveMsg");
     var batchIds = {};
     container.querySelectorAll("[data-batch-id][data-ops-field]").forEach(function (el) {
+      batchIds[el.getAttribute("data-batch-id")] = true;
+    });
+    container.querySelectorAll(".wh-fbo-packer-picker[data-batch-id]").forEach(function (el) {
       batchIds[el.getAttribute("data-batch-id")] = true;
     });
     var ids = Object.keys(batchIds).filter(Boolean);
@@ -1116,6 +1242,7 @@
         reloadSummary();
       });
     });
+    bindPackerPickers(container);
   }
 
   function opsSummaryFromBatch(batch) {
@@ -2000,6 +2127,30 @@
     });
   }
 
+  function syncCargoDraftFromDom(root) {
+    root.querySelectorAll(".wh-fbo-supply-section").forEach(function (section) {
+      var supplyId = section.getAttribute("data-supply-id");
+      var supply = getSupplyDraft(root, supplyId);
+      if (!supply || !supply._cargoesDraft) return;
+      section.querySelectorAll(".wh-fbo-cargo-line").forEach(function (line) {
+        var cIdx = parseInt(line.getAttribute("data-cargo"), 10);
+        var iIdx = parseInt(line.getAttribute("data-item"), 10);
+        var cargo = supply._cargoesDraft[cIdx];
+        if (!cargo || !cargo.items || !cargo.items[iIdx]) return;
+        var qtyInp = line.querySelector(".wh-fbo-line-qty");
+        var expInp = line.querySelector(".wh-fbo-line-exp");
+        if (qtyInp) {
+          var maxQ = maxAllocatable(supply, cargo.items[iIdx].sku, cIdx, iIdx) + Number(cargo.items[iIdx].quantity || 0);
+          var newQty = Math.max(1, parseInt(qtyInp.value || "1", 10) || 1);
+          cargo.items[iIdx].quantity = Math.min(newQty, maxQ);
+        }
+        if (expInp) {
+          cargo.items[iIdx].expiration_date = expInp.value || "";
+        }
+      });
+    });
+  }
+
   function cargoStateFromSupply(supply) {
     var cargoes = (supply.cargoes || []).map(function (c) {
       return {
@@ -2234,6 +2385,7 @@
             .catch(function (err) { setMsg(msg, err.message, true); });
         });
         root.querySelector("#whFboSendAllCargoes").addEventListener("click", function () {
+          syncCargoDraftFromDom(root);
           var msg = root.querySelector("#whFboBatchMsg");
           setMsg(msg, "Сохранение и отправка в Ozon…", false);
           var supplies = (root._batchData && root._batchData.supplies) || batch.supplies || [];
@@ -2457,8 +2609,9 @@
         rerenderCargoSection(root, batch, tab, item, batchId, supplyId);
       });
     });
-    root.querySelectorAll(".wh-fbo-save-cargoes").forEach(function (btn) {
+        root.querySelectorAll(".wh-fbo-save-cargoes").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        syncCargoDraftFromDom(root);
         var supplyId = btn.getAttribute("data-supply-id");
         var supply = getSupplyDraft(root, supplyId);
         if (!supply) return;
@@ -2474,6 +2627,7 @@
     });
     root.querySelectorAll(".wh-fbo-send-cargoes").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        syncCargoDraftFromDom(root);
         var supplyId = btn.getAttribute("data-supply-id");
         var supply = getSupplyDraft(root, supplyId);
         if (!supply) return;
@@ -2560,6 +2714,7 @@
     bindSupplyTypeCells(section, function () {
       modalSupplyTypesEditor(refreshForm);
     });
+    bindPackerPickers(section);
     var saveBtn = root.querySelector("#whFboSaveBatchOps");
     if (!saveBtn || saveBtn.getAttribute("data-bound") === "1") return;
     saveBtn.setAttribute("data-bound", "1");

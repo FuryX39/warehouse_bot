@@ -2099,8 +2099,77 @@ body.wh-body {
 .wh-fbo-ops-summary-table col.wh-fbo-ops-col--packing_comment,
 .wh-fbo-ops-summary-table col.wh-fbo-ops-col--logistics_comment,
 .wh-fbo-ops-summary-table col.wh-fbo-ops-col--unload_address,
-.wh-fbo-ops-summary-table col.wh-fbo-ops-col--car_driver {
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--car_driver,
+.wh-fbo-ops-summary-table col.wh-fbo-ops-col--packer {
   width: 8%;
+}
+
+.wh-fbo-packer-picker {
+  position: relative;
+  font-size: inherit;
+}
+
+.wh-fbo-packer-picker__summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  word-break: break-word;
+  padding: 0.1rem 0;
+}
+
+.wh-fbo-packer-picker__summary::-webkit-details-marker {
+  display: none;
+}
+
+.wh-fbo-packer-picker__summary::after {
+  content: " ▾";
+  color: #666;
+}
+
+.wh-fbo-packer-picker[open] .wh-fbo-packer-picker__summary::after {
+  content: " ▴";
+}
+
+.wh-fbo-packer-picker__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.2rem);
+  z-index: 40;
+  min-width: 11rem;
+  max-width: 16rem;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 0.35rem 0.45rem;
+  background: #fff;
+  border: 1px solid var(--wh-border, #e1e6ef);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(28, 36, 52, 0.12);
+}
+
+.wh-fbo-packer-option {
+  display: block;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  margin: 0.15rem 0;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.wh-fbo-packer-option input {
+  margin-right: 0.25rem;
+  vertical-align: middle;
+}
+
+.wh-fbo-ops-field--packers .wh-fbo-packer-picker__panel {
+  position: static;
+  max-height: 10rem;
+  margin-top: 0.35rem;
+  box-shadow: none;
+}
+
+.wh-fbo-ops-field--packers .wh-fbo-packer-picker__summary::after {
+  content: "";
 }
 
 .wh-fbo-ops-summary-batch {

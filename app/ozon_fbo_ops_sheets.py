@@ -143,6 +143,7 @@ def resolved_batch_summary_values(
     unload_address: str = "",
     packing_status_name: str = "",
     supply_type_name: str = "",
+    packer_display: str = "",
     cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
     editable = ops_editable_from_batch(batch)
@@ -161,7 +162,7 @@ def resolved_batch_summary_values(
         "ship_date": ship_date,
         "supply_id": _unique_join([s.ozon_supply_id for s in supplies]),
         "movement_number": "",
-        "packer": _unique_join([s.assigned_user_name for s in supplies]),
+        "packer": packer_display,
         "units_count": str(units_total) if units_total > 0 else "",
         "cargoes_desc": cargoes_desc,
         "packing_status": packing_status_name,
@@ -188,7 +189,6 @@ PACKING_COLUMNS: tuple[tuple[str, str], ...] = (
     ("ship_date", "дата отгрузки"),
     ("supply_id", "ID поставки"),
     ("movement_number", "перемещение"),
-    ("packer", "упаковщик"),
     ("units_count", "количество единиц"),
     ("cargoes_desc", "количество грузомест"),
     ("packing_status", "статус"),
@@ -196,6 +196,7 @@ PACKING_COLUMNS: tuple[tuple[str, str], ...] = (
     ("barcode_link", "ссылка на ШК"),
     ("barcode_link_2", "ссылка на ШК 2"),
     ("packing_comment", "коментарий"),
+    ("packer", "упаковщик"),
 )
 
 LOGISTICS_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -219,6 +220,7 @@ BATCH_PACKING_EDITABLE: tuple[tuple[str, str, str, str], ...] = (
     ("ops_supply_type_id", "supply_type", "Тип поставки", "supply_type"),
     ("ops_barcode_link_2", "barcode_link_2", "ссылка на ШК 2", "text"),
     ("ops_packing_comment", "packing_comment", "коментарий", "text"),
+    ("ops_packer_user_ids", "packer", "упаковщик", "packers"),
 )
 
 BATCH_LOGISTICS_SELECTS: tuple[tuple[str, str, str, str], ...] = (
@@ -258,8 +260,9 @@ def _summary_row_dict(
     batch_title: str,
     values: dict[str, str],
     ops_editable: dict[str, str] | None = None,
+    packer_user_ids: list[int] | None = None,
 ) -> dict[str, Any]:
-    return {
+    row_dict: dict[str, Any] = {
         "batch_id": batch_id,
         "batch_title": batch_title,
         "title": batch_title,
@@ -270,6 +273,9 @@ def _summary_row_dict(
         "packing_export": packing_row(values),
         "logistics_export": logistics_row(values),
     }
+    if packer_user_ids is not None:
+        row_dict["packer_user_ids"] = packer_user_ids
+    return row_dict
 
 
 def ops_sheet_for_batch(
@@ -305,6 +311,7 @@ def ops_sheet_for_batch(
         unload_address=unload_address,
         packing_status_name=packing_status_name,
         supply_type_name=supply_type_name,
+        packer_display=batch.ops_packer_display,
         cluster_name_map=cluster_name_map,
     )
     summary_row = _summary_row_dict(
@@ -312,6 +319,7 @@ def ops_sheet_for_batch(
         batch_title=str(batch.title or ""),
         values=summary_values,
         ops_editable=editable,
+        packer_user_ids=list(batch.ops_packer_user_ids or []),
     )
     return {
         "batch_id": batch.id,

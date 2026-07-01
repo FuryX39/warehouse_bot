@@ -145,6 +145,15 @@ class OzonFboSetting(_Base):
 SETTING_DEFAULT_COUNTERPARTY_ID = "default_counterparty_id"
 
 
+class OzonFboBatchPacker(_Base):
+    __tablename__ = "ozon_fbo_batch_packers"
+
+    batch_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ozon_fbo_batches.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+
 class OzonFboSupply(_Base):
     __tablename__ = "ozon_fbo_supplies"
 
@@ -306,6 +315,8 @@ class FboBatchRow:
     ops_pallets_ready_time: str
     ops_logistics_comment: str
     ops_car_driver: str
+    ops_packer_user_ids: list[int] = field(default_factory=list)
+    ops_packer_display: str = ""
     created_at_ts: int
     updated_at_ts: int
     supply_count: int = 0
@@ -805,6 +816,53 @@ class OzonFboSupplyRepository:
             for r in rows
         ]
 
+    def _normalize_user_ids(self, raw: Any) -> list[int]:
+        if not isinstance(raw, list):
+            return []
+        out: list[int] = []
+        seen: set[int] = set()
+        for item in raw:
+            uid = _int_or_none(item)
+            if uid and uid not in seen:
+                seen.add(uid)
+                out.append(uid)
+        return sorted(out)
+
+    def _batch_packer_ids_session(self, session: Session, batch_id: int) -> list[int]:
+        rows = session.scalars(
+            select(OzonFboBatchPacker.user_id)
+            .where(OzonFboBatchPacker.batch_id == int(batch_id))
+            .order_by(OzonFboBatchPacker.user_id)
+        ).all()
+        return [int(r) for r in rows]
+
+    def _fallback_packer_ids_from_supplies(self, supplies: list[FboSupplyRow]) -> list[int]:
+        seen: set[int] = set()
+        out: list[int] = []
+        for supply in supplies:
+            uid = int(supply.assigned_user_id or 0)
+            if uid and uid not in seen:
+                seen.add(uid)
+                out.append(uid)
+        return out
+
+    def _packer_names(self, user_ids: list[int]) -> str:
+        if not user_ids:
+            return ""
+        names: list[str] = []
+        for uid in user_ids:
+            user = self.users_repo.get_by_id(int(uid))
+            if user:
+                names.append(str(user.display_name or user.login or "").strip())
+        return ", ".join([n for n in names if n])
+
+    def _set_batch_packers(self, session: Session, batch_id: int, user_ids: list[int]) -> None:
+        session.execute(delete(OzonFboBatchPacker).where(OzonFboBatchPacker.batch_id == int(batch_id)))
+        for uid in user_ids:
+            if self.users_repo.get_by_id(int(uid)) is None:
+                continue
+            session.add(OzonFboBatchPacker(batch_id=int(batch_id), user_id=int(uid)))
+
     def _apply_batch_ops_fields(self, row: OzonFboBatch, data: dict[str, Any]) -> None:
         from app.ozon_fbo_ops_sheets import batch_ops_editable_field_names
 
@@ -885,6 +943,13 @@ class OzonFboSupplyRepository:
                 row.delivery_type = _normalize_delivery_type(data.get("delivery_type"))
             if "status" in data:
                 row.status = _normalize_batch_status(data.get("status"), default=row.status)
+            ops_payload = data.get("ops") if isinstance(data.get("ops"), dict) else data
+            if isinstance(ops_payload, dict) and "ops_packer_user_ids" in ops_payload:
+                self._set_batch_packers(
+                    session,
+                    int(row.id),
+                    self._normalize_user_ids(ops_payload.get("ops_packer_user_ids")),
+                )
             if "ops" in data or any(k.startswith("ops_") for k in data):
                 self._apply_batch_ops_fields(row, data)
             row.updated_at_ts = now
@@ -1354,6 +1419,10 @@ class OzonFboSupplyRepository:
                 .order_by(OzonFboSupply.id)
             ).all()
             supplies = [self._row(session, s, include_details=True) for s in supply_rows]
+        packer_ids = self._batch_packer_ids_session(session, int(row.id))
+        if not packer_ids and supplies:
+            packer_ids = self._fallback_packer_ids_from_supplies(supplies)
+        packer_display = self._packer_names(packer_ids)
         return FboBatchRow(
             id=int(row.id),
             title=str(row.title or ""),
@@ -1380,6 +1449,8 @@ class OzonFboSupplyRepository:
             ops_pallets_ready_time=str(row.ops_pallets_ready_time or ""),
             ops_logistics_comment=str(row.ops_logistics_comment or ""),
             ops_car_driver=str(row.ops_car_driver or ""),
+            ops_packer_user_ids=packer_ids,
+            ops_packer_display=packer_display,
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
             supply_count=int(supply_count or 0),
@@ -1533,6 +1604,8 @@ def batch_to_dict(
         "ops_pallets_ready_time": row.ops_pallets_ready_time,
         "ops_logistics_comment": row.ops_logistics_comment,
         "ops_car_driver": row.ops_car_driver,
+        "ops_packer_user_ids": list(row.ops_packer_user_ids or []),
+        "ops_packer_display": row.ops_packer_display,
         "created_at_ts": row.created_at_ts,
         "updated_at_ts": row.updated_at_ts,
         "supply_count": row.supply_count,
