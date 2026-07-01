@@ -162,6 +162,43 @@ def rank_demand_by_clusters(
     return ranked
 
 
+def macrolocal_cluster_name_map(adapter: OzonAdapter | None) -> dict[str, str]:
+    """macrolocal_cluster_id → человекочитаемое название кластера размещения."""
+    if adapter is None or not adapter.is_configured():
+        return {}
+    try:
+        return {
+            str(int(c["macrolocal_cluster_id"])): str(c.get("name") or "").strip()
+            for c in list_macrolocal_clusters(adapter)
+            if c.get("macrolocal_cluster_id") is not None and str(c.get("name") or "").strip()
+        }
+    except Exception:
+        return {}
+
+
+def resolve_macrolocal_cluster_name(
+    *,
+    cluster_id: str,
+    cluster_name: str = "",
+    warehouse_name: str = "",
+    dropoff_name: str = "",
+    name_map: dict[str, str] | None = None,
+) -> str:
+    """Кластер назначения (размещения), не склад отгрузки и не склад хранения."""
+    cid = str(cluster_id or "").strip()
+    name = str(cluster_name or "").strip()
+    warehouse = str(warehouse_name or "").strip()
+    dropoff = str(dropoff_name or "").strip()
+    reject = {warehouse, dropoff}
+    if name and name not in reject and name != cid and not name.isdigit():
+        return name
+    if name_map and cid:
+        resolved = name_map.get(cid)
+        if resolved:
+            return resolved
+    return ""
+
+
 def list_macrolocal_clusters(adapter: OzonAdapter) -> list[dict[str, Any]]:
     raw = adapter.fbo_cluster_list()
     out: list[dict[str, Any]] = []

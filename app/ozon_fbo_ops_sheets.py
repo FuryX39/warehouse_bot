@@ -39,22 +39,32 @@ def _date_sort_key(val: str) -> tuple[int, str]:
     return (1, s)
 
 
-def supply_cluster_display(supply: FboSupplyRow) -> str:  # noqa: F821
-    """Название кластера из заявки, без числового ID."""
-    name = _str(supply.ozon_cluster_name, 256)
+def supply_cluster_display(
+    supply: FboSupplyRow,  # noqa: F821
+    *,
+    cluster_name_map: dict[str, str] | None = None,
+) -> str:
+    """Кластер размещения (куда едет поставка), не склад отгрузки/хранения."""
     cid = _str(supply.ozon_cluster_id, 64)
-    if name and name != cid and not name.isdigit():
+    name = _str(supply.ozon_cluster_name, 256)
+    warehouse = _str(supply.ozon_warehouse_name, 256)
+    dropoff = _str(supply.dropoff_warehouse_name, 256)
+    reject = {warehouse, dropoff}
+    if name and name not in reject and name != cid and not name.isdigit():
         return name
-    title = _str(supply.title, 256)
-    if " — " in title:
-        part = title.split(" — ", 1)[1].strip()
-        if part and part != cid and not part.isdigit():
-            return part
+    if cluster_name_map and cid:
+        return _str(cluster_name_map.get(cid), 256)
     return ""
 
 
-def cluster_labels_from_supplies(supplies: list[FboSupplyRow]) -> str:  # noqa: F821
-    return _unique_join([supply_cluster_display(s) for s in supplies])
+def cluster_labels_from_supplies(
+    supplies: list[FboSupplyRow],  # noqa: F821
+    *,
+    cluster_name_map: dict[str, str] | None = None,
+) -> str:
+    return _unique_join(
+        [supply_cluster_display(s, cluster_name_map=cluster_name_map) for s in supplies]
+    )
 
 
 def sort_summary_rows(rows: list[dict[str, Any]], *, date_key: str) -> list[dict[str, Any]]:
@@ -100,11 +110,13 @@ def ops_editable_from_batch(batch: FboBatchRow) -> dict[str, str]:  # noqa: F821
 def resolved_supply_detail_values(
     supply: FboSupplyRow,  # noqa: F821
     batch: FboBatchRow,  # noqa: F821
+    *,
+    cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Автоматические поля по одной заявке (для подсказки в форме пакета)."""
     units = total_units(supply)
     return {
-        "cluster": supply_cluster_display(supply),
+        "cluster": supply_cluster_display(supply, cluster_name_map=cluster_name_map),
         "warehouse": _str(supply.ozon_warehouse_name, 256),
         "supply_id": _str(supply.ozon_supply_id, 64),
         "packer": _str(supply.assigned_user_name, 128),
@@ -120,6 +132,7 @@ def resolved_batch_summary_values(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
     editable = ops_editable_from_batch(batch)
     ship_date = batch_ship_date(batch)
@@ -132,7 +145,7 @@ def resolved_batch_summary_values(
     client = counterparty_name or "—"
     return {
         "assembly_date": editable["ops_assembly_date"],
-        "cluster": cluster_labels_from_supplies(supplies),
+        "cluster": cluster_labels_from_supplies(supplies, cluster_name_map=cluster_name_map),
         "warehouse": _unique_join([s.ozon_warehouse_name for s in supplies]),
         "ship_date": ship_date,
         "supply_id": _unique_join([s.ozon_supply_id for s in supplies]),
@@ -148,7 +161,7 @@ def resolved_batch_summary_values(
         "weight_kg": editable["ops_weight_kg"],
         "unload_address": unload_address,
         "ship_time": ship_time,
-        "logistics_cluster": cluster_labels_from_supplies(supplies),
+        "logistics_cluster": cluster_labels_from_supplies(supplies, cluster_name_map=cluster_name_map),
         "expense_doc_number": editable["ops_expense_doc_number"],
         "pallets_ready_time": editable["ops_pallets_ready_time"],
         "logistics_comment": editable["ops_logistics_comment"],
@@ -250,6 +263,7 @@ def ops_sheet_for_batch(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     editable = ops_editable_from_batch(batch)
     supply_details = [
@@ -257,7 +271,9 @@ def ops_sheet_for_batch(
             "supply_id": s.id,
             "ozon_supply_id": s.ozon_supply_id,
             "title": s.title,
-            "values": resolved_supply_detail_values(s, batch),
+            "values": resolved_supply_detail_values(
+                s, batch, cluster_name_map=cluster_name_map
+            ),
         }
         for s in supplies
     ]
@@ -267,6 +283,7 @@ def ops_sheet_for_batch(
         counterparty_name=counterparty_name,
         unload_address=unload_address,
         packing_status_name=packing_status_name,
+        cluster_name_map=cluster_name_map,
     )
     summary_row = _summary_row_dict(
         batch_id=int(batch.id),
@@ -297,6 +314,7 @@ def ops_summary_for_batch(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     sheet = ops_sheet_for_batch(
         batch,
@@ -304,6 +322,7 @@ def ops_summary_for_batch(
         counterparty_name=counterparty_name,
         unload_address=unload_address,
         packing_status_name=packing_status_name,
+        cluster_name_map=cluster_name_map,
     )
     summary_row = sheet["summary_row"]
     summary_rows = [summary_row]
@@ -332,10 +351,12 @@ def ops_summary_for_batches(
     counterparty_names: dict[int, str] | None = None,
     unload_addresses: dict[int, str] | None = None,
     packing_status_names: dict[int, str] | None = None,
+    cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     counterparty_names = counterparty_names or {}
     unload_addresses = unload_addresses or {}
     packing_status_names = packing_status_names or {}
+    cluster_name_map = cluster_name_map or {}
     summary_rows: list[dict[str, Any]] = []
     supply_count = 0
     for batch in batches:
@@ -352,6 +373,7 @@ def ops_summary_for_batches(
             counterparty_name=cp_name,
             unload_address=addr,
             packing_status_name=status_name,
+            cluster_name_map=cluster_name_map,
         )
         row = sheet["summary_row"]
         summary_rows.append(row)

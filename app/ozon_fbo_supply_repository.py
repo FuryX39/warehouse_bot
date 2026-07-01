@@ -1269,6 +1269,7 @@ def batch_to_dict(
     counterparty_name: str = "",
     unload_address: str = "",
     packing_status_name: str = "",
+    cluster_name_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     data = {
         "id": row.id,
@@ -1317,6 +1318,7 @@ def batch_to_dict(
             counterparty_name=counterparty_name,
             unload_address=unload_address,
             packing_status_name=packing_status_name,
+            cluster_name_map=cluster_name_map,
         )
         data["supplies"] = [
             supply_to_dict(s, include_details=True, catalog_map=catalog_map) for s in row.supplies

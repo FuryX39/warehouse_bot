@@ -31,6 +31,7 @@ from app.ozon_fbo_api import (
     get_bundle_items,
     get_supply_orders,
     inner_supply_id_from_order,
+    macrolocal_cluster_name_map,
     list_macrolocal_clusters,
     normalize_supply_order,
     parse_timeslot_days,
@@ -99,6 +100,12 @@ def register_warehouse_ozon_fbo_routes(
                 return str(row.address or "").strip()
         return ""
 
+    def _macrolocal_cluster_name_map() -> dict[str, str]:
+        try:
+            return macrolocal_cluster_name_map(_ozon())
+        except HTTPException:
+            return macrolocal_cluster_name_map(ozon_adapter)
+
     def _batch_dict(
         row,
         *,
@@ -112,6 +119,7 @@ def register_warehouse_ozon_fbo_routes(
             counterparty_name=_counterparty_name(row.ops_counterparty_id),
             unload_address=_unload_address_text(row.ops_unload_address_id),
             packing_status_name=fbo_repo.packing_status_name(row.ops_packing_status_id),
+            cluster_name_map=_macrolocal_cluster_name_map(),
         )
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/meta")
@@ -854,12 +862,14 @@ def register_warehouse_ozon_fbo_routes(
             batch = fbo_repo.get_batch(batch_id)
             if batch is None:
                 raise HTTPException(status_code=404, detail="Пакет FBO не найден")
+            cluster_map = _macrolocal_cluster_name_map()
             return ops_summary_for_batch(
                 batch,
                 batch.supplies,
                 counterparty_name=_counterparty_name(batch.ops_counterparty_id),
                 unload_address=_unload_address_text(batch.ops_unload_address_id),
                 packing_status_name=status_names.get(int(batch.ops_packing_status_id or 0), ""),
+                cluster_name_map=cluster_map,
             )
         supplies = _supplies_for_ops()
         batch_ids: list[int] = []
@@ -889,6 +899,7 @@ def register_warehouse_ozon_fbo_routes(
             counterparty_names=counterparty_names,
             unload_addresses=fbo_repo.unload_addresses_map(),
             packing_status_names=status_names,
+            cluster_name_map=_macrolocal_cluster_name_map(),
         )
 
     @app.get("/api/warehouse/marketplaces/ozon-fbo/packing-statuses")
@@ -1081,6 +1092,7 @@ def register_warehouse_ozon_fbo_routes(
                 time.sleep(CLUSTER_PAUSE_SEC)
             macro_id = cluster.get("macrolocal_cluster_id") or cluster.get("id")
             cluster_name = str(cluster.get("name") or cluster.get("cluster_name") or "")
+            cluster_map = macrolocal_cluster_name_map(ozon)
             if macro_id is None:
                 results.append({"cluster_name": cluster_name, "error": "Нет macrolocal_cluster_id"})
                 continue
@@ -1147,7 +1159,7 @@ def register_warehouse_ozon_fbo_routes(
                         "ozon_draft_id": str(draft_id),
                         "ozon_bundle_id": str(warehouse.get("bundle_id") or ""),
                         "ozon_cluster_id": str(macro_id),
-                        "ozon_cluster_name": cluster_name or str(warehouse.get("cluster_name") or ""),
+                        "ozon_cluster_name": cluster_name or cluster_map.get(str(macro_id), ""),
                         "ozon_warehouse_id": str(warehouse.get("storage_warehouse_id") or ""),
                         "ozon_warehouse_name": str(warehouse.get("warehouse_name") or ""),
                         "dropoff_warehouse_id": dropoff_id,
@@ -1519,18 +1531,22 @@ def register_warehouse_ozon_fbo_routes(
                     except Exception:
                         pass
                 cluster_label = str(norm.get("warehouse_name") or norm.get("macrolocal_cluster_id") or "")
+                macro_id = str(norm.get("macrolocal_cluster_id") or "")
+                cluster_map = macrolocal_cluster_name_map(ozon)
+                cluster_name = cluster_map.get(macro_id, "")
                 supply = fbo_repo.create_supply(
                     {
                         "batch_id": batch.id,
                         "title": f"Ozon #{norm.get('order_number') or order_id}"
-                        + (f" — {cluster_label}" if cluster_label else ""),
+                        + (f" — {cluster_name or cluster_label}" if (cluster_name or cluster_label) else ""),
                         "supply_kind": str(body.get("supply_kind") or "pallet"),
                         "delivery_type": norm.get("delivery_type") or "direct",
                         "status": STATUS_ASSIGNED,
                         "ozon_order_id": order_id,
                         "ozon_supply_id": inner_id or order_id,
                         "ozon_bundle_id": bundle_id,
-                        "ozon_cluster_id": str(norm.get("macrolocal_cluster_id") or ""),
+                        "ozon_cluster_id": macro_id,
+                        "ozon_cluster_name": cluster_name,
                         "ozon_warehouse_id": str(norm.get("warehouse_id") or ""),
                         "ozon_warehouse_name": str(norm.get("warehouse_name") or ""),
                         "timeslot_from": str(norm.get("timeslot_from") or ""),
