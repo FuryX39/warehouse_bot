@@ -56,6 +56,7 @@ from app.ozon_fbo_ops_sheets import (
 )
 from app.ozon_fbo_supply_repository import (
     BATCH_STATUS_PACKING,
+    BATCH_STATUS_PLANNING,
     BATCH_STATUS_SUBMITTED,
     STATUS_ASSIGNED,
     STATUS_LABELS_READY,
