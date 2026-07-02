@@ -15,6 +15,7 @@ POLL_PAUSE_MIN_SEC = 1.0
 POLL_PAUSE_MAX_SEC = 5.0
 CLUSTER_PAUSE_SEC = 2.0
 BUNDLE_IDS_CHUNK = 25
+SUPPLY_ORDER_GET_CHUNK = 50
 
 
 def poll_pause_sec(attempt: int) -> float:
@@ -652,10 +653,26 @@ def list_supply_order_ids(
 
 
 def get_supply_orders(adapter: OzonAdapter, order_ids: list[int]) -> list[dict[str, Any]]:
-    if not order_ids:
+    ids = [int(x) for x in order_ids if int(x) > 0]
+    if not ids:
         return []
-    data = _post(adapter, "/v3/supply-order/get", {"order_ids": [int(x) for x in order_ids]}, timeout=120)
-    return list(data.get("orders") or [])
+    orders: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for i in range(0, len(ids), SUPPLY_ORDER_GET_CHUNK):
+        chunk = ids[i : i + SUPPLY_ORDER_GET_CHUNK]
+        if not chunk:
+            continue
+        data = _post(adapter, "/v3/supply-order/get", {"order_ids": chunk}, timeout=120)
+        for order in data.get("orders") or []:
+            if not isinstance(order, dict):
+                continue
+            oid = int(order.get("order_id") or order.get("id") or 0)
+            if oid and oid in seen:
+                continue
+            if oid:
+                seen.add(oid)
+            orders.append(order)
+    return orders
 
 
 def get_bundle_items(adapter: OzonAdapter, bundle_id: str) -> list[dict[str, Any]]:
