@@ -341,8 +341,6 @@ def describe_fbs_google_sheets(
 
     base = out["default_stocks_sheet_url"]
     gid = assembly_sheet_gid
-    if gid is None:
-        gid = parse_worksheet_gid(bot_url)
     if gid is not None:
         out["assembly_sheet_gid"] = gid
         out["assembly_sheet_url"] = f"{base}#gid={gid}"

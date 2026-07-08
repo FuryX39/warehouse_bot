@@ -208,12 +208,6 @@ def _fbs_assembly_sheet_gid() -> int | None:
     name = os.getenv("FBS_ASSEMBLY_SHEET_NAME", "").strip()
     if name.casefold().startswith("gid:"):
         return parse_worksheet_gid(name)
-    list_url = os.getenv("FBS_LIST_SHEET_URL", "").strip()
-    if "#gid=" in list_url:
-        return parse_worksheet_gid(list_url)
-    stocks_url = os.getenv("DEFAULT_STOCKS_SHEET_URL", "").strip()
-    if "#gid=" in stocks_url:
-        return parse_worksheet_gid(stocks_url)
     return None
 
 
