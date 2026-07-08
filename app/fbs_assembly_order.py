@@ -208,6 +208,14 @@ def apply_assembly_order_to_ozon_rows(
     reordered = reorder_ozon_fbs_list_rows(list_rows, entries, row_factory=row_factory)
     assembly_keys = assembly_sku_keys(entries)
 
+    assembly_preview = ", ".join(entry.sku for entry in entries[:10])
+    sorted_preview = ", ".join(clean_sku(row.sku) for row in reordered[:10])
+    warnings.append(
+        "Порядок ТСД применён: "
+        f"assembly строк {len(entries)}, первые assembly: {assembly_preview}; "
+        f"первые FBS после сортировки: {sorted_preview}."
+    )
+
     fbs_skus_by_key: dict[str, str] = {}
     for row in list_rows:
         display = clean_sku(row.sku)

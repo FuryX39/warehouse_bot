@@ -34,6 +34,7 @@ def test_missing_warning_uses_original_fbs_sku_casing() -> None:
             row_factory=OzonFbsListRow,
         )
 
-    assert len(warnings) == 1
-    assert "SS278" in warnings[0]
-    assert "ss278" not in warnings[0]
+    missing = [w for w in warnings if "нет 1 артикул" in w]
+    assert len(missing) == 1
+    assert "SS278" in missing[0]
+    assert "ss278" not in missing[0]

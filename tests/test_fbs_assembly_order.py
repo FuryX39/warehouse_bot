@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import openpyxl
 
 from app.fbs_assembly_order import (
     parse_assembly_sheet_values,
@@ -84,3 +87,47 @@ def test_sku_match_key_case_insensitive() -> None:
     assert sku_match_key("SS278") == sku_match_key("ss278")
     assert sku_match_key(" SS278 ") == sku_match_key("SS278")
     assert sku_match_key("'SS278") == sku_match_key("SS278")
+
+
+def test_reorder_real_test_xlsx_by_assembly_column_a() -> None:
+    path = Path(__file__).resolve().parents[1] / "tables_examples" / "test.xlsx"
+    if not path.exists():
+        return
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        assembly_ws = wb["assembly"]
+        fbs_ws = wb["FBS"]
+        entries = parse_assembly_sheet_values(
+            [[cell for cell in row] for row in assembly_ws.iter_rows(values_only=True)]
+        )
+        rows = [
+            SimpleNamespace(
+                posting_number=str(row[4]),
+                sku=str(row[0]),
+                quantity=int(row[3] or 0),
+                status="",
+            )
+            for row in fbs_ws.iter_rows(min_row=2, values_only=True)
+            if row[0] and row[4]
+        ]
+    finally:
+        wb.close()
+
+    out = reorder_ozon_fbs_list_rows(rows, entries, row_factory=OzonFbsListRow)
+    assert entries[:6] and [e.sku for e in entries[:6]] == [
+        "SS821",
+        "SS696",
+        "SS562",
+        "SS940",
+        "SS774",
+        "SS424",
+    ]
+    assert [r.sku for r in out[:38]] == (
+        ["SS821"] * 23
+        + ["SS696"] * 3
+        + ["SS562"] * 5
+        + ["SS940"]
+        + ["SS774"] * 4
+        + ["SS424"] * 2
+    )
