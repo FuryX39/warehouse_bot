@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -12,7 +11,7 @@ from app.google_sheet_write import WorksheetLookupError, open_google_spreadsheet
 
 _INVISIBLE_RE = re.compile(r"[\u200b-\u200d\ufeff]")
 _OFFER_ID_FULL_RE = re.compile(r"^(SS[A-Z0-9]+)$", re.IGNORECASE)
-_OFFER_ID_EMBEDDED_RE = re.compile(r"\b(SS[A-Z0-9]+)\b", re.IGNORECASE)
+_OFFER_ID_EMBEDDED_RE = re.compile(r"SS[\s\-_]*[A-Z0-9]+", re.IGNORECASE)
 _SKIP_ROW_MARKERS = ("итого", "всего", "сумма")
 
 
@@ -45,8 +44,25 @@ def extract_offer_id_from_cell(value: str) -> str:
         return raw.upper()
     match = _OFFER_ID_EMBEDDED_RE.search(raw)
     if match:
-        return match.group(1).upper()
+        return re.sub(r"[\s\-_]+", "", match.group(0)).upper()
     return raw
+
+
+def extract_offer_ids_from_row(row: Sequence[str]) -> list[str]:
+    """Все SS-артикулы из строки assembly слева направо."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for cell in row:
+        raw = _norm_sku_raw(cell)
+        if not raw:
+            continue
+        for match in _OFFER_ID_EMBEDDED_RE.finditer(raw):
+            sku = re.sub(r"[\s\-_]+", "", match.group(0)).upper()
+            key = sku_match_key(sku)
+            if key not in seen:
+                seen.add(key)
+                out.append(sku)
+    return out
 
 
 @dataclass(frozen=True)
@@ -97,54 +113,43 @@ def _assembly_data_start_and_columns(values: list[list[str]]) -> tuple[int, int,
     return 0, 0, 2
 
 
-def _sku_from_assembly_row(row: Sequence[str], sku_idx: int) -> str:
-    primary = extract_offer_id_from_cell(_norm_cell(row, sku_idx))
-    if looks_like_offer_id(primary):
-        return primary
-    embedded = _OFFER_ID_EMBEDDED_RE.search(primary)
-    if embedded:
-        return embedded.group(1).upper()
-    for i, cell in enumerate(row):
-        if i == sku_idx:
-            continue
-        candidate = extract_offer_id_from_cell(cell)
-        if looks_like_offer_id(candidate):
-            return candidate
-        match = _OFFER_ID_EMBEDDED_RE.search(candidate)
-        if match:
-            return match.group(1).upper()
-    return primary
-
-
 def _is_assembly_data_row(sku: str) -> bool:
     if not sku:
         return False
     low = sku.casefold()
     if any(marker in low for marker in _SKIP_ROW_MARKERS):
         return False
-    if looks_like_offer_id(sku):
-        return True
-    return bool(_OFFER_ID_EMBEDDED_RE.search(sku))
+    return looks_like_offer_id(sku)
 
 
 def parse_assembly_sheet_values(values: list[list[str]]) -> list[AssemblySheetEntry]:
-    """Разбор листа assembly: артикул + ячейка, порядок строк = маршрут ТСД."""
+    """Разбор листа assembly: все SS-артикулы сверху вниз = маршрут ТСД."""
     if not values:
         return []
-    start, sku_idx, place_idx = _assembly_data_start_and_columns(values)
+    start, _sku_idx, place_idx = _assembly_data_start_and_columns(values)
 
     out: list[AssemblySheetEntry] = []
     for row in values[start:]:
-        sku = _sku_from_assembly_row(row, sku_idx)
-        if not _is_assembly_data_row(sku):
-            continue
         place = _norm_cell(row, place_idx)
-        out.append(AssemblySheetEntry(sku=sku, place=place, sort_index=len(out)))
+        for sku in extract_offer_ids_from_row(row):
+            if not _is_assembly_data_row(sku):
+                continue
+            out.append(AssemblySheetEntry(sku=sku, place=place, sort_index=len(out)))
     return out
 
 
 def assembly_sku_keys(entries: Sequence[AssemblySheetEntry]) -> set[str]:
     return {sku_match_key(entry.sku) for entry in entries if entry.sku}
+
+
+def assembly_sku_rank(entries: Sequence[AssemblySheetEntry]) -> dict[str, int]:
+    """Первое появление артикула в assembly задаёт его порядок в FBS."""
+    rank: dict[str, int] = {}
+    for entry in entries:
+        key = sku_match_key(entry.sku)
+        if key and key not in rank:
+            rank[key] = entry.sort_index
+    return rank
 
 
 def reorder_ozon_fbs_list_rows(
@@ -154,9 +159,8 @@ def reorder_ozon_fbs_list_rows(
     row_factory,
 ) -> list:
     """
-    Порядок FBS = обход assembly сверху вниз.
-    Каждая строка assembly «забирает» следующую FBS-строку с тем же артикулом.
-    Нераспределённые строки — в конце, в исходном порядке.
+    Порядок FBS = порядок первого появления артикула в assembly сверху вниз.
+    Нераспознанные артикулы — в конце, в исходном порядке.
     """
     if not list_rows:
         return []
@@ -166,25 +170,15 @@ def reorder_ozon_fbs_list_rows(
             for i, row in enumerate(list_rows)
         ]
 
-    pools: dict[str, deque[int]] = defaultdict(deque)
-    for i, row in enumerate(list_rows):
-        pools[sku_match_key(row.sku)].append(i)
-
-    placed_indices: list[int] = []
-    for entry in entries:
-        key = sku_match_key(entry.sku)
-        if pools[key]:
-            placed_indices.append(pools[key].popleft())
-
-    placed_set = set(placed_indices)
-    for i in range(len(list_rows)):
-        if i not in placed_set:
-            placed_indices.append(i)
-
-    flat = [list_rows[i] for i in placed_indices]
+    rank = assembly_sku_rank(entries)
+    big = 10**9
+    flat = sorted(
+        enumerate(list_rows),
+        key=lambda pair: (rank.get(sku_match_key(pair[1].sku), big), pair[0]),
+    )
     return [
         row_factory(i + 1, row.posting_number, row.sku, row.quantity, row.status)
-        for i, row in enumerate(flat)
+        for i, (_, row) in enumerate(flat)
     ]
 
 
