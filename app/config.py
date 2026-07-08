@@ -64,6 +64,7 @@ class Settings:
     fbs_list_sheet_url: str = ""
     fbs_list_template_sheet: str = "FBSTemplate"
     fbs_assembly_sheet_name: str = "assembly"
+    fbs_assembly_sheet_gid: int | None = None
     ozon_client_id: str = ""
     ozon_api_key: str = ""
     ozon_warehouse_id: str = ""
@@ -144,6 +145,7 @@ def load_settings() -> Settings:
         fbs_list_template_sheet=os.getenv("FBS_LIST_TEMPLATE_SHEET", "FBSTemplate").strip()
         or "FBSTemplate",
         fbs_assembly_sheet_name=os.getenv("FBS_ASSEMBLY_SHEET_NAME", "assembly").strip() or "assembly",
+        fbs_assembly_sheet_gid=_fbs_assembly_sheet_gid(),
         ozon_client_id=os.getenv("OZON_CLIENT_ID", "").strip(),
         ozon_api_key=os.getenv("OZON_API_KEY", "").strip(),
         ozon_warehouse_id=os.getenv("OZON_WAREHOUSE_ID", "").strip(),
@@ -193,6 +195,19 @@ def _ozon_label_rotate_degrees() -> int:
         return int(raw)
     except ValueError:
         return 90
+
+
+def _fbs_assembly_sheet_gid() -> int | None:
+    from app.google_sheet_write import parse_worksheet_gid
+
+    raw = os.getenv("FBS_ASSEMBLY_SHEET_GID", "").strip()
+    if raw:
+        return parse_worksheet_gid(raw)
+    # gid:149721613 в FBS_ASSEMBLY_SHEET_NAME — без отдельной переменной
+    name = os.getenv("FBS_ASSEMBLY_SHEET_NAME", "").strip()
+    if name.casefold().startswith("gid:"):
+        return parse_worksheet_gid(name)
+    return None
 
 
 def _google_service_account_file() -> str:

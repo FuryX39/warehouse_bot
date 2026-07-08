@@ -705,6 +705,7 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             google_service_account_file=settings.google_service_account_file,
             fbs_list_template_sheet=settings.fbs_list_template_sheet,
             fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
+            assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
             ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
             first_posting_number=first_pn,
             last_posting_number=last_pn,

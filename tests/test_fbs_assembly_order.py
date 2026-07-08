@@ -14,12 +14,12 @@ from app.ozon_fbs_labels import OzonFbsListRow
 
 def _sample_assembly_values() -> list[list[str]]:
     """Минимальный фрагмент листа ТСД: колонки A (артикул), C (ячейка), E (кол-во)."""
-  return [
-      ["Номенклатура", "", "Ячейка", "", "Количество"],
-      ["SSBL997", "", "A-01", "", "1"],
-      ["SS414", "", "B-02", "", "2"],
-      ["SS996", "", "C-03", "", "1"],
-  ]
+    return [
+        ["Номенклатура", "", "Ячейка", "", "Количество"],
+        ["SSBL997", "", "A-01", "", "1"],
+        ["SS414", "", "B-02", "", "2"],
+        ["SS996", "", "C-03", "", "1"],
+    ]
 
 
 def test_parse_assembly_sheet_values_skips_header_and_reads_columns() -> None:

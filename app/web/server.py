@@ -749,6 +749,7 @@ def create_dashboard_app(
             fbs_list_sheet_url=settings.fbs_list_sheet_url,
             google_service_account_file=settings.google_service_account_file,
             assembly_sheet_name=settings.fbs_assembly_sheet_name,
+            assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
         )
         by_pn = {p.posting_number: p for p in postings}
         postings_ordered = [by_pn[pn] for pn in order if pn in by_pn]
@@ -811,6 +812,7 @@ def create_dashboard_app(
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
                     fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
+                    assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
                     ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
                     first_posting_number=first_p or None,
                     last_posting_number=last_p or None,
@@ -1120,6 +1122,7 @@ def create_dashboard_app(
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
                     fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
+                    assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
                     ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
                 ),
             )
@@ -1702,6 +1705,7 @@ def create_dashboard_app(
                 "sheet_configured": is_value_configured(settings.fbs_list_sheet_url)
                 and is_value_configured(settings.google_service_account_file),
                 "assembly_sheet_name": settings.fbs_assembly_sheet_name,
+                "assembly_sheet_gid": settings.fbs_assembly_sheet_gid,
             },
             "ozon": {
                 "configured": is_value_configured(settings.ozon_client_id)

@@ -270,6 +270,9 @@
       if (fbs.assembly_sheet_name) {
         ozonParts.push("лист «" + fbs.assembly_sheet_name + "» — порядок ТСД");
       }
+      if (fbs.assembly_sheet_gid) {
+        ozonParts.push("gid " + fbs.assembly_sheet_gid);
+      }
       ozonSheet.textContent = ozonParts.join("; ");
     }
     var yandexApi = document.getElementById("yandexApiStatus");

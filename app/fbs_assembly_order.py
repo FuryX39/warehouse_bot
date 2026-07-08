@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from app.google_sheet_write import open_google_spreadsheet
+from app.google_sheet_write import WorksheetLookupError, open_google_spreadsheet, resolve_worksheet
 
 
 @dataclass(frozen=True)
@@ -126,9 +126,14 @@ def load_assembly_entries_from_google_sheet(
     credentials_path: str,
     *,
     sheet_name: str = "assembly",
+    sheet_gid: int | None = None,
 ) -> list[AssemblySheetEntry]:
     sh = open_google_spreadsheet(spreadsheet_url, credentials_path)
-    ws = sh.worksheet(str(sheet_name or "assembly").strip() or "assembly")
+    ws = resolve_worksheet(
+        sh,
+        sheet_name=str(sheet_name or "assembly").strip() or "assembly",
+        sheet_gid=sheet_gid,
+    )
     return parse_assembly_sheet_values(ws.get_all_values())
 
 
@@ -138,6 +143,7 @@ def apply_assembly_order_to_ozon_rows(
     fbs_list_sheet_url: str,
     google_service_account_file: str,
     assembly_sheet_name: str,
+    assembly_sheet_gid: int | None = None,
     row_factory,
 ) -> tuple[list, list[str]]:
     """Вернуть строки в порядке листа assembly и предупреждения (если лист недоступен)."""
@@ -157,9 +163,18 @@ def apply_assembly_order_to_ozon_rows(
             sheet_url,
             creds,
             sheet_name=sheet,
+            sheet_gid=assembly_sheet_gid,
         )
+    except WorksheetLookupError as exc:
+        warnings.append(
+            f"Порядок ТСД: {exc}. Использован порядок по умолчанию."
+        )
+        return list_rows, warnings
     except Exception as exc:  # noqa: BLE001
-        warnings.append(f"Лист «{sheet}»: не удалось прочитать порядок ТСД ({exc}). Использован порядок по умолчанию.")
+        warnings.append(
+            f"Лист «{sheet}»: не удалось прочитать порядок ТСД ({exc}). "
+            "Использован порядок по умолчанию."
+        )
         return list_rows, warnings
 
     if not entries:

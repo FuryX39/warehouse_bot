@@ -204,6 +204,79 @@ def open_google_spreadsheet(spreadsheet_url: str, credentials_path: str):
     return _open_spreadsheet(spreadsheet_url, credentials_path)
 
 
+class WorksheetLookupError(LookupError):
+    """Лист не найден; available_titles — имена вкладок в таблице (для подсказки в UI)."""
+
+    def __init__(self, message: str, *, available_titles: list[str] | None = None):
+        super().__init__(message)
+        self.available_titles = list(available_titles or [])
+
+
+def parse_worksheet_gid(raw: str) -> int | None:
+    """Числовой gid вкладки из FBS_ASSEMBLY_SHEET_GID или значения вида gid:149721613."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.casefold().startswith("gid:"):
+        s = s[4:].strip()
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def resolve_worksheet(
+    spreadsheet,
+    *,
+    sheet_name: str = "",
+    sheet_gid: int | None = None,
+):
+    """
+    Найти вкладку по gid (из URL #gid=...) и/или имени.
+    Имя ищется без учёта регистра; в sheet_name допустимо gid:12345.
+    """
+    import gspread
+
+    name = str(sheet_name or "").strip()
+    gid = sheet_gid
+    if gid is None:
+        parsed = parse_worksheet_gid(name)
+        if parsed is not None:
+            gid = parsed
+            name = ""
+
+    if gid is not None:
+        ws = spreadsheet.get_worksheet_by_id(int(gid))
+        if ws is not None:
+            return ws
+
+    if name:
+        try:
+            return spreadsheet.worksheet(name)
+        except gspread.WorksheetNotFound:
+            pass
+        name_fold = name.casefold()
+        for ws in spreadsheet.worksheets():
+            if ws.title.casefold() == name_fold:
+                return ws
+
+    titles = [ws.title for ws in spreadsheet.worksheets()]
+    if gid is not None and name:
+        msg = f"Лист «{name}» (gid {gid}) не найден"
+    elif gid is not None:
+        msg = f"Лист с gid {gid} не найден"
+    elif name:
+        msg = f"Лист «{name}» не найден"
+    else:
+        msg = "Не указано имя листа"
+    if titles:
+        shown = ", ".join(titles[:20])
+        if len(titles) > 20:
+            shown += f" … (+{len(titles) - 20})"
+        msg += f". Доступные листы: {shown}"
+    raise WorksheetLookupError(msg, available_titles=titles)
+
+
 def _extend_template_data_rows(worksheet, *, data_row_count: int) -> None:
     """Копирует строку 2 шаблона вниз, сохраняя формат и формулы."""
     if data_row_count <= 1:

@@ -58,6 +58,7 @@ def apply_tsd_assembly_order(
     fbs_list_sheet_url: str = "",
     google_service_account_file: str = "",
     assembly_sheet_name: str = "assembly",
+    assembly_sheet_gid: int | None = None,
 ) -> tuple[list[OzonFbsListRow], list[str]]:
     """Переставить строки FBS в порядке листа assembly (маршрут ТСД по ячейкам)."""
     return apply_assembly_order_to_ozon_rows(
@@ -65,6 +66,7 @@ def apply_tsd_assembly_order(
         fbs_list_sheet_url=fbs_list_sheet_url,
         google_service_account_file=google_service_account_file,
         assembly_sheet_name=assembly_sheet_name,
+        assembly_sheet_gid=assembly_sheet_gid,
         row_factory=OzonFbsListRow,
     )
 
@@ -197,6 +199,7 @@ def fetch_awaiting_shipment_labels(
     google_service_account_file: str = "",
     fbs_list_template_sheet: str = "FBSTemplate",
     fbs_assembly_sheet_name: str = "assembly",
+    assembly_sheet_gid: int | None = None,
     ozon_label_rotate_degrees: int = 90,
     first_posting_number: str | None = None,
     last_posting_number: str | None = None,
@@ -231,6 +234,7 @@ def fetch_awaiting_shipment_labels(
         fbs_list_sheet_url=fbs_list_sheet_url,
         google_service_account_file=google_service_account_file,
         assembly_sheet_name=fbs_assembly_sheet_name,
+        assembly_sheet_gid=assembly_sheet_gid,
     )
 
     sheet_title = fbs_list_sheet_title()
