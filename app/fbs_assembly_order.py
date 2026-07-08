@@ -1,4 +1,4 @@
-"""Порядок строк FBS-списка по сборочному листу ТСД (лист assembly в Google Таблице)."""
+"""Порядок строк FBS-списка по сборочному листу ТСД (лист assembly в bot_table / DEFAULT_STOCKS_SHEET_URL)."""
 
 from __future__ import annotations
 
@@ -140,22 +140,30 @@ def load_assembly_entries_from_google_sheet(
 def apply_assembly_order_to_ozon_rows(
     list_rows: list,
     *,
-    fbs_list_sheet_url: str,
+    default_stocks_sheet_url: str,
     google_service_account_file: str,
     assembly_sheet_name: str,
     assembly_sheet_gid: int | None = None,
     row_factory,
 ) -> tuple[list, list[str]]:
-    """Вернуть строки в порядке листа assembly и предупреждения (если лист недоступен)."""
+    """Вернуть строки в порядке листа assembly (таблица bot_table / DEFAULT_STOCKS_SHEET_URL)."""
     warnings: list[str] = []
     if not list_rows:
         return list_rows, warnings
 
-    sheet_url = str(fbs_list_sheet_url or "").strip()
+    sheet_url = str(default_stocks_sheet_url or "").strip()
     creds = str(google_service_account_file or "").strip()
     sheet = str(assembly_sheet_name or "assembly").strip() or "assembly"
 
-    if not sheet_url or not creds:
+    if not sheet_url:
+        warnings.append(
+            "DEFAULT_STOCKS_SHEET_URL не задан — порядок ТСД не применён (использован порядок по умолчанию)."
+        )
+        return list_rows, warnings
+    if not creds:
+        warnings.append(
+            "GOOGLE_SERVICE_ACCOUNT_FILE не задан — порядок ТСД не применён."
+        )
         return list_rows, warnings
 
     try:

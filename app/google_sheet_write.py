@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import re
+import unicodedata
 from typing import Sequence
 
 from app.sheet_import import extract_sheet_id
@@ -213,16 +214,22 @@ class WorksheetLookupError(LookupError):
 
 
 def parse_worksheet_gid(raw: str) -> int | None:
-    """Числовой gid вкладки из FBS_ASSEMBLY_SHEET_GID или значения вида gid:149721613."""
+    """Числовой gid вкладки из FBS_ASSEMBLY_SHEET_GID, URL (#gid=...) или gid:149721613."""
     s = str(raw or "").strip()
     if not s:
         return None
+    if "#gid=" in s:
+        s = s.rsplit("#gid=", maxsplit=1)[-1].split("&", 1)[0].strip()
     if s.casefold().startswith("gid:"):
         s = s[4:].strip()
     try:
         return int(s)
     except ValueError:
         return None
+
+
+def _norm_sheet_title(title: str) -> str:
+    return unicodedata.normalize("NFKC", str(title or "").strip()).casefold()
 
 
 def resolve_worksheet(
@@ -255,9 +262,9 @@ def resolve_worksheet(
             return spreadsheet.worksheet(name)
         except gspread.WorksheetNotFound:
             pass
-        name_fold = name.casefold()
+        name_norm = _norm_sheet_title(name)
         for ws in spreadsheet.worksheets():
-            if ws.title.casefold() == name_fold:
+            if _norm_sheet_title(ws.title) == name_norm:
                 return ws
 
     titles = [ws.title for ws in spreadsheet.worksheets()]
@@ -275,6 +282,92 @@ def resolve_worksheet(
             shown += f" … (+{len(titles) - 20})"
         msg += f". Доступные листы: {shown}"
     raise WorksheetLookupError(msg, available_titles=titles)
+
+
+def describe_fbs_google_sheets(
+    *,
+    default_stocks_sheet_url: str,
+    fbs_list_sheet_url: str,
+    google_service_account_file: str,
+    assembly_sheet_name: str,
+    assembly_sheet_gid: int | None,
+    fbs_list_template_sheet: str,
+) -> dict:
+    """Ссылки на bot_table (assembly) и FBS-таблицу (запись списков) для вкладки FBS."""
+    bot_url = str(default_stocks_sheet_url or "").strip()
+    fbs_url = str(fbs_list_sheet_url or "").strip()
+    creds = str(google_service_account_file or "").strip()
+    assembly_name = str(assembly_sheet_name or "assembly").strip() or "assembly"
+    template_name = str(fbs_list_template_sheet or "FBSTemplate").strip() or "FBSTemplate"
+
+    out: dict = {
+        "sheet_configured": bool(creds and bot_url and fbs_url),
+        "default_stocks_sheet_url": None,
+        "fbs_list_sheet_url": None,
+        "assembly_sheet_name": assembly_name,
+        "assembly_sheet_gid": assembly_sheet_gid,
+        "template_sheet_name": template_name,
+        "assembly_sheet_url": None,
+        "assembly_ok": False,
+        "assembly_message": "",
+        "worksheet_titles": [],
+    }
+
+    if bot_url:
+        try:
+            bot_id = extract_sheet_id(bot_url)
+            out["default_stocks_sheet_url"] = f"https://docs.google.com/spreadsheets/d/{bot_id}/edit"
+        except ValueError as exc:
+            out["assembly_message"] = f"Некорректный DEFAULT_STOCKS_SHEET_URL: {exc}"
+            return out
+    else:
+        out["assembly_message"] = (
+            "В .env не задан DEFAULT_STOCKS_SHEET_URL (таблица bot_table) — оттуда читается лист assembly."
+        )
+
+    if fbs_url:
+        try:
+            fbs_id = extract_sheet_id(fbs_url)
+            out["fbs_list_sheet_url"] = f"https://docs.google.com/spreadsheets/d/{fbs_id}/edit"
+        except ValueError:
+            out["fbs_list_sheet_url"] = None
+
+    if not creds:
+        if not out["assembly_message"]:
+            out["assembly_message"] = "В .env не задан GOOGLE_SERVICE_ACCOUNT_FILE."
+        return out
+    if not bot_url:
+        return out
+
+    base = out["default_stocks_sheet_url"]
+    gid = assembly_sheet_gid
+    if gid is None:
+        gid = parse_worksheet_gid(bot_url)
+    if gid is not None:
+        out["assembly_sheet_gid"] = gid
+        out["assembly_sheet_url"] = f"{base}#gid={gid}"
+
+    try:
+        sh = _open_spreadsheet(bot_url, creds)
+        titles = [ws.title for ws in sh.worksheets()]
+        out["worksheet_titles"] = titles
+        ws = resolve_worksheet(sh, sheet_name=assembly_name, sheet_gid=gid)
+        out["assembly_sheet_gid"] = ws.id
+        out["assembly_sheet_url"] = f"{base}#gid={ws.id}"
+        out["assembly_sheet_name"] = ws.title
+        out["assembly_ok"] = True
+        out["assembly_message"] = (
+            f"Лист «{ws.title}» в bot_table найден и доступен для чтения."
+        )
+    except WorksheetLookupError as exc:
+        out["assembly_message"] = str(exc)
+        out["worksheet_titles"] = exc.available_titles or out["worksheet_titles"]
+    except FileNotFoundError as exc:
+        out["assembly_message"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        out["assembly_message"] = f"Ошибка доступа к bot_table: {exc}"
+
+    return out
 
 
 def _extend_template_data_rows(worksheet, *, data_row_count: int) -> None:

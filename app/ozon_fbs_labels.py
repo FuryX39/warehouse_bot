@@ -55,15 +55,15 @@ def build_sorted_list_rows(postings: list[OzonFbsPosting]) -> list[OzonFbsListRo
 def apply_tsd_assembly_order(
     list_rows: list[OzonFbsListRow],
     *,
-    fbs_list_sheet_url: str = "",
+    default_stocks_sheet_url: str = "",
     google_service_account_file: str = "",
     assembly_sheet_name: str = "assembly",
     assembly_sheet_gid: int | None = None,
 ) -> tuple[list[OzonFbsListRow], list[str]]:
-    """Переставить строки FBS в порядке листа assembly (маршрут ТСД по ячейкам)."""
+    """Переставить строки FBS в порядке листа assembly из bot_table (DEFAULT_STOCKS_SHEET_URL)."""
     return apply_assembly_order_to_ozon_rows(
         list_rows,
-        fbs_list_sheet_url=fbs_list_sheet_url,
+        default_stocks_sheet_url=default_stocks_sheet_url,
         google_service_account_file=google_service_account_file,
         assembly_sheet_name=assembly_sheet_name,
         assembly_sheet_gid=assembly_sheet_gid,
@@ -195,6 +195,7 @@ def fetch_awaiting_shipment_labels(
     adapter: OzonAdapter,
     *,
     statuses: tuple[str, ...] = OZON_AWAITING_SHIPMENT_STATUSES,
+    default_stocks_sheet_url: str = "",
     fbs_list_sheet_url: str = "",
     google_service_account_file: str = "",
     fbs_list_template_sheet: str = "FBSTemplate",
@@ -204,7 +205,7 @@ def fetch_awaiting_shipment_labels(
     first_posting_number: str | None = None,
     last_posting_number: str | None = None,
 ) -> OzonAwaitingShipmentBundle:
-    """Список FBS; порядок — по листу assembly (ТСД); этикетки — по отправлениям на листе; запись в Google Таблицу."""
+    """Список FBS; порядок — assembly из bot_table; запись списка — в FBS_LIST_SHEET_URL."""
     postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
     if not postings:
         return OzonAwaitingShipmentBundle()
@@ -231,7 +232,7 @@ def fetch_awaiting_shipment_labels(
 
     list_rows, assembly_warnings = apply_tsd_assembly_order(
         list_rows,
-        fbs_list_sheet_url=fbs_list_sheet_url,
+        default_stocks_sheet_url=default_stocks_sheet_url,
         google_service_account_file=google_service_account_file,
         assembly_sheet_name=fbs_assembly_sheet_name,
         assembly_sheet_gid=assembly_sheet_gid,

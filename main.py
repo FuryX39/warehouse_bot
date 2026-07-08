@@ -701,6 +701,7 @@ async def ozon_labels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         bundle = await asyncio.to_thread(
             fetch_awaiting_shipment_labels,
             adapter,
+            default_stocks_sheet_url=settings.default_stocks_sheet_url,
             fbs_list_sheet_url=settings.fbs_list_sheet_url,
             google_service_account_file=settings.google_service_account_file,
             fbs_list_template_sheet=settings.fbs_list_template_sheet,

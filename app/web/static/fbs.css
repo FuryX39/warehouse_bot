@@ -84,6 +84,45 @@
 }
 .fbs-section-panel { display: none; width: 100%; }
 .fbs-section-panel.active { display: block; }
+.fbs-help-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem 1.1rem;
+  margin-bottom: 1.25rem;
+  box-shadow: var(--shadow);
+}
+.fbs-help-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+.fbs-help-lead {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+.fbs-help-steps {
+  margin: 0 0 1rem 1.15rem;
+  padding: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.fbs-help-steps li { margin-bottom: 0.45rem; }
+.fbs-help-links {
+  display: grid;
+  gap: 0.65rem 1.25rem;
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+}
+@media (min-width: 640px) {
+  .fbs-help-links { grid-template-columns: 1fr 1fr; }
+}
+.fbs-help-links dt { color: var(--muted); margin: 0 0 0.2rem; font-size: 0.82rem; }
+.fbs-help-links dd { margin: 0; font-weight: 500; }
+.fbs-help-status { margin: 0; font-size: 0.88rem; }
+.fbs-help-status.ok { color: var(--ok, #1a7f37); }
+.fbs-help-status.warn { color: var(--warn, #9a6700); }
 .fbs-ship-scopes {
   display: flex;
   flex-wrap: wrap;

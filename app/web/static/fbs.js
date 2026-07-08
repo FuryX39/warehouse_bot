@@ -252,6 +252,62 @@
     showYandexWarnings(data.warnings || []);
   }
 
+  function renderFbsHelpLinks(fbs) {
+    fbs = fbs || {};
+    var tabName = document.getElementById("fbsAssemblyTabName");
+    if (tabName) tabName.textContent = fbs.assembly_sheet_name || "assembly";
+
+    function linkCell(id, url, label) {
+      var cell = document.getElementById(id);
+      if (!cell) return;
+      if (url) {
+        cell.innerHTML =
+          '<a class="fbs-sheet-link" href="' +
+          escapeHtml(url) +
+          '" target="_blank" rel="noopener">' +
+          escapeHtml(label || url) +
+          "</a>";
+      } else {
+        cell.textContent = "не настроено";
+      }
+    }
+
+    linkCell(
+      "fbsBotTableLinkCell",
+      fbs.assembly_sheet_url || fbs.default_stocks_sheet_url,
+      fbs.assembly_sheet_url
+        ? "Открыть assembly в bot_table"
+        : fbs.default_stocks_sheet_url
+          ? "Открыть bot_table"
+          : ""
+    );
+    linkCell(
+      "fbsSpreadsheetLinkCell",
+      fbs.fbs_list_sheet_url,
+      fbs.fbs_list_sheet_url ? "Открыть таблицу FBS Ozon" : ""
+    );
+
+    var status = document.getElementById("fbsAssemblyStatus");
+    if (!status) return;
+    var parts = [];
+    if (!fbs.default_stocks_sheet_url) {
+      parts.push("DEFAULT_STOCKS_SHEET_URL не задан — порядок ТСД недоступен.");
+    }
+    if (!fbs.fbs_list_sheet_url) {
+      parts.push("FBS_LIST_SHEET_URL не задан — список в Google не будет создан.");
+    }
+    if (fbs.assembly_message) {
+      parts.push(fbs.assembly_message);
+    }
+    status.textContent = parts.join(" ");
+    status.classList.remove("ok", "warn");
+    if (fbs.assembly_ok) {
+      status.classList.add("ok");
+    } else if (fbs.assembly_message) {
+      status.classList.add("warn");
+    }
+  }
+
   async function loadMpConfig() {
     var cfg;
     try {
@@ -266,14 +322,18 @@
     }
     if (ozonSheet) {
       var fbs = cfg.fbs || {};
-      var ozonParts = ["FBS_LIST_SHEET_URL + service account"];
-      if (fbs.assembly_sheet_name) {
-        ozonParts.push("лист «" + fbs.assembly_sheet_name + "» — порядок ТСД");
+      renderFbsHelpLinks(fbs);
+      if (fbs.sheet_configured) {
+        ozonSheet.textContent = "bot_table + FBS + service account настроены";
+      } else {
+        ozonSheet.textContent =
+          "нужны DEFAULT_STOCKS_SHEET_URL, FBS_LIST_SHEET_URL и GOOGLE_SERVICE_ACCOUNT_FILE";
       }
-      if (fbs.assembly_sheet_gid) {
-        ozonParts.push("gid " + fbs.assembly_sheet_gid);
+      if (fbs.assembly_ok) {
+        ozonSheet.textContent += "; assembly — OK";
+      } else if (fbs.assembly_message) {
+        ozonSheet.textContent += "; assembly — проверьте";
       }
-      ozonSheet.textContent = ozonParts.join("; ");
     }
     var yandexApi = document.getElementById("yandexApiStatus");
     var yandexSheet = document.getElementById("yandexSheetStatus");

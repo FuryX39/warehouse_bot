@@ -74,6 +74,7 @@ from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.dealer_analysis_repository import DealerAnalysisRepository
+from app.google_sheet_write import describe_fbs_google_sheets
 from app.sheet_import import (
     import_nomenclature_from_google_sheet,
     import_stocks_from_google_sheet,
@@ -746,7 +747,7 @@ def create_dashboard_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         list_rows, assembly_warnings = apply_tsd_assembly_order(
             list_rows,
-            fbs_list_sheet_url=settings.fbs_list_sheet_url,
+            default_stocks_sheet_url=settings.default_stocks_sheet_url,
             google_service_account_file=settings.google_service_account_file,
             assembly_sheet_name=settings.fbs_assembly_sheet_name,
             assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
@@ -808,6 +809,7 @@ def create_dashboard_app(
                 None,
                 lambda: fetch_awaiting_shipment_labels(
                     adapter,
+                    default_stocks_sheet_url=settings.default_stocks_sheet_url,
                     fbs_list_sheet_url=settings.fbs_list_sheet_url,
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
@@ -1118,6 +1120,7 @@ def create_dashboard_app(
                 None,
                 lambda: fetch_awaiting_shipment_labels(
                     adapter,
+                    default_stocks_sheet_url=settings.default_stocks_sheet_url,
                     fbs_list_sheet_url=settings.fbs_list_sheet_url,
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
@@ -1700,13 +1703,17 @@ def create_dashboard_app(
 
     @app.get("/api/config/marketplaces", dependencies=[Depends(require_login)])
     async def api_mp_config() -> dict:
+        fbs = await asyncio.to_thread(
+            describe_fbs_google_sheets,
+            default_stocks_sheet_url=settings.default_stocks_sheet_url,
+            fbs_list_sheet_url=settings.fbs_list_sheet_url,
+            google_service_account_file=settings.google_service_account_file,
+            assembly_sheet_name=settings.fbs_assembly_sheet_name,
+            assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
+            fbs_list_template_sheet=settings.fbs_list_template_sheet,
+        )
         return {
-            "fbs": {
-                "sheet_configured": is_value_configured(settings.fbs_list_sheet_url)
-                and is_value_configured(settings.google_service_account_file),
-                "assembly_sheet_name": settings.fbs_assembly_sheet_name,
-                "assembly_sheet_gid": settings.fbs_assembly_sheet_gid,
-            },
+            "fbs": fbs,
             "ozon": {
                 "configured": is_value_configured(settings.ozon_client_id)
                 and is_value_configured(settings.ozon_api_key),

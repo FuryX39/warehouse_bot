@@ -37,6 +37,12 @@ def test_parse_worksheet_gid() -> None:
     assert parse_worksheet_gid("149721613") == 149721613
     assert parse_worksheet_gid("gid:149721613") == 149721613
     assert parse_worksheet_gid("GID:42") == 42
+    assert (
+        parse_worksheet_gid(
+            "https://docs.google.com/spreadsheets/d/abc/edit#gid=149721613"
+        )
+        == 149721613
+    )
     assert parse_worksheet_gid("") is None
     assert parse_worksheet_gid("assembly") is None
 
