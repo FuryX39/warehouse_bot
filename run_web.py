@@ -16,6 +16,7 @@ import errno
 import logging
 import socket
 import sys
+import traceback
 
 import uvicorn
 
@@ -27,6 +28,31 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+def _check_runtime_dependencies() -> None:
+    try:
+        import sqlalchemy
+    except ImportError as exc:
+        logger.error("Не установлен SQLAlchemy: %s", exc)
+        logger.error("На сервере выполните: %s -m pip install -r requirements.txt", sys.executable)
+        sys.exit(1)
+    version = str(getattr(sqlalchemy, "__version__", "0") or "0")
+    parts = version.split(".")
+    try:
+        major = int(parts[0])
+        minor = int(parts[1])
+        patch = int(parts[2].split("+", 1)[0])
+    except (ValueError, IndexError):
+        return
+    if (major, minor, patch) < (2, 0, 41):
+        logger.error(
+            "SQLAlchemy %s слишком старый для warehouse-web; нужен >= 2.0.41. "
+            "Выполните: %s -m pip install -r requirements.txt",
+            version,
+            sys.executable,
+        )
+        sys.exit(1)
 
 
 def _exit_if_port_busy(host: str, port: int) -> None:
@@ -51,7 +77,13 @@ def _exit_if_port_busy(host: str, port: int) -> None:
 
 
 def main() -> None:
-    settings, inventory_repo, coordinator, movement_repo, dealer_repo = create_inventory_stack()
+    _check_runtime_dependencies()
+    try:
+        settings, inventory_repo, coordinator, movement_repo, dealer_repo = create_inventory_stack()
+    except Exception as exc:
+        logger.error("Не удалось инициализировать БД и склад: %s", exc)
+        logger.error(traceback.format_exc())
+        sys.exit(1)
     if not (settings.web_dashboard_secret or "").strip():
         logger.error(
             "Веб-панель не запущена: в .env нужен непустой WEB_DASHBOARD_SECRET (пароль для входа в браузере)."
@@ -64,6 +96,7 @@ def main() -> None:
         sys.exit(1)
     except Exception as exc:
         logger.error("Не удалось создать веб-приложение: %s", exc)
+        logger.error(traceback.format_exc())
         sys.exit(1)
     _exit_if_port_busy(settings.web_host, settings.web_port)
     logger.info(

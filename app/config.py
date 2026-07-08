@@ -63,6 +63,7 @@ class Settings:
     default_stocks_sheet_url: str = ""
     fbs_list_sheet_url: str = ""
     fbs_list_template_sheet: str = "FBSTemplate"
+    fbs_assembly_sheet_name: str = "assembly"
     ozon_client_id: str = ""
     ozon_api_key: str = ""
     ozon_warehouse_id: str = ""
@@ -142,6 +143,7 @@ def load_settings() -> Settings:
         fbs_list_sheet_url=os.getenv("FBS_LIST_SHEET_URL", "").strip(),
         fbs_list_template_sheet=os.getenv("FBS_LIST_TEMPLATE_SHEET", "FBSTemplate").strip()
         or "FBSTemplate",
+        fbs_assembly_sheet_name=os.getenv("FBS_ASSEMBLY_SHEET_NAME", "assembly").strip() or "assembly",
         ozon_client_id=os.getenv("OZON_CLIENT_ID", "").strip(),
         ozon_api_key=os.getenv("OZON_API_KEY", "").strip(),
         ozon_warehouse_id=os.getenv("OZON_WAREHOUSE_ID", "").strip(),

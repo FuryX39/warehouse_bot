@@ -39,7 +39,9 @@
 
         <div id="section-labels" class="fbs-section-panel active" role="tabpanel">
           <p class="muted" style="margin:0 0 1rem;">
-            Аналог <code>/ozon_labels</code> и <code>/yandex_labels</code>: список в Google Таблице и PDF-этикетки в порядке артикула.
+            Аналог <code>/ozon_labels</code> и <code>/yandex_labels</code>: список в Google Таблице и PDF-этикетки.
+            Для Ozon порядок строк совпадает с маршрутом ТСД — лист <code>assembly</code> в той же таблице
+            (<code>FBS_ASSEMBLY_SHEET_NAME</code>).
           </p>
 
           <div class="fbs-mp-tabs" role="tablist">
@@ -49,6 +51,10 @@
           </div>
 
           <div id="mp-ozon" class="fbs-mp-panel active" role="tabpanel">
+            <p class="muted" style="margin:0 0 0.75rem;">
+              Сборочный лист на листе <code>assembly</code> задаёт порядок обхода ячеек; веб-лист сохраняет тот же
+              формат (<code>FBSTemplate</code>), меняется только порядок строк и этикеток.
+            </p>
             <dl class="fbs-status" id="ozonStatus">
               <div><dt>API</dt><dd id="ozonApiStatus">—</dd></div>
               <div><dt>Google Таблица</dt><dd id="ozonSheetStatus">—</dd></div>

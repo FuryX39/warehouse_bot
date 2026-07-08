@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.adapters.ozon import OZON_AWAITING_SHIPMENT_STATUSES, OzonAdapter, OzonFbsPosting
+from app.fbs_assembly_order import apply_assembly_order_to_ozon_rows
 from app.fbs_labels_common import build_fbs_sorted_flat_rows, build_labels_zip, merge_label_pdfs
 from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_from_template
 from app.ozon_label_pdf import normalize_ozon_package_label_pdf
@@ -49,6 +50,23 @@ def build_sorted_list_rows(postings: list[OzonFbsPosting]) -> list[OzonFbsListRo
         OzonFbsListRow(i + 1, posting_number, sku, qty, status)
         for i, (sku, posting_number, qty, status) in enumerate(flat)
     ]
+
+
+def apply_tsd_assembly_order(
+    list_rows: list[OzonFbsListRow],
+    *,
+    fbs_list_sheet_url: str = "",
+    google_service_account_file: str = "",
+    assembly_sheet_name: str = "assembly",
+) -> tuple[list[OzonFbsListRow], list[str]]:
+    """Переставить строки FBS в порядке листа assembly (маршрут ТСД по ячейкам)."""
+    return apply_assembly_order_to_ozon_rows(
+        list_rows,
+        fbs_list_sheet_url=fbs_list_sheet_url,
+        google_service_account_file=google_service_account_file,
+        assembly_sheet_name=assembly_sheet_name,
+        row_factory=OzonFbsListRow,
+    )
 
 
 def posting_numbers_in_list_order(list_rows: list[OzonFbsListRow]) -> list[str]:
@@ -178,11 +196,12 @@ def fetch_awaiting_shipment_labels(
     fbs_list_sheet_url: str = "",
     google_service_account_file: str = "",
     fbs_list_template_sheet: str = "FBSTemplate",
+    fbs_assembly_sheet_name: str = "assembly",
     ozon_label_rotate_degrees: int = 90,
     first_posting_number: str | None = None,
     last_posting_number: str | None = None,
 ) -> OzonAwaitingShipmentBundle:
-    """Список по артикулу; этикетки — по порядку отправлений на листе; лист в Google Таблице."""
+    """Список FBS; порядок — по листу assembly (ТСД); этикетки — по отправлениям на листе; запись в Google Таблицу."""
     postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
     if not postings:
         return OzonAwaitingShipmentBundle()
@@ -207,6 +226,13 @@ def fetch_awaiting_shipment_labels(
             ],
         )
 
+    list_rows, assembly_warnings = apply_tsd_assembly_order(
+        list_rows,
+        fbs_list_sheet_url=fbs_list_sheet_url,
+        google_service_account_file=google_service_account_file,
+        assembly_sheet_name=fbs_assembly_sheet_name,
+    )
+
     sheet_title = fbs_list_sheet_title()
     label_posting_order = posting_numbers_in_list_order(list_rows)
 
@@ -215,6 +241,7 @@ def fetch_awaiting_shipment_labels(
         label_posting_order,
         label_rotate_degrees=ozon_label_rotate_degrees,
     )
+    warnings = assembly_warnings + warnings
 
     sheet_url: str | None = None
     sheet_url_cfg = (fbs_list_sheet_url or "").strip()

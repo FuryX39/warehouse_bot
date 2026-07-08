@@ -54,6 +54,7 @@ from app.fbs_ship import (
     sources_for_scope,
 )
 from app.ozon_fbs_labels import (
+    apply_tsd_assembly_order,
     build_labels_zip,
     build_sorted_list_rows,
     fetch_awaiting_shipment_labels,
@@ -743,13 +744,21 @@ def create_dashboard_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        list_rows, assembly_warnings = apply_tsd_assembly_order(
+            list_rows,
+            fbs_list_sheet_url=settings.fbs_list_sheet_url,
+            google_service_account_file=settings.google_service_account_file,
+            assembly_sheet_name=settings.fbs_assembly_sheet_name,
+        )
         by_pn = {p.posting_number: p for p in postings}
         postings_ordered = [by_pn[pn] for pn in order if pn in by_pn]
         return {
             "count": len(postings_ordered),
             "status": "awaiting_deliver",
+            "warnings": assembly_warnings,
             "list_rows": [
                 {
+                    "seq": r.seq,
                     "sku": r.sku,
                     "quantity": r.quantity,
                     "posting_number": r.posting_number,
@@ -801,6 +810,7 @@ def create_dashboard_app(
                     fbs_list_sheet_url=settings.fbs_list_sheet_url,
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
+                    fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
                     ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
                     first_posting_number=first_p or None,
                     last_posting_number=last_p or None,
@@ -829,6 +839,7 @@ def create_dashboard_app(
                 "first": first_p or None,
                 "last": last_p or None,
             },
+            "warnings": bundle.warnings,
             "list_rows": [
                 {
                     "seq": r.seq,
@@ -840,7 +851,6 @@ def create_dashboard_app(
             ],
             "sheet_title": bundle.sheet_title,
             "sheet_url": bundle.sheet_url,
-            "warnings": bundle.warnings,
             "labels_token": labels_token,
         }
 
@@ -1109,6 +1119,7 @@ def create_dashboard_app(
                     fbs_list_sheet_url=settings.fbs_list_sheet_url,
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
+                    fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
                     ozon_label_rotate_degrees=settings.ozon_label_rotate_degrees,
                 ),
             )
@@ -1687,6 +1698,11 @@ def create_dashboard_app(
     @app.get("/api/config/marketplaces", dependencies=[Depends(require_login)])
     async def api_mp_config() -> dict:
         return {
+            "fbs": {
+                "sheet_configured": is_value_configured(settings.fbs_list_sheet_url)
+                and is_value_configured(settings.google_service_account_file),
+                "assembly_sheet_name": settings.fbs_assembly_sheet_name,
+            },
             "ozon": {
                 "configured": is_value_configured(settings.ozon_client_id)
                 and is_value_configured(settings.ozon_api_key),

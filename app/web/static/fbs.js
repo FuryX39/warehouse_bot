@@ -265,7 +265,12 @@
       ozonApi.textContent = cfg.ozon && cfg.ozon.configured ? "настроен" : "не настроен";
     }
     if (ozonSheet) {
-      ozonSheet.textContent = "FBS_LIST_SHEET_URL + service account";
+      var fbs = cfg.fbs || {};
+      var ozonParts = ["FBS_LIST_SHEET_URL + service account"];
+      if (fbs.assembly_sheet_name) {
+        ozonParts.push("лист «" + fbs.assembly_sheet_name + "» — порядок ТСД");
+      }
+      ozonSheet.textContent = ozonParts.join("; ");
     }
     var yandexApi = document.getElementById("yandexApiStatus");
     var yandexSheet = document.getElementById("yandexSheetStatus");
@@ -330,7 +335,7 @@
       if (dl) dl.disabled = true;
       renderListRows(data.list_rows || []);
       applySheetLink(null, null);
-      showWarnings([]);
+      showWarnings(data.warnings || []);
       if (document.getElementById("ozonSummary")) {
         document.getElementById("ozonSummary").textContent =
           (data.list_rows || []).length === 0

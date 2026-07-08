@@ -16,9 +16,9 @@ Type=simple
 # Пользователь без root; каталог проекта должен быть ему доступен на чтение/запись (БД SQLite и т.д.).
 User=REPLACE_ME
 Group=REPLACE_ME
-WorkingDirectory=/path/to/sector_warehouse_bot
+WorkingDirectory=/opt/warehouse_bot
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/path/to/sector_warehouse_bot/.venv/bin/python run_web.py
+ExecStart=/opt/warehouse_bot/.venv/bin/python /opt/warehouse_bot/run_web.py
 Restart=always
 RestartSec=5
 

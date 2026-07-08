@@ -199,6 +199,11 @@ def _open_spreadsheet(spreadsheet_url: str, credentials_path: str):
     return gc.open_by_key(extract_sheet_id(spreadsheet_url))
 
 
+def open_google_spreadsheet(spreadsheet_url: str, credentials_path: str):
+    """Открыть таблицу по URL (для чтения листа assembly и записи FBS-списков)."""
+    return _open_spreadsheet(spreadsheet_url, credentials_path)
+
+
 def _extend_template_data_rows(worksheet, *, data_row_count: int) -> None:
     """Копирует строку 2 шаблона вниз, сохраняя формат и формулы."""
     if data_row_count <= 1:
