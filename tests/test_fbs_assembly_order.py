@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from app.fbs_assembly_order import (
     parse_assembly_sheet_values,
     reorder_ozon_fbs_list_rows,
+    sku_match_key,
     sku_sort_rank_from_assembly,
 )
 from app.ozon_fbs_labels import OzonFbsListRow
@@ -53,6 +54,12 @@ def test_reorder_ozon_fbs_list_rows_by_assembly_route() -> None:
         ("SS996", "P1"),
     ]
     assert [r.seq for r in out] == [1, 2, 3]
+
+
+def test_sku_match_key_case_insensitive() -> None:
+    assert sku_match_key("SS278") == sku_match_key("ss278")
+    assert sku_match_key(" SS278 ") == sku_match_key("SS278")
+    assert sku_match_key("'SS278") == sku_match_key("SS278")
 
 
 def test_reorder_keeps_posting_lines_together() -> None:

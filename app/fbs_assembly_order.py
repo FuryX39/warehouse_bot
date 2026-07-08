@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Sequence
 
 from app.google_sheet_write import WorksheetLookupError, open_google_spreadsheet, resolve_worksheet
+
+_INVISIBLE_RE = re.compile(r"[\u200b-\u200d\ufeff]")
+
+
+def _norm_sku_raw(sku: str) -> str:
+    """Единая нормализация артикула: пробелы, NBSP, невидимые символы, кавычки из Google Sheets."""
+    s = unicodedata.normalize("NFKC", str(sku or ""))
+    s = s.replace("\u00a0", " ")
+    s = _INVISIBLE_RE.sub("", s)
+    return s.strip().strip("'\"")
+
+
+def sku_match_key(sku: str) -> str:
+    """Ключ для сопоставления артикулов assembly ↔ FBS (регистр не важен)."""
+    return _norm_sku_raw(sku).casefold()
 
 
 @dataclass(frozen=True)
@@ -54,7 +71,7 @@ def parse_assembly_sheet_values(values: list[list[str]]) -> list[AssemblySheetEn
 
     out: list[AssemblySheetEntry] = []
     for row in values[start:]:
-        sku = _norm_cell(row, sku_idx)
+        sku = _norm_sku_raw(_norm_cell(row, sku_idx))
         if not sku:
             continue
         place = _norm_cell(row, place_idx)
@@ -66,7 +83,7 @@ def sku_sort_rank_from_assembly(entries: Sequence[AssemblySheetEntry]) -> dict[s
     """Первое появление артикула в листе assembly задаёт его позицию в маршруте."""
     rank: dict[str, int] = {}
     for entry in entries:
-        key = entry.sku.casefold()
+        key = sku_match_key(entry.sku)
         if key not in rank:
             rank[key] = entry.sort_index
     return rank
@@ -101,7 +118,7 @@ def reorder_ozon_fbs_list_rows(
 
     def posting_sort_key(pn: str) -> tuple[int, int]:
         rows = by_posting[pn]
-        ranks = [sku_rank.get(str(r.sku).casefold(), big) for r in rows]
+        ranks = [sku_rank.get(sku_match_key(r.sku), big) for r in rows]
         return (min(ranks), posting_first[pn])
 
     ordered_postings = sorted(by_posting.keys(), key=posting_sort_key)
@@ -110,7 +127,7 @@ def reorder_ozon_fbs_list_rows(
         rows = by_posting[pn]
         rows_sorted = sorted(
             enumerate(rows),
-            key=lambda pair: (sku_rank.get(str(pair[1].sku).casefold(), big), pair[0]),
+            key=lambda pair: (sku_rank.get(sku_match_key(pair[1].sku), big), pair[0]),
         )
         for _, row in rows_sorted:
             flat.append(row)
@@ -192,14 +209,21 @@ def apply_assembly_order_to_ozon_rows(
     sku_rank = sku_sort_rank_from_assembly(entries)
     reordered = reorder_ozon_fbs_list_rows(list_rows, sku_rank, row_factory=row_factory)
 
-    known = {str(r.sku).casefold() for r in list_rows}
-    mapped = set(sku_rank.keys())
-    missing = sorted(known - mapped)
-    if missing:
-        sample = ", ".join(missing[:8])
-        tail = f" и ещё {len(missing) - 8}" if len(missing) > 8 else ""
+    fbs_skus_by_key: dict[str, str] = {}
+    for row in list_rows:
+        display = _norm_sku_raw(row.sku)
+        if not display:
+            continue
+        key = sku_match_key(display)
+        fbs_skus_by_key.setdefault(key, display)
+
+    missing_keys = sorted(k for k in fbs_skus_by_key if k not in sku_rank)
+    if missing_keys:
+        missing_labels = sorted((fbs_skus_by_key[k] for k in missing_keys), key=sku_match_key)
+        sample = ", ".join(missing_labels[:8])
+        tail = f" и ещё {len(missing_labels) - 8}" if len(missing_labels) > 8 else ""
         warnings.append(
-            f"В листе «{sheet}» нет {len(missing)} артикул(ов) из FBS ({sample}{tail}) — они в конце списка."
+            f"В листе «{sheet}» нет {len(missing_labels)} артикул(ов) из FBS ({sample}{tail}) — они в конце списка."
         )
 
     return reordered, warnings
