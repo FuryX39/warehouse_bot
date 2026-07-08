@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.fbs_assembly_order import (
-    extract_offer_id_from_cell,
     parse_assembly_sheet_values,
     reorder_ozon_fbs_list_rows,
     sku_match_key,
@@ -23,41 +22,28 @@ def _sample_assembly_values() -> list[list[str]]:
     ]
 
 
-def test_parse_assembly_sheet_values_skips_header_and_reads_columns() -> None:
+def test_parse_assembly_sheet_values_reads_fixed_columns_a_c_e() -> None:
     entries = parse_assembly_sheet_values(_sample_assembly_values())
     assert len(entries) == 3
     assert entries[0].sku == "SSBL997"
     assert entries[0].place == "A-01"
+    assert entries[0].quantity == 1
     assert entries[0].sort_index == 0
     assert entries[2].sku == "SS996"
 
 
-def test_parse_prefers_artikul_column_over_nomenclature() -> None:
+def test_parse_uses_column_a_not_other_columns() -> None:
     values = [
         ["Номенклатура", "Артикул", "Ячейка"],
-        ["Подушка декоративная", "SS278", "A-01"],
+        ["SS278", "SS999", "A-01", "", "3"],
     ]
     entries = parse_assembly_sheet_values(values)
     assert len(entries) == 1
     assert entries[0].sku == "SS278"
+    assert entries[0].quantity == 3
 
 
-def test_parse_extracts_offer_id_from_product_name() -> None:
-    values = [
-        ["Номенклатура", "", "Ячейка"],
-        ["Подушка SS278 синяя", "", "B-02"],
-    ]
-    entries = parse_assembly_sheet_values(values)
-    assert len(entries) == 1
-    assert entries[0].sku == "SS278"
-
-
-def test_extract_offer_id_from_cell() -> None:
-    assert extract_offer_id_from_cell("SS533") == "SS533"
-    assert extract_offer_id_from_cell("Товар SS540 красный") == "SS540"
-
-
-def test_reorder_follows_assembly_walk_top_to_bottom() -> None:
+def test_reorder_follows_column_a_top_to_bottom() -> None:
     entries = parse_assembly_sheet_values(_sample_assembly_values())
     rows = [
         SimpleNamespace(posting_number="P1", sku="SS996", quantity=1, status=""),
@@ -72,7 +58,7 @@ def test_reorder_follows_assembly_walk_top_to_bottom() -> None:
     ]
 
 
-def test_reorder_duplicate_assembly_rows_consume_fbs_lines_in_order() -> None:
+def test_reorder_same_sku_keeps_api_order_within_sku() -> None:
     entries = parse_assembly_sheet_values(
         [
             ["Номенклатура", "", "Ячейка"],

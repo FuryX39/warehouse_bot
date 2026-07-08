@@ -1,140 +1,95 @@
-"""Порядок строк FBS-списка по сборочному листу ТСД (лист assembly в bot_table / DEFAULT_STOCKS_SHEET_URL)."""
+"""Порядок FBS-списка по листу assembly из bot_table.
+
+Правило намеренно простое:
+- assembly!A:A = артикулы в нужном порядке;
+- assembly!C:C = место (для информации/диагностики);
+- assembly!E:E = количество (для информации/диагностики);
+- FBS-строки сортируются по порядку артикулов из assembly сверху вниз.
+"""
 
 from __future__ import annotations
 
-import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Sequence
 
 from app.google_sheet_write import WorksheetLookupError, open_google_spreadsheet, resolve_worksheet
 
-_INVISIBLE_RE = re.compile(r"[\u200b-\u200d\ufeff]")
-_OFFER_ID_FULL_RE = re.compile(r"^(SS[A-Z0-9]+)$", re.IGNORECASE)
-_OFFER_ID_EMBEDDED_RE = re.compile(r"SS[\s\-_]*[A-Z0-9]+", re.IGNORECASE)
-_SKIP_ROW_MARKERS = ("итого", "всего", "сумма")
+_INVISIBLE_CHARS = ("\u200b", "\u200c", "\u200d", "\ufeff")
+_SKU_COL = 0
+_PLACE_COL = 2
+_QTY_COL = 4
 
 
-def _norm_sku_raw(sku: str) -> str:
-    """Единая нормализация артикула: пробелы, NBSP, невидимые символы, кавычки из Google Sheets."""
+def clean_sku(sku: object) -> str:
+    """Артикул для вывода: убрать мусор вокруг значения, регистр не менять."""
     s = unicodedata.normalize("NFKC", str(sku or ""))
     s = s.replace("\u00a0", " ")
-    s = _INVISIBLE_RE.sub("", s)
+    for ch in _INVISIBLE_CHARS:
+        s = s.replace(ch, "")
     return s.strip().strip("'\"")
 
 
-def sku_match_key(sku: str) -> str:
-    """Ключ для сопоставления артикулов assembly ↔ FBS (регистр не важен)."""
-    return _norm_sku_raw(sku).casefold()
-
-
-def looks_like_offer_id(sku: str) -> bool:
-    return bool(_OFFER_ID_FULL_RE.match(_norm_sku_raw(sku)))
-
-
-def extract_offer_id_from_cell(value: str) -> str:
-    """
-    Артикул из ячейки assembly.
-    Поддерживает SS278 в отдельной колонке и внутри названия («Товар SS278 …»).
-    """
-    raw = _norm_sku_raw(value)
-    if not raw:
-        return ""
-    if looks_like_offer_id(raw):
-        return raw.upper()
-    match = _OFFER_ID_EMBEDDED_RE.search(raw)
-    if match:
-        return re.sub(r"[\s\-_]+", "", match.group(0)).upper()
-    return raw
-
-
-def extract_offer_ids_from_row(row: Sequence[str]) -> list[str]:
-    """Все SS-артикулы из строки assembly слева направо."""
-    out: list[str] = []
-    seen: set[str] = set()
-    for cell in row:
-        raw = _norm_sku_raw(cell)
-        if not raw:
-            continue
-        for match in _OFFER_ID_EMBEDDED_RE.finditer(raw):
-            sku = re.sub(r"[\s\-_]+", "", match.group(0)).upper()
-            key = sku_match_key(sku)
-            if key not in seen:
-                seen.add(key)
-                out.append(sku)
-    return out
+def sku_match_key(sku: object) -> str:
+    """Ключ сравнения: регистр и случайные пробелы вокруг артикула не важны."""
+    return clean_sku(sku).casefold()
 
 
 @dataclass(frozen=True)
 class AssemblySheetEntry:
     sku: str
     place: str
+    quantity: int | None
     sort_index: int
 
 
-def _norm_cell(row: Sequence[str], index: int) -> str:
+def _cell(row: Sequence[object], index: int) -> str:
     if index >= len(row):
         return ""
     return str(row[index] or "").strip()
 
 
-def _detect_assembly_columns(header: Sequence[str]) -> tuple[int, int]:
-    """Колонки артикула и ячейки; «Артикул» важнее «Номенклатура» (там часто название)."""
-    sku_idx = 0
-    place_idx = 2
-    sku_priority: int | None = None
-    lowered = [str(c or "").strip().casefold() for c in header]
-    for i, name in enumerate(lowered):
-        if not name:
-            continue
-        if "ячей" in name or name in {"место", "ячейка", "cell"}:
-            place_idx = i
-        elif any(k in name for k in ("артикул", "offer_id", "offer", "sku")):
-            sku_idx = i
-            sku_priority = 0
-        elif "номенклат" in name and sku_priority is None:
-            sku_idx = i
-            sku_priority = 1
-    return sku_idx, place_idx
+def _parse_quantity(value: object) -> int | None:
+    raw = clean_sku(value)
+    if not raw:
+        return None
+    raw = raw.replace(",", ".")
+    try:
+        return int(float(raw))
+    except ValueError:
+        return None
 
 
-def _looks_like_assembly_header(row: Sequence[str]) -> bool:
-    if not row:
-        return False
-    joined = " ".join(str(c or "").strip().casefold() for c in row if str(c or "").strip())
-    return any(k in joined for k in ("номенклат", "артикул", "ячей", "sku", "количество"))
+def _looks_like_header(row: Sequence[object]) -> bool:
+    a = _cell(row, _SKU_COL).casefold()
+    c = _cell(row, _PLACE_COL).casefold()
+    e = _cell(row, _QTY_COL).casefold()
+    return (
+        any(word in a for word in ("артикул", "номенклат", "sku", "offer"))
+        or "ячей" in c
+        or any(word in e for word in ("кол", "qty", "quantity"))
+    )
 
 
-def _assembly_data_start_and_columns(values: list[list[str]]) -> tuple[int, int, int]:
-    for i, row in enumerate(values[:15]):
-        if _looks_like_assembly_header(row):
-            sku_idx, place_idx = _detect_assembly_columns(row)
-            return i + 1, sku_idx, place_idx
-    return 0, 0, 2
-
-
-def _is_assembly_data_row(sku: str) -> bool:
-    if not sku:
-        return False
-    low = sku.casefold()
-    if any(marker in low for marker in _SKIP_ROW_MARKERS):
-        return False
-    return looks_like_offer_id(sku)
-
-
-def parse_assembly_sheet_values(values: list[list[str]]) -> list[AssemblySheetEntry]:
-    """Разбор листа assembly: все SS-артикулы сверху вниз = маршрут ТСД."""
+def parse_assembly_sheet_values(values: list[list[object]]) -> list[AssemblySheetEntry]:
+    """Прочитать assembly строго как A=артикул, C=место, E=количество."""
     if not values:
         return []
-    start, _sku_idx, place_idx = _assembly_data_start_and_columns(values)
 
     out: list[AssemblySheetEntry] = []
+    start = 1 if _looks_like_header(values[0]) else 0
     for row in values[start:]:
-        place = _norm_cell(row, place_idx)
-        for sku in extract_offer_ids_from_row(row):
-            if not _is_assembly_data_row(sku):
-                continue
-            out.append(AssemblySheetEntry(sku=sku, place=place, sort_index=len(out)))
+        sku = clean_sku(_cell(row, _SKU_COL))
+        if not sku:
+            continue
+        out.append(
+            AssemblySheetEntry(
+                sku=sku,
+                place=_cell(row, _PLACE_COL),
+                quantity=_parse_quantity(_cell(row, _QTY_COL)),
+                sort_index=len(out),
+            )
+        )
     return out
 
 
@@ -143,7 +98,7 @@ def assembly_sku_keys(entries: Sequence[AssemblySheetEntry]) -> set[str]:
 
 
 def assembly_sku_rank(entries: Sequence[AssemblySheetEntry]) -> dict[str, int]:
-    """Первое появление артикула в assembly задаёт его порядок в FBS."""
+    """Первое появление артикула в assembly!A:A задаёт его порядок в FBS."""
     rank: dict[str, int] = {}
     for entry in entries:
         key = sku_match_key(entry.sku)
@@ -159,8 +114,8 @@ def reorder_ozon_fbs_list_rows(
     row_factory,
 ) -> list:
     """
-    Порядок FBS = порядок первого появления артикула в assembly сверху вниз.
-    Нераспознанные артикулы — в конце, в исходном порядке.
+    Порядок FBS = порядок артикулов из assembly!A:A сверху вниз.
+    Никаких дополнительных сортировок по отправлению, времени, алфавиту или месту.
     """
     if not list_rows:
         return []
@@ -255,7 +210,7 @@ def apply_assembly_order_to_ozon_rows(
 
     fbs_skus_by_key: dict[str, str] = {}
     for row in list_rows:
-        display = _norm_sku_raw(row.sku)
+        display = clean_sku(row.sku)
         if not display:
             continue
         key = sku_match_key(display)
