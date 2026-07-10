@@ -21,7 +21,12 @@ def rotate_pdf_pages(pdf_bytes: bytes, degrees: int) -> bytes:
     return out.getvalue()
 
 
-def normalize_ozon_package_label_pdf(pdf_bytes: bytes, *, rotate_degrees: int = 90) -> bytes:
+def normalize_ozon_package_label_pdf(
+    pdf_bytes: bytes,
+    *,
+    rotate_degrees: int = 90,
+    strict: bool = False,
+) -> bytes:
     """
     Ozon отдаёт этикетки с «вертикальными» штрихкодами на листе;
     поворот на 90° — для печати на термопринтере в альбомной ориентации.
@@ -31,4 +36,6 @@ def normalize_ozon_package_label_pdf(pdf_bytes: bytes, *, rotate_degrees: int = 
     try:
         return rotate_pdf_pages(pdf_bytes, rotate_degrees)
     except Exception:
+        if strict:
+            raise
         return pdf_bytes

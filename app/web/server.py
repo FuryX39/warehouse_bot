@@ -108,6 +108,7 @@ from app.ozon_fbo_supply_repository import OzonFboSupplyRepository
 from app.web.warehouse_ozon_fbo_routes import register_warehouse_ozon_fbo_routes
 from app.adapters.ozon import OzonAdapter
 from app.web.warehouse_admin_routes import register_warehouse_admin_routes
+from app.web.warehouse_route_sheets_routes import register_warehouse_route_sheets_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -506,6 +507,7 @@ def create_dashboard_app(
     register_warehouse_ozon_fbo_routes(
         app, ozon_fbo_repo, require_warehouse_user, ozon_adapter, crm_repo
     )
+    register_warehouse_route_sheets_routes(app, require_warehouse_user)
     register_warehouse_receipts_routes(
         app,
         receipts_repo,

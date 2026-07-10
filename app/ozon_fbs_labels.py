@@ -145,6 +145,7 @@ def _fetch_labels_in_order(
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
     """Этикетки в порядке posting_numbers (как отправления на листе сборки)."""
     by_posting, warnings = adapter.fetch_package_label_by_posting(posting_numbers)
+    warnings.append(f"Поворот этикеток Ozon: {int(label_rotate_degrees)}°.")
     ordered_pdfs: list[bytes] = []
     seen: set[str] = set()
     for pn in posting_numbers:
@@ -156,9 +157,17 @@ def _fetch_labels_in_order(
         if raw is None:
             warnings.append(f"Нет этикетки для отправления {pn}")
             continue
-        ordered_pdfs.append(
-            normalize_ozon_package_label_pdf(raw, rotate_degrees=label_rotate_degrees)
-        )
+        try:
+            ordered_pdfs.append(
+                normalize_ozon_package_label_pdf(
+                    raw,
+                    rotate_degrees=label_rotate_degrees,
+                    strict=True,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Не удалось повернуть этикетку {pn} на {label_rotate_degrees}°: {exc}")
+            ordered_pdfs.append(raw)
     if not ordered_pdfs:
         return [], warnings
     merged = merge_label_pdfs(ordered_pdfs)
