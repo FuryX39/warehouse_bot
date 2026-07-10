@@ -12,6 +12,8 @@ from app.marketplace_route_sheets import (
     generate_vseinstrumenti_route_sheets_pdf,
     list_route_purchase_statuses,
     normalize_vseinstrumenti_route_sheet_payload,
+    route_sheet_content_disposition,
+    route_sheet_download_filename,
     save_route_purchase_statuses,
     _STATUSES_FILE,
 )
@@ -49,4 +51,10 @@ def test_route_purchase_statuses_defaults_and_save(tmp_path, monkeypatch) -> Non
     )
     assert [row["name"] for row in saved] == ["КЗ", "ПСО", "Срочно"]
     assert _STATUSES_FILE.is_file()
+
+
+def test_route_sheet_download_filename() -> None:
+    assert route_sheet_download_filename("vseinstrumenti", "2440") == "ВсеИнструменты 2440.pdf"
+    assert route_sheet_download_filename("vseinstrumenti", "") == "ВсеИнструменты.pdf"
+    assert "filename*=" in route_sheet_content_disposition("ВсеИнструменты 2440.pdf")
 

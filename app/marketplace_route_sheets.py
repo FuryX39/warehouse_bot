@@ -4,19 +4,47 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from app.pdf_fonts import get_pdf_label_fonts
 
 
 DEFAULT_ROUTE_SUPPLIER = 'ООО "ШАЙН СИСТЕМС"'
 DEFAULT_ROUTE_STATUSES = ("КЗ", "ПСО")
+ROUTE_SHEET_MARKETPLACE_TITLES = {
+    "vseinstrumenti": "ВсеИнструменты",
+}
 _STATUSES_LOCK = threading.Lock()
 _STATUSES_FILE = Path(__file__).resolve().parent.parent / "data" / "route_sheet_purchase_statuses.json"
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def route_sheet_download_filename(marketplace_id: str, purchase_number: str) -> str:
+    title = ROUTE_SHEET_MARKETPLACE_TITLES.get(marketplace_id, marketplace_id).strip()
+    number = str(purchase_number or "").strip()
+    parts = [part for part in (title, number) if part]
+    raw = " ".join(parts) if parts else "маршрутный_лист"
+    safe = _INVALID_FILENAME_CHARS.sub("_", raw).strip(" .")
+    if not safe.lower().endswith(".pdf"):
+        safe = f"{safe}.pdf"
+    return safe
+
+
+def route_sheet_content_disposition(filename: str) -> str:
+    raw = (filename or "route_sheet.pdf").strip() or "route_sheet.pdf"
+    ascii_name = "".join(
+        c if ord(c) < 128 and (c.isalnum() or c in "._- ") else "_" for c in raw
+    ).strip() or "route_sheet.pdf"
+    if not ascii_name.lower().endswith(".pdf"):
+        ascii_name = f"{ascii_name}.pdf"
+    utf8_name = quote(raw)
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
 
 @dataclass(frozen=True)
