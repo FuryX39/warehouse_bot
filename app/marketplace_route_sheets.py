@@ -196,7 +196,7 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
     ]
     usable_width = page_width - left_margin - right_margin
     col_width = usable_width / 2
-    font_size = 24
+    font_size = 20
     row_height = 36 * mm
     usable_height = page_height - top_margin - bottom_margin
     for pallet_num in range(1, data.pallet_count + 1):
