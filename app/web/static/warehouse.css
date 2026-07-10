@@ -266,6 +266,16 @@ body.wh-body {
   background: #fff;
 }
 
+.wh-route-form select {
+  width: 100%;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  color: var(--wh-text);
+  background: #fff;
+}
+
 .wh-route-form input:disabled {
   background: #edf2f7;
   color: var(--wh-muted);

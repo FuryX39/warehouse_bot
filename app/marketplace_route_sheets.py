@@ -195,8 +195,7 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
         ("Кол-во паллет", str(data.pallet_count)),
     ]
     usable_width = page_width - left_margin - right_margin
-    label_col_width = usable_width * 0.34
-    value_col_width = usable_width - label_col_width
+    col_width = usable_width / 2
     font_size = 24
     row_height = 36 * mm
     usable_height = page_height - top_margin - bottom_margin
@@ -208,7 +207,7 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
             story.append(Spacer(1, top_spacer))
         table = Table(
             rows,
-            colWidths=[label_col_width, value_col_width],
+            colWidths=[col_width, col_width],
             rowHeights=[row_height] * len(rows),
             hAlign="CENTER",
         )
@@ -221,6 +220,7 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
                     ("GRID", (0, 0), (-1, -1), 1.4, colors.black),
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("WORDWRAP", (0, 0), (-1, -1), True),
                     ("LEFTPADDING", (0, 0), (-1, -1), 10),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 10),
                     ("TOPPADDING", (0, 0), (-1, -1), 8),
