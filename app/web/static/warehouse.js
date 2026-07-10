@@ -252,6 +252,10 @@
       window.WhRouteSheets.render(tab, item);
       return;
     }
+    if (tab.id === "tools" && window.WhTools) {
+      window.WhTools.render(tab, item);
+      return;
+    }
     if (tab.id === "products" && item.id === "catalog" && window.WhProducts) {
       window.WhProducts.renderCatalog(tab, item);
       return;

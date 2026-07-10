@@ -72,6 +72,13 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "tools",
+        "title": "Доп. инструменты",
+        "items": [
+            {"id": "pdf-merge", "title": "PDFMerge"},
+        ],
+    },
+    {
         "id": "tasks",
         "title": "Задачи",
         "items": [

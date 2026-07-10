@@ -295,6 +295,68 @@ body.wh-body {
   }
 }
 
+.wh-tools-card {
+  background: #f8fafc;
+  border: 1px solid var(--wh-border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  max-width: 760px;
+}
+
+.wh-pdf-merge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.wh-pdf-merge-list-wrap {
+  margin-bottom: 1rem;
+}
+
+.wh-pdf-merge-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wh-pdf-merge-item {
+  display: grid;
+  grid-template-columns: 2rem 1fr auto auto;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 0.45rem;
+}
+
+.wh-pdf-merge-index {
+  color: var(--wh-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wh-pdf-merge-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wh-pdf-merge-size {
+  color: var(--wh-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.wh-tools-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .wh-content-panel {
   margin-top: 0.5rem;
 }
