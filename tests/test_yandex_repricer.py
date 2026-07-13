@@ -14,8 +14,8 @@ from app.yandex_repricer import (
 
 def test_needs_reprice_thresholds() -> None:
     catalog = 1000.0
-    assert not _needs_reprice(921, catalog)
-    assert _needs_reprice(920, catalog)
+    assert not _needs_reprice(971, catalog)
+    assert _needs_reprice(970, catalog)
     assert not _needs_reprice(1000, catalog)
     assert not _needs_reprice(1099, catalog)
     assert _needs_reprice(1100, catalog)
