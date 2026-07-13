@@ -252,6 +252,10 @@
       window.WhRouteSheets.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "repricer" && window.WhRepricer) {
+      window.WhRepricer.render(tab, item);
+      return;
+    }
     if (tab.id === "tools" && window.WhTools) {
       window.WhTools.render(tab, item);
       return;
