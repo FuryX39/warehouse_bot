@@ -46,20 +46,29 @@
       .join("");
   }
 
+  function formatCatalogPrice(row) {
+    if (row.missing_catalog_price || row.catalog_price == null) {
+      return '<span class="wh-repricer-missing-price">' + esc(row.note || "У товара нет выбранного вида цен") + "</span>";
+    }
+    return formatMoney(row.catalog_price);
+  }
+
   function renderPreviewTable(rows) {
     if (!rows || !rows.length) {
-      return '<p class="wh-muted">Нет строк с ценой на витрине для предпросмотра.</p>';
+      return '<p class="wh-muted">Нет строк для предпросмотра.</p>';
     }
     var body = rows
       .map(function (row) {
-        var rowClass = row.updated ? " wh-repricer-row-updated" : "";
+        var rowClass = "";
+        if (row.updated) rowClass = " wh-repricer-row-updated";
+        else if (row.missing_catalog_price) rowClass = " wh-repricer-row-missing-price";
         return (
           "<tr class=\"" + rowClass + '">' +
           "<td><code>" + esc(row.sku) + "</code></td>" +
           "<td>" + esc(row.name) + "</td>" +
           "<td>" + formatMoney(row.showcase_price) + "</td>" +
           "<td>" + formatMoney(row.estimated_card_price) + "</td>" +
-          "<td>" + formatMoney(row.catalog_price) + "</td>" +
+          "<td>" + formatCatalogPrice(row) + "</td>" +
           "<td>" + formatMoney(row.recommended_seller_price) + "</td>" +
           "<td>" + esc(row.note) + "</td>" +
           "</tr>"
@@ -167,7 +176,9 @@
             (stats.with_showcase || 0) +
             " с витриной (" +
             (stats.with_catalog_price || 0) +
-            " с ценой в каталоге). Файл скачан.";
+            " с ценой в каталоге, " +
+            (stats.skipped_no_catalog_price || 0) +
+            " без выбранного вида цен). Файл скачан.";
         })
         .catch(function (err) {
           msg.className = "wh-msg wh-msg-error";

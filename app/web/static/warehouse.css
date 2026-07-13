@@ -390,6 +390,15 @@ body.wh-body {
   background: #f0fdf4;
 }
 
+.wh-repricer-row-missing-price td {
+  background: #fff7ed;
+}
+
+.wh-repricer-missing-price {
+  color: #c2410c;
+  font-size: 0.88rem;
+}
+
 .wh-content-panel {
   margin-top: 0.5rem;
 }

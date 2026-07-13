@@ -63,11 +63,18 @@ def register_warehouse_repricer_routes(
             raise HTTPException(status_code=400, detail="Нужен файл Excel в формате .xlsx")
 
         try:
+            meta = await asyncio.to_thread(crm_repo.get_meta)
+            price_types = meta.get("price_types") or []
+            price_type_name = next(
+                (str(pt.get("name") or "").strip() for pt in price_types if int(pt.get("id") or 0) == pt_id),
+                "",
+            )
             result = await asyncio.to_thread(
                 process_yandex_prices_workbook,
                 data,
                 catalog_repo=catalog_repo,
                 price_type_id=pt_id,
+                price_type_name=price_type_name,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -87,13 +94,27 @@ def register_warehouse_repricer_routes(
                 "catalog_price": row.catalog_price,
                 "recommended_seller_price": row.recommended_seller_price,
                 "updated": row.updated,
+                "missing_catalog_price": row.missing_catalog_price,
                 "note": row.note,
             }
             for row in result.rows
             if row.showcase_price is not None
         ]
         updated_preview = [row for row in preview_rows if row["updated"]]
-        preview = (updated_preview or preview_rows)[:_PREVIEW_MAX_ROWS]
+        missing_preview = [row for row in preview_rows if row["missing_catalog_price"]]
+        preview: list[dict] = []
+        seen_skus: set[str] = set()
+        for bucket in (updated_preview, missing_preview):
+            for row in bucket:
+                sku = str(row.get("sku") or "")
+                if not sku or sku in seen_skus:
+                    continue
+                seen_skus.add(sku)
+                preview.append(row)
+                if len(preview) >= _PREVIEW_MAX_ROWS:
+                    break
+            if len(preview) >= _PREVIEW_MAX_ROWS:
+                break
 
         return Response(
             content=result.workbook_bytes,

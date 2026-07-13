@@ -36,6 +36,7 @@ class RepricerRowResult:
     catalog_price: Optional[float]
     recommended_seller_price: Optional[int]
     updated: bool
+    missing_catalog_price: bool
     note: str
 
 
@@ -233,6 +234,7 @@ def process_yandex_prices_workbook(
     *,
     catalog_repo: Any,
     price_type_id: int,
+    price_type_name: str = "",
 ) -> RepricerResult:
     try:
         from openpyxl import load_workbook
@@ -251,6 +253,11 @@ def process_yandex_prices_workbook(
     header_idx = _find_header_row(rows)
     cols = _column_map(rows[header_idx])
     prices_by_sku = _catalog_price_map(catalog_repo, price_type_id)
+    missing_price_label = (
+        f"У товара нет вида цен «{price_type_name.strip()}»"
+        if price_type_name and price_type_name.strip()
+        else "У товара нет выбранного вида цен"
+    )
 
     results: list[RepricerRowResult] = []
     stats = {
@@ -279,6 +286,7 @@ def process_yandex_prices_workbook(
         estimated_card: Optional[int] = None
         recommended: Optional[int] = None
         updated = False
+        missing_catalog_price = False
         note = ""
 
         if showcase is None or showcase <= 0:
@@ -289,7 +297,8 @@ def process_yandex_prices_workbook(
             estimated_card = card_from_showcase(showcase)
             if catalog_price is None:
                 stats["skipped_no_catalog_price"] += 1
-                note = "нет цены в выбранном виде цен"
+                missing_catalog_price = True
+                note = missing_price_label
             else:
                 stats["with_catalog_price"] += 1
                 if _needs_reprice(float(estimated_card), catalog_price):
@@ -320,6 +329,7 @@ def process_yandex_prices_workbook(
                 catalog_price=catalog_price,
                 recommended_seller_price=recommended,
                 updated=updated,
+                missing_catalog_price=missing_catalog_price,
                 note=note,
             )
         )
