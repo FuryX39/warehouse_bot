@@ -21,7 +21,7 @@ _CARD_TIERS: tuple[tuple[float, float, float], ...] = (
     (1500, 10_000_000, 0.9700),
 )
 
-_CARD_HIGHER_THRESHOLD = 1.30  # меняем, если цена по карте выше вида цен на 30%+
+_CARD_HIGHER_THRESHOLD = 1.10  # меняем, если цена по карте выше вида цен на 10%+
 _CARD_LOWER_THRESHOLD = 0.92   # меняем, если цена по карте ниже вида цен на 8%+
 
 
@@ -204,11 +204,11 @@ def _reprice_note(card_price: float, catalog_price: float, *, updated: bool) -> 
     if updated:
         if card_price < catalog_price:
             return "цена по карте ниже вида цен на 8% и более"
-        return "цена по карте выше вида цен на 30% и более"
+        return "цена по карте выше вида цен на 10% и более"
     if card_price < catalog_price:
         return "цена по карте ниже, но менее чем на 8%"
     if card_price > catalog_price:
-        return "цена по карте выше, но менее чем на 30%"
+        return "цена по карте выше, но менее чем на 10%"
     return "цена по карте совпадает с видом цен"
 
 

@@ -17,8 +17,8 @@ def test_needs_reprice_thresholds() -> None:
     assert not _needs_reprice(921, catalog)
     assert _needs_reprice(920, catalog)
     assert not _needs_reprice(1000, catalog)
-    assert not _needs_reprice(1299, catalog)
-    assert _needs_reprice(1300, catalog)
+    assert not _needs_reprice(1099, catalog)
+    assert _needs_reprice(1100, catalog)
 
 
 def test_seller_from_target_card_never_undershoots_on_raise() -> None:
