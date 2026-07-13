@@ -97,6 +97,47 @@
     return meta.marking_types[0] ? meta.marking_types[0].id : null;
   }
 
+  function parseMmNumber(raw) {
+    var text = String(raw || "").trim().replace(",", ".");
+    if (!text) return null;
+    var val = parseFloat(text);
+    if (Number.isNaN(val) || val < 0) return null;
+    return val;
+  }
+
+  function formatMmNumber(val) {
+    if (val == null || Number.isNaN(val)) return "";
+    return String(val % 1 === 0 ? val : parseFloat(val.toFixed(6)));
+  }
+
+  function calcVolumeLiters(width, height, length) {
+    var w = parseMmNumber(width);
+    var h = parseMmNumber(height);
+    var l = parseMmNumber(length);
+    if (w == null || h == null || l == null) return "";
+    return formatMmNumber((w * h * l) / 1000000);
+  }
+
+  function bindVolumeHints(root) {
+    var widthEl = root.querySelector("#whPrWidth");
+    var heightEl = root.querySelector("#whPrHeight");
+    var lengthEl = root.querySelector("#whPrLength");
+    var volumeEl = root.querySelector("#whPrVolume");
+    if (!widthEl || !heightEl || !lengthEl || !volumeEl) return;
+    function sync() {
+      var calc = calcVolumeLiters(widthEl.value, heightEl.value, lengthEl.value);
+      if (!volumeEl.value.trim()) {
+        volumeEl.placeholder = calc ? "≈ " + calc + " л" : "Считается из габаритов (л)";
+      } else {
+        volumeEl.placeholder = "Указан вручную";
+      }
+    }
+    [widthEl, heightEl, lengthEl, volumeEl].forEach(function (el) {
+      el.addEventListener("input", sync);
+    });
+    sync();
+  }
+
   function buildSelectOptions(items, selectedId) {
     var html = '<option value="">—</option>';
     (items || []).forEach(function (it) {
@@ -318,7 +359,10 @@
       filterField("barcode", "Штрихкод", "text") +
       filterField("description", "Описание", "text") +
       filterField("weight", "Вес", "text") +
-      filterField("volume", "Объем", "text") +
+      filterField("width_mm", "Ширина, мм", "text") +
+      filterField("height_mm", "Высота, мм", "text") +
+      filterField("length_mm", "Длина, мм", "text") +
+      filterField("volume", "Объем, л", "text") +
       "</div>" +
       '<div class="wh-form-actions">' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whCatApplyFilter">Применить</button>' +
@@ -694,7 +738,7 @@
       '<div class="wh-modal-header"><h3>Массовая загрузка товаров</h3>' +
       '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
       '<div class="wh-modal-body">' +
-      "<p>Загрузите Excel-файл по шаблону. Комплекты через импорт добавить нельзя.</p>" +
+      "<p>Загрузите Excel-файл по шаблону. Существующие товары обновляются по артикулу. Комплекты через импорт изменить нельзя.</p>" +
       '<div class="wh-import-actions">' +
       '<a class="wh-btn" id="whCatImportTemplate" href="/api/warehouse/catalog/products/import/template">Скачать шаблон Excel</a>' +
       "</div>" +
@@ -758,9 +802,10 @@
           var ct = (r.headers.get("content-type") || "").toLowerCase();
           if (ct.indexOf("spreadsheetml") !== -1 || ct.indexOf("octet-stream") !== -1) {
             var created = parseInt(r.headers.get("X-Import-Created") || "0", 10) || 0;
+            var updated = parseInt(r.headers.get("X-Import-Updated") || "0", 10) || 0;
             var failed = parseInt(r.headers.get("X-Import-Failed") || "0", 10) || 0;
             return r.blob().then(function (blob) {
-              return { kind: "errors", blob: blob, created: created, failed: failed };
+              return { kind: "errors", blob: blob, created: created, updated: updated, failed: failed };
             });
           }
           return r.text().then(function (text) {
@@ -785,15 +830,21 @@
             msg.textContent =
               "Добавлено: " +
               result.created +
+              ", обновлено: " +
+              result.updated +
               ". Ошибок: " +
               result.failed +
               ". Скачан файл с описанием проблем по строкам.";
-            if (result.created > 0) renderList();
+            if (result.created > 0 || result.updated > 0) renderList();
             return;
           }
           msg.className = "wh-msg wh-msg-ok";
           msg.textContent =
-            "Успешно добавлено товаров: " + (result.data.created || 0) + ".";
+            "Добавлено: " +
+            (result.data.created || 0) +
+            ", обновлено: " +
+            (result.data.updated || 0) +
+            ".";
           renderList();
           setTimeout(close, 1200);
         })
@@ -1019,7 +1070,11 @@
           external_code: "",
           unit_id: defaultUnitId(),
           weight: "",
+          width_mm: "",
+          height_mm: "",
+          length_mm: "",
           volume: "",
+          volume_manual: false,
           marking_type_id: defaultMarkingId(),
           barcodes: [],
           components: [],
@@ -1040,6 +1095,12 @@
             : (meta.price_types || []).map(function (pt) {
                 return { price_type_id: pt.id, price_type_name: pt.name, price: null };
               });
+        var volumeValue = p.volume_manual ? p.volume || "" : "";
+        var volumePlaceholder = p.volume_manual
+          ? "Указан вручную"
+          : p.volume
+            ? "≈ " + p.volume + " л"
+            : "Считается из габаритов (л)";
         var pricesHtml = renderProductPriceFields(pricesList);
         var kitSectionNum = formIsKit ? "5" : "4";
         root.innerHTML =
@@ -1066,7 +1127,14 @@
           '<div><label>Внешний код</label><input type="text" id="whPrExtCode" value="' + esc(p.external_code) + '" /></div>' +
           '<div><label>Единица измерения</label><select id="whPrUnit" data-prev="' + esc(p.unit_id || "") + '">' + buildSelectOptions(meta.units, p.unit_id) + "</select></div>" +
           '<div><label>Вес</label><input type="text" id="whPrWeight" value="' + esc(p.weight) + '" /></div>' +
-          '<div><label>Объем</label><input type="text" id="whPrVolume" value="' + esc(p.volume) + '" /></div>' +
+          '<div><label>Ширина, мм</label><input type="text" id="whPrWidth" value="' + esc(p.width_mm) + '" inputmode="decimal" /></div>' +
+          '<div><label>Высота, мм</label><input type="text" id="whPrHeight" value="' + esc(p.height_mm) + '" inputmode="decimal" /></div>' +
+          '<div><label>Длина, мм</label><input type="text" id="whPrLength" value="' + esc(p.length_mm) + '" inputmode="decimal" /></div>' +
+          '<div><label>Объем, л</label><input type="text" id="whPrVolume" value="' +
+          esc(volumeValue) +
+          '" placeholder="' +
+          esc(volumePlaceholder) +
+          '" inputmode="decimal" /></div>' +
           "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">2. Маркировка</h4>' +
           '<div class="wh-form-row"><div><label>Тип маркировки</label><select id="whPrMarking" data-prev="' + esc(p.marking_type_id || "") + '">' + buildSelectOptions(meta.marking_types, p.marking_type_id) + "</select></div></div></section>" +
@@ -1097,6 +1165,7 @@
             renderForm(editingId, formIsKit);
           });
         });
+        bindVolumeHints(root);
 
         root.querySelector("#whCatBackList").addEventListener("click", function () {
           editingId = null;
@@ -1262,6 +1331,9 @@
       external_code: root.querySelector("#whPrExtCode").value.trim(),
       unit_id: root.querySelector("#whPrUnit").value || null,
       weight: root.querySelector("#whPrWeight").value.trim(),
+      width_mm: root.querySelector("#whPrWidth").value.trim(),
+      height_mm: root.querySelector("#whPrHeight").value.trim(),
+      length_mm: root.querySelector("#whPrLength").value.trim(),
       volume: root.querySelector("#whPrVolume").value.trim(),
       marking_type_id: root.querySelector("#whPrMarking").value || null,
       barcodes: barcodes,

@@ -22,7 +22,10 @@ _TEMPLATE_HEADERS = (
     "Страна",
     "Единица измерения",
     "Вес",
-    "Объём",
+    "Ширина, мм",
+    "Высота, мм",
+    "Длина, мм",
+    "Объём, л",
     "Тип маркировки",
     "Штрихкоды",
 )
@@ -38,6 +41,9 @@ _EXAMPLE_ROW = (
     "Россия",
     "шт",
     "",
+    "100",
+    "50",
+    "20",
     "",
     "Не подлежит маркировке",
     "4601234567890",
@@ -50,6 +56,7 @@ _ROW_HEADER = "Строка в файле"
 @dataclass(frozen=True)
 class CatalogImportResult:
     created: int
+    updated: int
     failed: int
     error_report: bytes | None
     total_rows: int
@@ -136,6 +143,9 @@ def build_import_template(meta: dict[str, list[dict[str, Any]]]) -> bytes:
     ref.append(["Подсказки"])
     ref.append(["Поля со звёздочкой (*) обязательны."])
     ref.append(["Штрихкоды — через точку с запятой, формат Code128."])
+    ref.append(["Объём можно не указывать: посчитается из ширины, высоты и длины (мм) в литрах."])
+    ref.append(["Если артикул уже есть в каталоге, строка обновит существующий товар."])
+    ref.append(["Пустая колонка «Штрихкоды» при обновлении не меняет штрихкоды товара."])
     ref.append(["Строка с примером (2-я) при загрузке пропускается, если артикул ART-001."])
     ref.append(["Комплекты через этот импорт добавить нельзя."])
 
@@ -200,10 +210,12 @@ def import_products_from_xlsx(repo: CatalogRepository, data: bytes) -> CatalogIm
     if not parsed_rows:
         raise ValueError("В файле нет строк с товарами для загрузки")
 
+    by_sku, by_code, _ = repo.build_product_import_index()
     seen_skus: dict[str, int] = {}
     seen_codes: dict[str, int] = {}
     seen_barcodes: dict[str, int] = {}
     created = 0
+    updated = 0
     failed_rows: list[tuple[int, list[str], str]] = []
 
     for row_idx, values in parsed_rows:
@@ -218,6 +230,9 @@ def import_products_from_xlsx(repo: CatalogRepository, data: bytes) -> CatalogIm
             country,
             unit_name,
             weight,
+            width_mm,
+            height_mm,
+            length_mm,
             volume,
             marking_name,
             barcodes_raw,
@@ -276,24 +291,56 @@ def import_products_from_xlsx(repo: CatalogRepository, data: bytes) -> CatalogIm
                 "country": country,
                 "unit_id": unit_id,
                 "weight": weight,
+                "width_mm": width_mm,
+                "height_mm": height_mm,
+                "length_mm": length_mm,
                 "volume": volume,
                 "marking_type_id": marking_type_id,
-                "barcodes": barcodes,
                 "components": [],
             }
-            repo.create_product(payload)
+            if barcodes:
+                payload["barcodes"] = barcodes
+
+            existing = by_sku.get(sku_key)
+            if existing:
+                if existing.get("is_kit"):
+                    raise ValueError("Комплект нельзя изменить через массовую загрузку")
+                saved = repo.update_product(int(existing["id"]), payload)
+                if saved is None:
+                    raise ValueError("Товар не найден")
+                updated += 1
+                old_code_key = str(existing.get("code") or "").strip().casefold()
+                existing["code"] = saved.code
+                by_code[code_key] = existing
+                if old_code_key and old_code_key != code_key:
+                    if by_code.get(old_code_key, {}).get("id") == existing["id"]:
+                        del by_code[old_code_key]
+            else:
+                if "barcodes" not in payload:
+                    payload["barcodes"] = []
+                saved = repo.create_product(payload)
+                created += 1
+                by_sku[sku_key] = {
+                    "id": int(saved.id),
+                    "name": saved.name,
+                    "sku": saved.sku,
+                    "code": saved.code,
+                    "is_kit": bool(saved.is_kit),
+                    "image_url": saved.image_url or "",
+                }
+                by_code[code_key] = by_sku[sku_key]
 
             seen_skus[sku_key] = row_idx
             seen_codes[code_key] = row_idx
             for barcode in barcodes:
                 seen_barcodes[barcode.casefold()] = row_idx
-            created += 1
         except ValueError as exc:
             failed_rows.append((row_idx, values, str(exc)))
 
     error_report = _build_error_report(failed_rows) if failed_rows else None
     return CatalogImportResult(
         created=created,
+        updated=updated,
         failed=len(failed_rows),
         error_report=error_report,
         total_rows=len(parsed_rows),

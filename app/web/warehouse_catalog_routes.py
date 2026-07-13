@@ -240,13 +240,19 @@ def register_warehouse_catalog_routes(
                 headers={
                     "Content-Disposition": 'attachment; filename="catalog_import_errors.xlsx"',
                     "X-Import-Created": str(result.created),
+                    "X-Import-Updated": str(result.updated),
                     "X-Import-Failed": str(result.failed),
                     "X-Import-Total": str(result.total_rows),
                 },
             )
-        if stock_repo is not None and result.created:
+        if stock_repo is not None and (result.created or result.updated):
             stock_repo.rebuild_all()
-        return {"ok": True, "created": result.created, "total_rows": result.total_rows}
+        return {
+            "ok": True,
+            "created": result.created,
+            "updated": result.updated,
+            "total_rows": result.total_rows,
+        }
 
     @app.get("/api/warehouse/catalog/barcodes/import/template")
     async def api_catalog_barcodes_import_template(
@@ -452,6 +458,9 @@ def _filters_from_query(params: Any) -> dict[str, str]:
         "country",
         "description",
         "weight",
+        "width_mm",
+        "height_mm",
+        "length_mm",
         "volume",
         "barcode",
     )

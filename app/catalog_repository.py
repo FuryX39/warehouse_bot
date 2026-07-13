@@ -86,7 +86,11 @@ class CatalogProduct(_Base):
     external_code: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     unit_id: Mapped[int] = mapped_column(Integer, ForeignKey("catalog_units.id"), nullable=True)
     weight: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    width_mm: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    height_mm: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    length_mm: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     volume: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    volume_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     marking_type_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("catalog_marking_types.id"), nullable=True
     )
@@ -170,7 +174,11 @@ class CatalogProductRow:
     unit_id: Optional[int]
     unit_name: str
     weight: str
+    width_mm: str
+    height_mm: str
+    length_mm: str
     volume: str
+    volume_manual: bool = False
     marking_type_id: Optional[int]
     marking_type_name: str
     barcodes: list[dict[str, str]] = field(default_factory=list)
@@ -207,6 +215,65 @@ def _normalize_barcode_group(group: str) -> str:
     return str(group or "").strip()[:128]
 
 
+def _format_mm_number(val: Decimal) -> str:
+    if val == val.to_integral_value():
+        return str(int(val))
+    return format(val.normalize(), "f").rstrip("0").rstrip(".")
+
+
+def _parse_optional_mm(raw: object, *, field_label: str) -> str:
+    text = str(raw or "").strip().replace(",", ".")
+    if not text:
+        return ""
+    try:
+        val = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field_label} должна быть числом (мм)") from exc
+    if val < 0:
+        raise ValueError(f"{field_label} не может быть отрицательной")
+    return _format_mm_number(val)[:32]
+
+
+MM3_PER_LITER = Decimal("1000000")
+
+
+def compute_volume_liters(width_mm: object, height_mm: object, length_mm: object) -> str:
+    values: list[Decimal] = []
+    for raw, label in (
+        (width_mm, "Ширина"),
+        (height_mm, "Высота"),
+        (length_mm, "Длина"),
+    ):
+        text = str(raw or "").strip().replace(",", ".")
+        if not text:
+            return ""
+        try:
+            val = Decimal(text)
+        except InvalidOperation as exc:
+            raise ValueError(f"{label} должна быть числом (мм)") from exc
+        if val < 0:
+            raise ValueError(f"{label} не может быть отрицательной")
+        values.append(val)
+    return _format_mm_number(values[0] * values[1] * values[2] / MM3_PER_LITER)[:32]
+
+
+def resolve_product_volume(
+    volume_raw: object,
+    width_mm: object,
+    height_mm: object,
+    length_mm: object,
+    *,
+    volume_manual: bool = False,
+) -> str:
+    manual = str(volume_raw or "").strip()
+    if volume_manual and manual:
+        return manual[:32]
+    computed = compute_volume_liters(width_mm, height_mm, length_mm)
+    if computed:
+        return computed
+    return manual[:32]
+
+
 def barcode_display_name(item: Any) -> str:
     if isinstance(item, dict):
         label = _normalize_barcode_label(item.get("label"))
@@ -240,6 +307,7 @@ class CatalogRepository:
         self._migrate_product_group_cost()
         self._migrate_barcode_label()
         self._migrate_barcode_group()
+        self._migrate_product_dimensions()
         self._seed_defaults()
 
     def _migrate_barcode_group(self) -> None:
@@ -274,6 +342,32 @@ class CatalogRepository:
                     "ADD COLUMN label VARCHAR(128) NOT NULL DEFAULT ''"
                 )
             )
+            session.commit()
+
+    def _migrate_product_dimensions(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_products" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_products")}
+        additions = ("width_mm", "height_mm", "length_mm")
+        with Session(self.engine) as session:
+            for col_name in additions:
+                if col_name in cols:
+                    continue
+                session.execute(
+                    text(
+                        f"ALTER TABLE catalog_products "
+                        f"ADD COLUMN {col_name} VARCHAR(32) NOT NULL DEFAULT ''"
+                    )
+                )
+            if "volume_manual" not in cols:
+                session.execute(
+                    text(
+                        "ALTER TABLE catalog_products "
+                        "ADD COLUMN volume_manual BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
             session.commit()
 
     def _migrate_product_group_cost(self) -> None:
@@ -685,6 +779,9 @@ class CatalogRepository:
             "country": CatalogProduct.country,
             "description": CatalogProduct.description,
             "weight": CatalogProduct.weight,
+            "width_mm": CatalogProduct.width_mm,
+            "height_mm": CatalogProduct.height_mm,
+            "length_mm": CatalogProduct.length_mm,
             "volume": CatalogProduct.volume,
         }
         for key, col in text_map.items():
@@ -834,10 +931,11 @@ class CatalogRepository:
             raise ValueError("Артикул обязателен")
         if not code:
             raise ValueError("Код обязателен")
-        barcodes_raw = data.get("barcodes") or []
-        if not isinstance(barcodes_raw, list):
+        update_barcodes = "barcodes" in data
+        barcodes_raw = data.get("barcodes") if update_barcodes else []
+        if update_barcodes and not isinstance(barcodes_raw, list):
             raise ValueError("barcodes должен быть массивом")
-        barcodes = self._normalize_barcodes(barcodes_raw)
+        barcodes = self._normalize_barcodes(barcodes_raw) if update_barcodes else []
         components_raw = data.get("components") or []
         if not isinstance(components_raw, list):
             raise ValueError("components должен быть массивом")
@@ -872,20 +970,21 @@ class CatalogRepository:
             self._apply_product_fields(row, data, sku, code, name)
             row.updated_at_ts = now
             session.flush()
-            self._validate_barcodes_unique(session, barcodes, exclude_product_id=int(row.id))
-            session.execute(
-                delete(CatalogProductBarcode).where(CatalogProductBarcode.product_id == row.id)
-            )
-            for i, bc in enumerate(barcodes):
-                session.add(
-                    CatalogProductBarcode(
-                        product_id=int(row.id),
-                        barcode=bc["barcode"],
-                        label=bc.get("label", ""),
-                        barcode_group=bc.get("group", ""),
-                        sort_order=i,
-                    )
+            if update_barcodes:
+                self._validate_barcodes_unique(session, barcodes, exclude_product_id=int(row.id))
+                session.execute(
+                    delete(CatalogProductBarcode).where(CatalogProductBarcode.product_id == row.id)
                 )
+                for i, bc in enumerate(barcodes):
+                    session.add(
+                        CatalogProductBarcode(
+                            product_id=int(row.id),
+                            barcode=bc["barcode"],
+                            label=bc.get("label", ""),
+                            barcode_group=bc.get("group", ""),
+                            sort_order=i,
+                        )
+                    )
             if is_kit:
                 comps = self._normalize_components(components_raw)
                 self._validate_kit_graph(session, int(row.id), comps)
@@ -928,7 +1027,17 @@ class CatalogRepository:
         row.external_code = str(data.get("external_code") or "").strip()[:128]
         row.unit_id = _opt_int(data.get("unit_id"))
         row.weight = str(data.get("weight") or "").strip()[:32]
-        row.volume = str(data.get("volume") or "").strip()[:32]
+        row.width_mm = _parse_optional_mm(data.get("width_mm"), field_label="Ширина")
+        row.height_mm = _parse_optional_mm(data.get("height_mm"), field_label="Высота")
+        row.length_mm = _parse_optional_mm(data.get("length_mm"), field_label="Длина")
+        row.volume_manual = bool(str(data.get("volume") or "").strip())
+        row.volume = resolve_product_volume(
+            data.get("volume"),
+            row.width_mm,
+            row.height_mm,
+            row.length_mm,
+            volume_manual=row.volume_manual,
+        )
         row.marking_type_id = _opt_int(data.get("marking_type_id"))
 
     def _normalize_barcodes(self, raw: list) -> list[dict[str, str]]:
@@ -1136,7 +1245,11 @@ class CatalogRepository:
             unit_id=row.unit_id,
             unit_name=unit_name,
             weight=row.weight or "",
+            width_mm=row.width_mm or "",
+            height_mm=row.height_mm or "",
+            length_mm=row.length_mm or "",
             volume=row.volume or "",
+            volume_manual=bool(row.volume_manual),
             marking_type_id=row.marking_type_id,
             marking_type_name=marking_name,
             barcodes=barcodes,
@@ -1163,7 +1276,11 @@ class CatalogRepository:
             "unit_id": row.unit_id,
             "unit_name": row.unit_name,
             "weight": row.weight,
+            "width_mm": row.width_mm,
+            "height_mm": row.height_mm,
+            "length_mm": row.length_mm,
             "volume": row.volume,
+            "volume_manual": row.volume_manual,
             "marking_type_id": row.marking_type_id,
             "marking_type_name": row.marking_type_name,
             "barcode_count": row.barcode_count,
