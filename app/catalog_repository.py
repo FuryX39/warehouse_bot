@@ -178,9 +178,9 @@ class CatalogProductRow:
     height_mm: str
     length_mm: str
     volume: str
-    volume_manual: bool = False
     marking_type_id: Optional[int]
     marking_type_name: str
+    volume_manual: bool = False
     barcodes: list[dict[str, str]] = field(default_factory=list)
     components: list[KitComponentRow] = field(default_factory=list)
     prices: list[ProductPriceRow] = field(default_factory=list)
@@ -350,24 +350,35 @@ class CatalogRepository:
         if "catalog_products" not in inspect(self.engine).get_table_names():
             return
         cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_products")}
+        dialect = self.engine.dialect.name
         additions = ("width_mm", "height_mm", "length_mm")
         with Session(self.engine) as session:
             for col_name in additions:
                 if col_name in cols:
                     continue
-                session.execute(
-                    text(
+                if dialect == "postgresql":
+                    sql = (
+                        f"ALTER TABLE catalog_products "
+                        f"ADD COLUMN IF NOT EXISTS {col_name} VARCHAR(32) NOT NULL DEFAULT ''"
+                    )
+                else:
+                    sql = (
                         f"ALTER TABLE catalog_products "
                         f"ADD COLUMN {col_name} VARCHAR(32) NOT NULL DEFAULT ''"
                     )
-                )
+                session.execute(text(sql))
             if "volume_manual" not in cols:
-                session.execute(
-                    text(
+                if dialect == "postgresql":
+                    sql = (
+                        "ALTER TABLE catalog_products "
+                        "ADD COLUMN IF NOT EXISTS volume_manual BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                else:
+                    sql = (
                         "ALTER TABLE catalog_products "
                         "ADD COLUMN volume_manual BOOLEAN NOT NULL DEFAULT 0"
                     )
-                )
+                session.execute(text(sql))
             session.commit()
 
     def _migrate_product_group_cost(self) -> None:
