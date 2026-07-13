@@ -22,7 +22,7 @@ _CARD_TIERS: tuple[tuple[float, float, float], ...] = (
 )
 
 _CARD_HIGHER_THRESHOLD = 1.30  # меняем, если цена по карте выше вида цен на 30%+
-_CARD_LOWER_THRESHOLD = 0.90   # меняем, если цена по карте ниже вида цен на 10%+
+_CARD_LOWER_THRESHOLD = 0.92   # меняем, если цена по карте ниже вида цен на 8%+
 
 
 @dataclass(frozen=True)
@@ -203,10 +203,10 @@ def _needs_reprice(card_price: float, catalog_price: float) -> bool:
 def _reprice_note(card_price: float, catalog_price: float, *, updated: bool) -> str:
     if updated:
         if card_price < catalog_price:
-            return "цена по карте ниже вида цен на 10% и более"
+            return "цена по карте ниже вида цен на 8% и более"
         return "цена по карте выше вида цен на 30% и более"
     if card_price < catalog_price:
-        return "цена по карте ниже, но менее чем на 10%"
+        return "цена по карте ниже, но менее чем на 8%"
     if card_price > catalog_price:
         return "цена по карте выше, но менее чем на 30%"
     return "цена по карте совпадает с видом цен"
@@ -260,6 +260,7 @@ def process_yandex_prices_workbook(
     )
 
     results: list[RepricerRowResult] = []
+    updated_rows_data: list[tuple] = []
     stats = {
         "total_rows": 0,
         "with_showcase": 0,
@@ -268,8 +269,10 @@ def process_yandex_prices_workbook(
         "skipped_no_showcase": 0,
         "skipped_no_catalog_price": 0,
         "skipped_ok": 0,
+        "skipped_same_price": 0,
     }
 
+    max_col_idx = max(cols.values())
     for row_offset, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
         sku_raw = row[cols["sku"]] if cols["sku"] < len(row) else None
         sku = str(sku_raw or "").strip()
@@ -309,11 +312,20 @@ def process_yandex_prices_workbook(
                         current_seller=current_seller,
                         raise_price=raise_price,
                     )
-                    ws.cell(row=row_offset, column=cols["seller"] + 1, value=int(recommended))
-                    ws.cell(row=row_offset, column=cols["min_promo"] + 1, value=int(recommended))
-                    updated = True
-                    stats["updated"] += 1
-                    note = _reprice_note(float(estimated_card), catalog_price, updated=True)
+                    if current_seller is not None and recommended == current_seller:
+                        stats["skipped_same_price"] += 1
+                        stats["skipped_ok"] += 1
+                        note = "рекомендуемая цена совпадает с текущей"
+                    else:
+                        row_values = list(row)
+                        if len(row_values) <= max_col_idx:
+                            row_values.extend([None] * (max_col_idx + 1 - len(row_values)))
+                        row_values[cols["seller"]] = int(recommended)
+                        row_values[cols["min_promo"]] = int(recommended)
+                        updated_rows_data.append(tuple(row_values))
+                        updated = True
+                        stats["updated"] += 1
+                        note = _reprice_note(float(estimated_card), catalog_price, updated=True)
                 else:
                     stats["skipped_ok"] += 1
                     note = _reprice_note(float(estimated_card), catalog_price, updated=False)
@@ -333,6 +345,15 @@ def process_yandex_prices_workbook(
                 note=note,
             )
         )
+
+    first_data_row = header_idx + 2
+    existing_data_rows = max(0, ws.max_row - first_data_row + 1)
+    if existing_data_rows:
+        ws.delete_rows(first_data_row, existing_data_rows)
+    for offset, row_data in enumerate(updated_rows_data):
+        row_num = first_data_row + offset
+        for col_idx, value in enumerate(row_data):
+            ws.cell(row=row_num, column=col_idx + 1, value=value)
 
     out = io.BytesIO()
     wb.save(out)
