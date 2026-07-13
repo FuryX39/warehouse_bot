@@ -21,7 +21,8 @@ _CARD_TIERS: tuple[tuple[float, float, float], ...] = (
     (1500, 10_000_000, 0.9700),
 )
 
-_PRICE_TOLERANCE_RUB = 1
+_CARD_HIGHER_THRESHOLD = 1.30  # меняем, если цена по карте выше вида цен на 30%+
+_CARD_LOWER_THRESHOLD = 0.90   # меняем, если цена по карте ниже вида цен на 10%+
 
 
 @dataclass(frozen=True)
@@ -62,20 +63,43 @@ def card_from_showcase(showcase: float) -> int:
     return round(showcase * _card_multiplier(showcase))
 
 
+def card_from_seller(seller: int) -> int:
+    return card_from_showcase(showcase_from_seller(seller))
+
+
+def _seller_search_upper(target_card: int) -> int:
+    return max(target_card * 3, int(target_card / (SELLER_TO_SHOWCASE_HIGH * 0.7195)) + 500)
+
+
 def seller_from_showcase(showcase: float) -> int:
-    via_high = showcase / SELLER_TO_SHOWCASE_HIGH
-    if via_high >= SELLER_BREAKPOINT:
-        return round(via_high)
-    return round(showcase / SELLER_TO_SHOWCASE_LOW)
+    candidates: list[int] = []
+    via_low = round(showcase / SELLER_TO_SHOWCASE_LOW)
+    if via_low < SELLER_BREAKPOINT and showcase_from_seller(via_low) == round(showcase):
+        candidates.append(via_low)
+    via_high = round(showcase / SELLER_TO_SHOWCASE_HIGH)
+    if via_high >= SELLER_BREAKPOINT and showcase_from_seller(via_high) == round(showcase):
+        candidates.append(via_high)
+    if not candidates:
+        via_high_f = showcase / SELLER_TO_SHOWCASE_HIGH
+        if via_high_f >= SELLER_BREAKPOINT:
+            candidates.append(round(via_high_f))
+        else:
+            candidates.append(round(showcase / SELLER_TO_SHOWCASE_LOW))
+    return min(candidates)
 
 
-def showcase_from_target_card(target_card: float) -> int:
+def showcase_from_target_card(target_card: float, *, at_least: bool = False) -> int:
     target = max(1, round(target_card))
+    upper = max(target + 1, int(target / 0.71) + 500)
     best_showcase = target
     best_diff = 10**9
-    upper = max(target + 1, int(target / 0.71) + 500)
     for showcase in range(max(1, target - 3), upper):
-        diff = abs(card_from_showcase(showcase) - target)
+        card = card_from_showcase(showcase)
+        if at_least:
+            if card >= target:
+                return showcase
+            continue
+        diff = abs(card - target)
         if diff < best_diff:
             best_diff = diff
             best_showcase = showcase
@@ -84,8 +108,32 @@ def showcase_from_target_card(target_card: float) -> int:
     return best_showcase
 
 
-def seller_from_target_card(target_card: float) -> int:
-    return seller_from_showcase(showcase_from_target_card(target_card))
+def seller_from_target_card(
+    target_card: float,
+    *,
+    current_seller: Optional[int] = None,
+    raise_price: bool = True,
+) -> int:
+    """Подбор цены продавца с учётом соинвеста и скидки по карте.
+
+    При поднятии (raise_price=True) — минимальная цена продавца, при которой
+    цена по карте не ниже цели. При снижении — максимальная, при которой не выше.
+    """
+    target = max(1, round(target_card))
+    if raise_price:
+        start = max(1, int(current_seller or 1))
+        upper = _seller_search_upper(target)
+        for seller in range(start, upper + 1):
+            if card_from_seller(seller) >= target:
+                return seller
+        return upper
+
+    start = int(current_seller) if current_seller is not None else _seller_search_upper(target)
+    start = max(1, start)
+    for seller in range(start, 0, -1):
+        if card_from_seller(seller) <= target:
+            return seller
+    return 1
 
 
 def _parse_number(value: object) -> Optional[float]:
@@ -141,8 +189,26 @@ def _column_map(header: tuple) -> dict[str, int]:
     return mapping
 
 
-def _needs_reprice(card_price: float, target_price: float) -> bool:
-    return abs(card_price - target_price) > _PRICE_TOLERANCE_RUB
+def _needs_reprice(card_price: float, catalog_price: float) -> bool:
+    if catalog_price <= 0:
+        return False
+    if card_price >= catalog_price * _CARD_HIGHER_THRESHOLD:
+        return True
+    if card_price <= catalog_price * _CARD_LOWER_THRESHOLD:
+        return True
+    return False
+
+
+def _reprice_note(card_price: float, catalog_price: float, *, updated: bool) -> str:
+    if updated:
+        if card_price < catalog_price:
+            return "цена по карте ниже вида цен на 10% и более"
+        return "цена по карте выше вида цен на 30% и более"
+    if card_price < catalog_price:
+        return "цена по карте ниже, но менее чем на 10%"
+    if card_price > catalog_price:
+        return "цена по карте выше, но менее чем на 30%"
+    return "цена по карте совпадает с видом цен"
 
 
 def _catalog_price_map(
@@ -227,18 +293,21 @@ def process_yandex_prices_workbook(
             else:
                 stats["with_catalog_price"] += 1
                 if _needs_reprice(float(estimated_card), catalog_price):
-                    recommended = seller_from_target_card(catalog_price)
+                    raise_price = float(estimated_card) < catalog_price
+                    current_seller = int(round(seller)) if seller and seller > 0 else None
+                    recommended = seller_from_target_card(
+                        catalog_price,
+                        current_seller=current_seller,
+                        raise_price=raise_price,
+                    )
                     ws.cell(row=row_offset, column=cols["seller"] + 1, value=int(recommended))
                     ws.cell(row=row_offset, column=cols["min_promo"] + 1, value=int(recommended))
                     updated = True
                     stats["updated"] += 1
-                    if estimated_card < catalog_price:
-                        note = "цена по карте ниже вида цен"
-                    else:
-                        note = "цена по карте выше вида цен"
+                    note = _reprice_note(float(estimated_card), catalog_price, updated=True)
                 else:
                     stats["skipped_ok"] += 1
-                    note = "цена по карте совпадает"
+                    note = _reprice_note(float(estimated_card), catalog_price, updated=False)
 
         results.append(
             RepricerRowResult(
