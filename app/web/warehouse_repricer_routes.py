@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -14,6 +15,14 @@ from app.warehouse_users_repository import WarehouseUserRow
 from app.yandex_repricer import process_yandex_prices_workbook
 
 _IMPORT_MAX_BYTES = 10 * 1024 * 1024
+_PREVIEW_MAX_ROWS = 100
+
+logger = logging.getLogger(__name__)
+
+
+def _header_json(value: object) -> str:
+    """JSON для HTTP-заголовка: только ASCII (latin-1), иначе Starlette отдаёт 500."""
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
 def register_warehouse_repricer_routes(
@@ -64,8 +73,11 @@ def register_warehouse_repricer_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("repricer calculate failed")
+            raise HTTPException(status_code=500, detail=str(exc) or "Ошибка расчёта") from exc
 
-        preview = [
+        preview_rows = [
             {
                 "sku": row.sku,
                 "name": row.name,
@@ -79,14 +91,16 @@ def register_warehouse_repricer_routes(
             }
             for row in result.rows
             if row.showcase_price is not None
-        ][:500]
+        ]
+        updated_preview = [row for row in preview_rows if row["updated"]]
+        preview = (updated_preview or preview_rows)[:_PREVIEW_MAX_ROWS]
 
         return Response(
             content=result.workbook_bytes,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
                 "Content-Disposition": 'attachment; filename="yandex_repricer_result.xlsx"',
-                "X-Repricer-Stats": json.dumps(result.stats, ensure_ascii=False),
-                "X-Repricer-Preview": json.dumps(preview, ensure_ascii=False),
+                "X-Repricer-Stats": _header_json(result.stats),
+                "X-Repricer-Preview": _header_json(preview),
             },
         )
