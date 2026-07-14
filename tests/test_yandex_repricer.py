@@ -70,27 +70,51 @@ def test_card_curve_matches_more_prices_examples() -> None:
     assert sum(errors) / len(errors) <= 2
 
 
-def test_item_coinvest_ratio_is_used_when_raising_price() -> None:
-    current_seller = 3759
-    current_showcase = 1710
+def test_heavy_coinvest_uses_diminishing_return_when_raising_price() -> None:
+    current_seller = 312
+    current_showcase = 168
     ratio = current_showcase / current_seller
-    target = 2000
+    target = 190
 
-    generic = seller_from_target_card(
-        target,
-        current_seller=current_seller,
-        raise_price=True,
-    )
-    personalized = seller_from_target_card(
+    linear = seller_from_target_card(
         target,
         current_seller=current_seller,
         raise_price=True,
         showcase_ratio=ratio,
     )
+    corrected = seller_from_target_card(
+        target,
+        current_seller=current_seller,
+        current_showcase=current_showcase,
+        raise_price=True,
+        showcase_ratio=ratio,
+    )
 
-    assert personalized > generic
-    assert card_from_seller(personalized, showcase_ratio=ratio) >= target
-    assert card_from_seller(personalized - 1, showcase_ratio=ratio) < target
+    assert linear == 490
+    assert corrected > linear
+
+
+def test_high_showcase_ratio_stays_linear_when_raising_price() -> None:
+    current_seller = 1000
+    current_showcase = 960
+    ratio = current_showcase / current_seller
+    target = 1000
+
+    linear = seller_from_target_card(
+        target,
+        current_seller=current_seller,
+        raise_price=True,
+        showcase_ratio=ratio,
+    )
+    corrected = seller_from_target_card(
+        target,
+        current_seller=current_seller,
+        current_showcase=current_showcase,
+        raise_price=True,
+        showcase_ratio=ratio,
+    )
+
+    assert corrected == linear
 
 
 def test_seller_from_target_card_inverts_chain() -> None:

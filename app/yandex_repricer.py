@@ -31,6 +31,7 @@ _CARD_TIERS: tuple[tuple[float, float, float], ...] = (
 
 _CARD_HIGHER_THRESHOLD = 1.10  # меняем, если цена по карте выше вида цен на 10%+
 _CARD_LOWER_THRESHOLD = 0.99   # меняем, если цена по карте ниже вида цен на 1%+
+_MAX_RAISE_CORRECTION = 1.50   # ограничение из-за непредсказуемого соинвеста Яндекса
 
 
 @dataclass(frozen=True)
@@ -80,9 +81,55 @@ def card_from_seller(seller: int, *, showcase_ratio: Optional[float] = None) -> 
     return card_from_showcase(showcase)
 
 
-def _seller_search_upper(target_card: int, showcase_ratio: Optional[float] = None) -> int:
+def _raise_showcase_elasticity(showcase_ratio: float) -> float:
+    """Доля повышения цены продавца, доходящая до витрины.
+
+    При сильном соинвесте Яндекс увеличивает свою скидку вместе с ценой
+    продавца, поэтому витрина растёт существенно медленнее. Коэффициенты
+    рассчитаны по 196 фактическим изменениям из tables_examples/new/.
+    """
+    if showcase_ratio < 0.525:
+        return 0.35
+    if showcase_ratio < 0.60:
+        return 0.45
+    if showcase_ratio < 0.70:
+        return 0.35
+    return 1.0
+
+
+def _project_showcase(
+    seller: int,
+    *,
+    current_seller: Optional[int],
+    current_showcase: Optional[float],
+    showcase_ratio: Optional[float],
+) -> int:
+    if (
+        current_seller is not None
+        and current_seller > 0
+        and current_showcase is not None
+        and current_showcase > 0
+        and seller > current_seller
+    ):
+        ratio = current_showcase / current_seller
+        elasticity = _raise_showcase_elasticity(ratio)
+        return round(current_showcase * (seller / current_seller) ** elasticity)
+    if showcase_ratio is not None:
+        return round(seller * showcase_ratio)
+    return showcase_from_seller(seller)
+
+
+def _seller_search_upper(
+    target_card: int,
+    showcase_ratio: Optional[float] = None,
+    current_seller: Optional[int] = None,
+) -> int:
     ratio = showcase_ratio or SELLER_TO_SHOWCASE_HIGH
-    return max(target_card * 3, int(target_card / (ratio * 0.72)) + 500)
+    return max(
+        target_card * 3,
+        int(target_card / (ratio * 0.72)) + 500,
+        int(current_seller or 0) * 10,
+    )
 
 
 def seller_from_showcase(showcase: float) -> int:
@@ -126,6 +173,7 @@ def seller_from_target_card(
     target_card: float,
     *,
     current_seller: Optional[int] = None,
+    current_showcase: Optional[float] = None,
     raise_price: bool = True,
     showcase_ratio: Optional[float] = None,
 ) -> int:
@@ -133,26 +181,45 @@ def seller_from_target_card(
 
     При поднятии (raise_price=True) — минимальная цена продавца, при которой
     цена по карте не ниже цели. При снижении — максимальная, при которой не выше.
-    Если передан showcase_ratio, используется фактический коэффициент
-    «витрина / цена продавца» конкретного товара вместо общей оценки.
+    При снижении сохраняется фактический коэффициент «витрина / продавец».
+    При повышении учитывается наблюдаемое снижение отдачи соинвеста.
     """
     target = max(1, round(target_card))
     if raise_price:
         start = max(1, int(current_seller or 1))
-        upper = _seller_search_upper(target, showcase_ratio)
+        upper = _seller_search_upper(target, showcase_ratio, current_seller)
+        if showcase_ratio is not None and current_showcase is not None:
+            linear_recommended = upper
+            for seller in range(start, upper + 1):
+                if card_from_seller(seller, showcase_ratio=showcase_ratio) >= target:
+                    linear_recommended = seller
+                    break
+            upper = min(upper, round(linear_recommended * _MAX_RAISE_CORRECTION))
         for seller in range(start, upper + 1):
-            if card_from_seller(seller, showcase_ratio=showcase_ratio) >= target:
+            showcase = _project_showcase(
+                seller,
+                current_seller=current_seller,
+                current_showcase=current_showcase,
+                showcase_ratio=showcase_ratio,
+            )
+            if card_from_showcase(showcase) >= target:
                 return seller
         return upper
 
     start = (
         int(current_seller)
         if current_seller is not None
-        else _seller_search_upper(target, showcase_ratio)
+        else _seller_search_upper(target, showcase_ratio, current_seller)
     )
     start = max(1, start)
     for seller in range(start, 0, -1):
-        if card_from_seller(seller, showcase_ratio=showcase_ratio) <= target:
+        showcase = _project_showcase(
+            seller,
+            current_seller=current_seller,
+            current_showcase=current_showcase,
+            showcase_ratio=showcase_ratio,
+        )
+        if card_from_showcase(showcase) <= target:
             return seller
     return 1
 
@@ -337,6 +404,7 @@ def process_yandex_prices_workbook(
                     recommended = seller_from_target_card(
                         catalog_price,
                         current_seller=current_seller,
+                        current_showcase=showcase,
                         raise_price=raise_price,
                         showcase_ratio=showcase_ratio,
                     )
