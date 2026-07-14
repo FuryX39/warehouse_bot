@@ -14,8 +14,8 @@ from app.yandex_repricer import (
 
 def test_needs_reprice_thresholds() -> None:
     catalog = 1000.0
-    assert not _needs_reprice(971, catalog)
-    assert _needs_reprice(970, catalog)
+    assert not _needs_reprice(991, catalog)
+    assert _needs_reprice(990, catalog)
     assert not _needs_reprice(1000, catalog)
     assert not _needs_reprice(1099, catalog)
     assert _needs_reprice(1100, catalog)
@@ -53,7 +53,44 @@ def test_showcase_and_card_formulas() -> None:
     assert showcase_from_seller(300) == 254
     assert card_from_showcase(253) == 182
     assert showcase_from_seller(1239) == 754
-    assert card_from_showcase(754) == 670
+    assert card_from_showcase(754) == 626
+
+
+def test_card_curve_matches_more_prices_examples() -> None:
+    examples = [
+        (252, 181),
+        (345, 259),
+        (615, 492),
+        (874, 752),
+        (922, 820),
+        (1257, 1219),
+        (2177, 2112),
+    ]
+    errors = [abs(card_from_showcase(showcase) - actual) for showcase, actual in examples]
+    assert sum(errors) / len(errors) <= 2
+
+
+def test_item_coinvest_ratio_is_used_when_raising_price() -> None:
+    current_seller = 3759
+    current_showcase = 1710
+    ratio = current_showcase / current_seller
+    target = 2000
+
+    generic = seller_from_target_card(
+        target,
+        current_seller=current_seller,
+        raise_price=True,
+    )
+    personalized = seller_from_target_card(
+        target,
+        current_seller=current_seller,
+        raise_price=True,
+        showcase_ratio=ratio,
+    )
+
+    assert personalized > generic
+    assert card_from_seller(personalized, showcase_ratio=ratio) >= target
+    assert card_from_seller(personalized - 1, showcase_ratio=ratio) < target
 
 
 def test_seller_from_target_card_inverts_chain() -> None:

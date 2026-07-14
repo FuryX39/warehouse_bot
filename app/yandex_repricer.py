@@ -11,18 +11,26 @@ SELLER_BREAKPOINT = 500
 SELLER_TO_SHOWCASE_LOW = 0.8467
 SELLER_TO_SHOWCASE_HIGH = 0.6084
 
-# showcase (руб) -> коэффициент «цена по карте / витрина»
+# Витрина (руб.) -> коэффициент «цена по карте / витрина».
+# Ступени рассчитаны по tables_examples/more_prices.xlsx (207 примеров).
 _CARD_TIERS: tuple[tuple[float, float, float], ...] = (
-    (0, 280, 0.7195),
-    (280, 500, 0.7694),
-    (500, 750, 0.8051),
-    (750, 1000, 0.8892),
-    (1000, 1500, 0.9597),
-    (1500, 10_000_000, 0.9700),
+    (0, 280, 0.72),
+    (280, 315, 0.74),
+    (315, 400, 0.75),
+    (400, 500, 0.77),
+    (500, 600, 0.79),
+    (600, 700, 0.80),
+    (700, 800, 0.83),
+    (800, 900, 0.86),
+    (900, 1050, 0.89),
+    (1050, 1150, 0.91),
+    (1150, 1225, 0.92),
+    (1225, 1250, 0.94),
+    (1250, 10_000_000, 0.97),
 )
 
 _CARD_HIGHER_THRESHOLD = 1.10  # меняем, если цена по карте выше вида цен на 10%+
-_CARD_LOWER_THRESHOLD = 0.97   # меняем, если цена по карте ниже вида цен на 3%+
+_CARD_LOWER_THRESHOLD = 0.99   # меняем, если цена по карте ниже вида цен на 1%+
 
 
 @dataclass(frozen=True)
@@ -64,12 +72,17 @@ def card_from_showcase(showcase: float) -> int:
     return round(showcase * _card_multiplier(showcase))
 
 
-def card_from_seller(seller: int) -> int:
-    return card_from_showcase(showcase_from_seller(seller))
+def card_from_seller(seller: int, *, showcase_ratio: Optional[float] = None) -> int:
+    if showcase_ratio is None:
+        showcase = showcase_from_seller(seller)
+    else:
+        showcase = round(seller * showcase_ratio)
+    return card_from_showcase(showcase)
 
 
-def _seller_search_upper(target_card: int) -> int:
-    return max(target_card * 3, int(target_card / (SELLER_TO_SHOWCASE_HIGH * 0.7195)) + 500)
+def _seller_search_upper(target_card: int, showcase_ratio: Optional[float] = None) -> int:
+    ratio = showcase_ratio or SELLER_TO_SHOWCASE_HIGH
+    return max(target_card * 3, int(target_card / (ratio * 0.72)) + 500)
 
 
 def seller_from_showcase(showcase: float) -> int:
@@ -114,25 +127,32 @@ def seller_from_target_card(
     *,
     current_seller: Optional[int] = None,
     raise_price: bool = True,
+    showcase_ratio: Optional[float] = None,
 ) -> int:
     """Подбор цены продавца с учётом соинвеста и скидки по карте.
 
     При поднятии (raise_price=True) — минимальная цена продавца, при которой
     цена по карте не ниже цели. При снижении — максимальная, при которой не выше.
+    Если передан showcase_ratio, используется фактический коэффициент
+    «витрина / цена продавца» конкретного товара вместо общей оценки.
     """
     target = max(1, round(target_card))
     if raise_price:
         start = max(1, int(current_seller or 1))
-        upper = _seller_search_upper(target)
+        upper = _seller_search_upper(target, showcase_ratio)
         for seller in range(start, upper + 1):
-            if card_from_seller(seller) >= target:
+            if card_from_seller(seller, showcase_ratio=showcase_ratio) >= target:
                 return seller
         return upper
 
-    start = int(current_seller) if current_seller is not None else _seller_search_upper(target)
+    start = (
+        int(current_seller)
+        if current_seller is not None
+        else _seller_search_upper(target, showcase_ratio)
+    )
     start = max(1, start)
     for seller in range(start, 0, -1):
-        if card_from_seller(seller) <= target:
+        if card_from_seller(seller, showcase_ratio=showcase_ratio) <= target:
             return seller
     return 1
 
@@ -203,10 +223,10 @@ def _needs_reprice(card_price: float, catalog_price: float) -> bool:
 def _reprice_note(card_price: float, catalog_price: float, *, updated: bool) -> str:
     if updated:
         if card_price < catalog_price:
-            return "цена по карте ниже вида цен на 3% и более"
+            return "цена по карте ниже вида цен на 1% и более"
         return "цена по карте выше вида цен на 10% и более"
     if card_price < catalog_price:
-        return "цена по карте ниже, но менее чем на 3%"
+        return "цена по карте ниже, но менее чем на 1%"
     if card_price > catalog_price:
         return "цена по карте выше, но менее чем на 10%"
     return "цена по карте совпадает с видом цен"
@@ -307,10 +327,18 @@ def process_yandex_prices_workbook(
                 if _needs_reprice(float(estimated_card), catalog_price):
                     raise_price = float(estimated_card) < catalog_price
                     current_seller = int(round(seller)) if seller and seller > 0 else None
+                    showcase_ratio = (
+                        showcase / seller
+                        if seller is not None
+                        and seller > 0
+                        and 0.2 <= showcase / seller <= 1.2
+                        else None
+                    )
                     recommended = seller_from_target_card(
                         catalog_price,
                         current_seller=current_seller,
                         raise_price=raise_price,
+                        showcase_ratio=showcase_ratio,
                     )
                     if current_seller is not None and recommended == current_seller:
                         stats["skipped_same_price"] += 1
