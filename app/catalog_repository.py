@@ -53,6 +53,18 @@ class CatalogProductGroup(_Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class CatalogCargoPlaceType(_Base):
+    __tablename__ = "catalog_cargo_place_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    length_mm: Mapped[str] = mapped_column(String(32), nullable=False)
+    width_mm: Mapped[str] = mapped_column(String(32), nullable=False)
+    height_mm: Mapped[str] = mapped_column(String(32), nullable=False)
+    comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class CatalogUnit(_Base):
     __tablename__ = "catalog_units"
 
@@ -232,6 +244,19 @@ def _parse_optional_mm(raw: object, *, field_label: str) -> str:
     if val < 0:
         raise ValueError(f"{field_label} не может быть отрицательной")
     return _format_mm_number(val)[:32]
+
+
+def _parse_positive_number(raw: object, *, field_label: str) -> str:
+    text = str(raw or "").strip().replace(",", ".")
+    if not text:
+        raise ValueError(f"{field_label} не указан")
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field_label} должен быть числом") from exc
+    if value <= 0:
+        raise ValueError(f"{field_label} должен быть больше нуля")
+    return _format_mm_number(value)[:32]
 
 
 MM3_PER_LITER = Decimal("1000000")
@@ -476,6 +501,88 @@ class CatalogRepository:
                 for m in marking
             ],
         }
+
+    def list_cargo_place_types(self) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(CatalogCargoPlaceType).order_by(
+                    CatalogCargoPlaceType.sort_order, CatalogCargoPlaceType.name
+                )
+            ).all()
+            return [
+                {
+                    "id": int(row.id),
+                    "name": row.name,
+                    "length_mm": row.length_mm,
+                    "width_mm": row.width_mm,
+                    "height_mm": row.height_mm,
+                    "volume_liters": compute_volume_liters(
+                        row.width_mm, row.height_mm, row.length_mm
+                    ),
+                    "comment": row.comment or "",
+                }
+                for row in rows
+            ]
+
+    def save_cargo_place_types(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            existing = {
+                int(row.id): row
+                for row in session.scalars(select(CatalogCargoPlaceType)).all()
+            }
+            keep_ids: set[int] = set()
+            seen_names: set[str] = set()
+            for index, item in enumerate(items):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                name_key = name.casefold()
+                if name_key in seen_names:
+                    raise ValueError(f"Название грузоместа «{name}» повторяется")
+                seen_names.add(name_key)
+                length_mm = _parse_positive_number(
+                    item.get("length_mm"), field_label=f"Длина грузоместа «{name}»"
+                )
+                width_mm = _parse_positive_number(
+                    item.get("width_mm"), field_label=f"Ширина грузоместа «{name}»"
+                )
+                height_mm = _parse_positive_number(
+                    item.get("height_mm"), field_label=f"Высота грузоместа «{name}»"
+                )
+                row = None
+                raw_id = item.get("id")
+                if raw_id is not None:
+                    try:
+                        row = existing.get(int(raw_id))
+                    except (TypeError, ValueError):
+                        row = None
+                if row is None:
+                    row = CatalogCargoPlaceType(
+                        name=name[:128],
+                        length_mm=length_mm,
+                        width_mm=width_mm,
+                        height_mm=height_mm,
+                    )
+                    session.add(row)
+                    session.flush()
+                else:
+                    row.name = name[:128]
+                    row.length_mm = length_mm
+                    row.width_mm = width_mm
+                    row.height_mm = height_mm
+                row.comment = str(item.get("comment") or "").strip()[:512]
+                row.sort_order = index
+                keep_ids.add(int(row.id))
+
+            for row_id, row in existing.items():
+                if row_id not in keep_ids:
+                    session.delete(row)
+            try:
+                session.commit()
+            except Exception as exc:
+                session.rollback()
+                raise ValueError("Названия грузомест должны быть уникальными") from exc
+        return self.list_cargo_place_types()
 
     def save_groups(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self._save_dict(CatalogProductGroup, items, "groups")
@@ -841,6 +948,72 @@ class CatalogRepository:
                     "image_url": str(row.image_url or ""),
                 }
         return out
+
+    def lookup_products_with_metrics_by_skus(
+        self, skus: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        clean = [str(sku).strip() for sku in skus if str(sku).strip()]
+        lowered = sorted({sku.casefold() for sku in clean})
+        if not lowered:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        with Session(self.engine) as session:
+            for start in range(0, len(lowered), 900):
+                batch = lowered[start : start + 900]
+                rows = session.scalars(
+                    select(CatalogProduct).where(func.lower(CatalogProduct.sku).in_(batch))
+                ).all()
+                for row in rows:
+                    key = str(row.sku or "").strip().casefold()
+                    out[key] = {
+                        "id": int(row.id),
+                        "sku": str(row.sku or ""),
+                        "name": str(row.name or ""),
+                        "length_mm": str(row.length_mm or ""),
+                        "width_mm": str(row.width_mm or ""),
+                        "height_mm": str(row.height_mm or ""),
+                        "volume_liters": compute_volume_liters(
+                            row.width_mm, row.height_mm, row.length_mm
+                        ),
+                        "weight_kg": str(row.weight or ""),
+                    }
+        return out
+
+    def update_product_metrics(
+        self,
+        product_id: int,
+        *,
+        length_mm: object,
+        width_mm: object,
+        height_mm: object,
+        weight_kg: object,
+    ) -> dict[str, Any]:
+        length = _parse_positive_number(length_mm, field_label="Длина")
+        width = _parse_positive_number(width_mm, field_label="Ширина")
+        height = _parse_positive_number(height_mm, field_label="Высота")
+        weight = _parse_positive_number(weight_kg, field_label="Вес")
+        with Session(self.engine) as session:
+            row = session.get(CatalogProduct, int(product_id))
+            if row is None:
+                raise ValueError("Товар не найден")
+            row.length_mm = length
+            row.width_mm = width
+            row.height_mm = height
+            row.weight = weight
+            row.volume = compute_volume_liters(width, height, length)
+            row.volume_manual = False
+            row.updated_at_ts = int(time.time())
+            session.commit()
+            return {
+                "id": int(row.id),
+                "sku": row.sku,
+                "name": row.name,
+                "length_mm": row.length_mm,
+                "width_mm": row.width_mm,
+                "height_mm": row.height_mm,
+                "volume_liters": row.volume,
+                "weight_kg": row.weight,
+            }
 
     def build_product_import_index(
         self,

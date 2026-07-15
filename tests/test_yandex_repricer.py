@@ -136,7 +136,10 @@ def test_seller_from_showcase_breakpoint() -> None:
 def test_output_sets_old_price_to_double_recommended_price() -> None:
     class Repo:
         def list_products_for_price_type(self, price_type_id, filters):
-            return [{"sku": "SKU-1", "price": 500}]
+            return [
+                {"sku": "SKU-1", "price": 500},
+                {"sku": "SKU-2", "price": 800},
+            ]
 
     workbook = Workbook()
     sheet = workbook.active
@@ -151,6 +154,7 @@ def test_output_sets_old_price_to_double_recommended_price() -> None:
         ]
     )
     sheet.append(["SKU-1", "Товар", 1000, 2000, 1000, 900])
+    sheet.append(["SKU-2", "Без изменения", 1000, 2000, 1000, 900])
     source = io.BytesIO()
     workbook.save(source)
 
@@ -160,7 +164,34 @@ def test_output_sets_old_price_to_double_recommended_price() -> None:
         price_type_id=1,
     )
 
-    output = load_workbook(io.BytesIO(result.workbook_bytes), data_only=True).active
+    output_workbook = load_workbook(io.BytesIO(result.workbook_bytes), data_only=True)
+    output = output_workbook.active
     seller_price = output.cell(row=2, column=3).value
     assert output.cell(row=2, column=4).value == seller_price * 2
     assert output.cell(row=2, column=5).value == seller_price
+    assert output.max_row == 2
+
+    audit = output_workbook["Старые и новые цены"]
+    assert audit.max_row == 3
+    assert [audit.cell(row=2, column=col).value for col in range(1, 9)] == [
+        "SKU-1",
+        "Товар",
+        1000,
+        seller_price,
+        2000,
+        seller_price * 2,
+        1000,
+        seller_price,
+    ]
+    assert [audit.cell(row=3, column=col).value for col in range(1, 9)] == [
+        "SKU-2",
+        "Без изменения",
+        1000,
+        1000,
+        2000,
+        2000,
+        1000,
+        1000,
+    ]
+    assert audit.cell(row=2, column=12).value == "Да"
+    assert audit.cell(row=3, column=12).value == "Нет"

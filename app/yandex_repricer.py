@@ -321,6 +321,55 @@ def _catalog_price_map(
     return out
 
 
+def _add_price_audit_sheet(
+    workbook,
+    audit_rows: list[tuple],
+    *,
+    price_type_name: str,
+) -> None:
+    from openpyxl.styles import Font, PatternFill
+
+    title = "Старые и новые цены"
+    if title in workbook.sheetnames:
+        del workbook[title]
+    sheet = workbook.create_sheet(title)
+    catalog_header = (
+        f"Цена по виду цен «{price_type_name.strip()}»"
+        if price_type_name and price_type_name.strip()
+        else "Цена по выбранному виду цен"
+    )
+    headers = [
+        "Ваш SKU",
+        "Название товара",
+        "Старая цена",
+        "Новая цена",
+        "Старая зачёркнутая цена",
+        "Новая зачёркнутая цена",
+        "Старый минимум для акции",
+        "Новый минимум для акции",
+        "Цена на витрине",
+        "Расчётная цена по карте",
+        catalog_header,
+        "Цена изменена",
+        "Комментарий",
+    ]
+    sheet.append(headers)
+    for row in audit_rows:
+        sheet.append(row)
+
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="E8EEF4")
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    widths = (20, 42, 16, 16, 25, 25, 25, 25, 18, 24, 28, 16, 52)
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = width
+    for row in sheet.iter_rows(min_row=2, min_col=3, max_col=11):
+        for cell in row:
+            cell.number_format = '0.00'
+
+
 def process_yandex_prices_workbook(
     data: bytes,
     *,
@@ -353,6 +402,7 @@ def process_yandex_prices_workbook(
 
     results: list[RepricerRowResult] = []
     updated_rows_data: list[tuple] = []
+    audit_rows: list[tuple] = []
     stats = {
         "total_rows": 0,
         "with_showcase": 0,
@@ -375,6 +425,12 @@ def process_yandex_prices_workbook(
         name_cell = row[cols["name"]] if cols["name"] < len(row) else ""
         name = str(name_cell or "").strip()
         seller = _parse_number(row[cols["seller"]] if cols["seller"] < len(row) else None)
+        old_price = _parse_number(
+            row[cols["old_price"]] if cols["old_price"] < len(row) else None
+        )
+        min_promo = _parse_number(
+            row[cols["min_promo"]] if cols["min_promo"] < len(row) else None
+        )
         showcase = _parse_number(row[cols["showcase"]] if cols["showcase"] < len(row) else None)
         catalog_price = prices_by_sku.get(sku.casefold())
 
@@ -450,6 +506,23 @@ def process_yandex_prices_workbook(
                 note=note,
             )
         )
+        audit_rows.append(
+            (
+                sku,
+                name,
+                seller,
+                int(recommended) if updated and recommended is not None else seller,
+                old_price,
+                recommended_old if updated else old_price,
+                min_promo,
+                int(recommended) if updated and recommended is not None else min_promo,
+                showcase,
+                estimated_card,
+                catalog_price,
+                "Да" if updated else "Нет",
+                note,
+            )
+        )
 
     first_data_row = header_idx + 2
     existing_data_rows = max(0, ws.max_row - first_data_row + 1)
@@ -459,6 +532,12 @@ def process_yandex_prices_workbook(
         row_num = first_data_row + offset
         for col_idx, value in enumerate(row_data):
             ws.cell(row=row_num, column=col_idx + 1, value=value)
+
+    _add_price_audit_sheet(
+        wb,
+        audit_rows,
+        price_type_name=price_type_name,
+    )
 
     out = io.BytesIO()
     wb.save(out)
