@@ -8,16 +8,14 @@ from app.adapters.base import MarketplaceAdapter, ReservationAction, is_value_co
 
 logger = logging.getLogger(__name__)
 
-# Лимит Yandex: не больше 30 суток между fromDate и toDate (формат YYYY-MM-DD).
+# Лимит Yandex: не больше 30 суток между fromDate и toDate (формат DD-MM-YYYY).
 _ORDER_LIST_SPAN_DAYS = 30
-# Сдвиг правой границы окна вперёд, чтобы захватывать заказы с дальней датой отгрузки.
-_ORDER_LIST_LOOKAHEAD_DAYS = 10
 # Для этого эндпоинта кампаний используем поддерживаемый статус PROCESSING.
 _RESERVE_ORDER_STATUSES: tuple[str, ...] = ("PROCESSING",)
 # Не резервируем отмены/просрочки/отказы и прочие причины, где товар уже не должен держаться в резерве.
-# Заказы для формирования FBS-списка/этикеток: «собрано» (готово к отгрузке).
+# Заказы для формирования FBS-списка/этикеток: «готовы к сборке».
 YANDEX_AWAITING_ASSEMBLY_STATUS = "PROCESSING"
-YANDEX_AWAITING_ASSEMBLY_SUBSTATUS = "READY_TO_SHIP"
+YANDEX_AWAITING_ASSEMBLY_SUBSTATUS = "STARTED"
 YANDEX_LABEL_FORMATS: tuple[str, ...] = ("A9_HORIZONTALLY", "A9", "A7", "A4")
 
 _NO_RESERVE_SUBSTATUS_PREFIXES: tuple[str, ...] = (
@@ -35,11 +33,19 @@ _NO_RESERVE_SUBSTATUS_PREFIXES: tuple[str, ...] = (
 
 
 @dataclass(frozen=True)
+class YandexFbsItem:
+    item_id: int
+    sku: str
+    quantity: int
+
+
+@dataclass(frozen=True)
 class YandexFbsOrder:
     order_id: str
     status: str
     substatus: str
     lines: tuple[tuple[str, int], ...]
+    items: tuple[YandexFbsItem, ...] = ()
 
 
 class YandexMarketAdapter(MarketplaceAdapter):
@@ -66,10 +72,9 @@ class YandexMarketAdapter(MarketplaceAdapter):
     @staticmethod
     def _orders_date_range_query() -> dict[str, str]:
         today = datetime.now(timezone.utc).date()
-        end = today + timedelta(days=_ORDER_LIST_LOOKAHEAD_DAYS)
-        start = end - timedelta(days=_ORDER_LIST_SPAN_DAYS)
-        fmt = "%Y-%m-%d"
-        return {"fromDate": start.strftime(fmt), "toDate": end.strftime(fmt)}
+        start = today - timedelta(days=_ORDER_LIST_SPAN_DAYS)
+        fmt = "%d-%m-%Y"
+        return {"fromDate": start.strftime(fmt), "toDate": today.strftime(fmt)}
 
     def _iter_orders(
         self,
@@ -89,7 +94,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
                 **self._orders_date_range_query(),
             }
             if page_token:
-                params["page_token"] = page_token
+                params["pageToken"] = page_token
             response = requests.get(
                 f"{self.base_url}/campaigns/{self.campaign_id}/orders",
                 headers=headers,
@@ -180,7 +185,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
         substatus: str = YANDEX_AWAITING_ASSEMBLY_SUBSTATUS,
     ) -> list[YandexFbsOrder]:
         """
-        FBS-заказы для списка/этикеток (PROCESSING + substatus READY_TO_SHIP по умолчанию).
+        FBS-заказы для списка/этикеток (PROCESSING + substatus STARTED по умолчанию).
         Одна запись на order_id (в заказе может быть несколько SKU).
         """
         if not self.is_configured():
@@ -196,15 +201,28 @@ class YandexMarketAdapter(MarketplaceAdapter):
             if not order_id:
                 continue
             line_map: dict[str, int] = {}
+            item_map: dict[int, YandexFbsItem] = {}
             if order_id in by_order:
                 for sku, qty in by_order[order_id].lines:
                     line_map[sku] = line_map.get(sku, 0) + qty
+                item_map = {item.item_id: item for item in by_order[order_id].items}
             for item in order.get("items", []) or []:
                 sku = str(item.get("offerId") or item.get("shopSku") or "").strip()
                 qty = int(item.get("count", 0))
                 if not sku or qty <= 0:
                     continue
                 line_map[sku] = line_map.get(sku, 0) + qty
+                try:
+                    item_id = int(item.get("id"))
+                except (TypeError, ValueError):
+                    item_id = 0
+                if item_id > 0:
+                    existing_item = item_map.get(item_id)
+                    item_map[item_id] = YandexFbsItem(
+                        item_id=item_id,
+                        sku=sku,
+                        quantity=qty + (existing_item.quantity if existing_item else 0),
+                    )
             if not line_map:
                 continue
             lines = tuple(sorted(line_map.items(), key=lambda x: x[0]))
@@ -213,9 +231,82 @@ class YandexMarketAdapter(MarketplaceAdapter):
                 status=YANDEX_AWAITING_ASSEMBLY_STATUS,
                 substatus=order_sub,
                 lines=lines,
+                items=tuple(item_map.values()),
             )
 
         return sorted(by_order.values(), key=lambda o: o.order_id)
+
+    def set_order_unit_boxes(self, order: YandexFbsOrder) -> list[int]:
+        """
+        Разложить заказ по одной целой товарной единице в коробку.
+
+        Возвращает boxId в том же порядке, в котором идут единицы в order.items.
+        Статус заказа этот метод не меняет.
+        """
+        if not self.is_configured():
+            return []
+        boxes: list[dict] = []
+        for item in order.items:
+            for _ in range(item.quantity):
+                boxes.append({"items": [{"id": item.item_id, "fullCount": 1}]})
+        expected_units = sum(qty for _, qty in order.lines)
+        if not boxes or len(boxes) != expected_units:
+            raise ValueError(
+                f"Заказ {order.order_id}: Яндекс не вернул ID товарных позиций, "
+                "невозможно создать отдельную коробку для каждой единицы"
+            )
+
+        response = requests.put(
+            f"{self.base_url}/v2/campaigns/{self.campaign_id}/orders/{order.order_id}/boxes",
+            headers=self._headers(),
+            json={"boxes": boxes},
+            timeout=60,
+        )
+        response.raise_for_status()
+        body = response.json() or {}
+        result_boxes = ((body.get("result") or {}).get("boxes") or [])
+        box_ids: list[int] = []
+        for box in result_boxes:
+            try:
+                box_id = int(box.get("boxId"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if box_id > 0:
+                box_ids.append(box_id)
+        if len(box_ids) != len(boxes):
+            raise ValueError(
+                f"Заказ {order.order_id}: Яндекс создал {len(box_ids)} коробок "
+                f"вместо {len(boxes)}"
+            )
+        return box_ids
+
+    def fetch_box_label_pdf(
+        self,
+        order_id: str,
+        box_id: int,
+        *,
+        label_format: str = "A9_HORIZONTALLY",
+    ) -> bytes:
+        """Получить одностраничный ярлык конкретной коробки, не меняя статус заказа."""
+        fmt = (label_format or "A9_HORIZONTALLY").strip()
+        if fmt not in YANDEX_LABEL_FORMATS:
+            fmt = "A9_HORIZONTALLY"
+        response = requests.get(
+            (
+                f"{self.base_url}/v2/campaigns/{self.campaign_id}/orders/{order_id}"
+                f"/delivery/shipments/0/boxes/{int(box_id)}/label"
+            ),
+            headers=self._headers(),
+            params={"format": fmt},
+            timeout=90,
+        )
+        response.raise_for_status()
+        content = response.content
+        if not content or not content.startswith(b"%PDF"):
+            raise ValueError(
+                f"Заказ {order_id}, коробка {box_id}: Яндекс вернул некорректный PDF ярлыка"
+            )
+        return content
 
     def fetch_order_label_pdf_parts(
         self,

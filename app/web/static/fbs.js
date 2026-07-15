@@ -222,8 +222,8 @@
     if (summary) {
       summary.textContent =
         rows.length === 0
-          ? "Нет заказов PROCESSING + READY_TO_SHIP."
-          : "Строк в списке: " + rows.length;
+          ? "Нет заказов PROCESSING + STARTED."
+          : "Товарных единиц в списке: " + rows.length;
     }
     result.classList.toggle("hidden", false);
   }
@@ -342,7 +342,7 @@
         cfg.yandex_market && cfg.yandex_market.configured ? "настроен" : "не настроен";
     }
     if (yandexSheet) {
-      yandexSheet.textContent = "FBS_LIST_SHEET_URL + service account";
+      yandexSheet.textContent = "assembly + FBS_LIST_SHEET_URL + service account";
     }
   }
 
@@ -450,7 +450,7 @@
       if (dl) dl.disabled = true;
       renderYandexListRows(data.list_rows || []);
       applyYandexSheetLink(null, null);
-      showYandexWarnings([]);
+      showYandexWarnings(data.warnings || []);
     } catch (e) {
       alert(e.message || String(e));
     } finally {

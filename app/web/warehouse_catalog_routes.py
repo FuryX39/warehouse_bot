@@ -9,7 +9,11 @@ from typing import Any
 from fastapi import Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
-from app.catalog_bulk_import import build_import_template, import_products_from_xlsx
+from app.catalog_bulk_import import (
+    build_import_template,
+    build_products_export,
+    import_products_from_xlsx,
+)
 from app.catalog_barcode_import import build_barcode_import_template, import_barcodes_from_xlsx
 from app.catalog_price_type_import import (
     build_price_type_prices_template,
@@ -207,6 +211,27 @@ def register_warehouse_catalog_routes(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
                 "Content-Disposition": 'attachment; filename="catalog_products_template.xlsx"',
+            },
+        )
+
+    @app.get("/api/warehouse/catalog/products/export")
+    async def api_catalog_export_products(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        filters = _filters_from_query(request.query_params)
+        try:
+            content = await asyncio.to_thread(build_products_export, catalog_repo, filters)
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="catalog_products.xlsx"',
             },
         )
 

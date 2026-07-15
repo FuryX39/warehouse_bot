@@ -640,6 +640,142 @@ class CatalogRepository:
             rows = session.scalars(q).all()
             return [self._product_row(session, r, load_details=False) for r in rows]
 
+    def list_products_for_export(self, filters: dict[str, str]) -> dict[str, Any]:
+        """Все данные каталога для массовой выгрузки без N+1 запросов."""
+        with Session(self.engine) as session:
+            stmt = select(CatalogProduct).order_by(CatalogProduct.name, CatalogProduct.sku)
+            conds = self._filter_conditions(session, filters)
+            if conds:
+                stmt = stmt.where(*conds)
+            products = session.scalars(stmt).all()
+            price_types = session.scalars(
+                select(CrmPriceType).order_by(CrmPriceType.sort_order, CrmPriceType.name)
+            ).all()
+            if not products:
+                return {
+                    "products": [],
+                    "price_types": [
+                        {"id": int(row.id), "name": row.name} for row in price_types
+                    ],
+                }
+
+            product_ids = [int(row.id) for row in products]
+            id_batches = [
+                product_ids[start : start + 900] for start in range(0, len(product_ids), 900)
+            ]
+            groups = {
+                int(row.id): row.name
+                for row in session.scalars(select(CatalogProductGroup)).all()
+            }
+            units = {
+                int(row.id): row.name for row in session.scalars(select(CatalogUnit)).all()
+            }
+            markings = {
+                int(row.id): row.name
+                for row in session.scalars(select(CatalogMarkingType)).all()
+            }
+
+            barcodes_by_product: dict[int, list[dict[str, str]]] = {
+                product_id: [] for product_id in product_ids
+            }
+            for batch in id_batches:
+                for row in session.scalars(
+                    select(CatalogProductBarcode)
+                    .where(CatalogProductBarcode.product_id.in_(batch))
+                    .order_by(CatalogProductBarcode.product_id, CatalogProductBarcode.sort_order)
+                ).all():
+                    barcodes_by_product[int(row.product_id)].append(
+                        {
+                            "barcode": row.barcode,
+                            "label": row.label or "",
+                            "group": row.barcode_group or "",
+                        }
+                    )
+
+            prices_by_product: dict[int, dict[int, str]] = {
+                product_id: {} for product_id in product_ids
+            }
+            for batch in id_batches:
+                for row in session.scalars(
+                    select(CatalogProductPrice).where(
+                        CatalogProductPrice.product_id.in_(batch)
+                    )
+                ).all():
+                    prices_by_product[int(row.product_id)][int(row.price_type_id)] = row.price
+
+            components_by_product: dict[int, list[dict[str, Any]]] = {
+                product_id: [] for product_id in product_ids
+            }
+            component_rows = []
+            for batch in id_batches:
+                component_rows.extend(
+                    session.scalars(
+                        select(CatalogKitComponent).where(
+                            CatalogKitComponent.kit_product_id.in_(batch)
+                        )
+                    ).all()
+                )
+            component_ids = {int(row.component_product_id) for row in component_rows}
+            component_products = {}
+            component_id_list = list(component_ids)
+            for start in range(0, len(component_id_list), 900):
+                batch = component_id_list[start : start + 900]
+                component_products.update(
+                    {
+                        int(row.id): row
+                        for row in session.scalars(
+                            select(CatalogProduct).where(CatalogProduct.id.in_(batch))
+                        ).all()
+                    }
+                )
+            for row in component_rows:
+                component = component_products.get(int(row.component_product_id))
+                if component is None:
+                    continue
+                components_by_product[int(row.kit_product_id)].append(
+                    {
+                        "sku": component.sku,
+                        "name": component.name,
+                        "quantity": int(row.quantity),
+                    }
+                )
+
+            return {
+                "price_types": [
+                    {"id": int(row.id), "name": row.name} for row in price_types
+                ],
+                "products": [
+                    {
+                        "id": int(row.id),
+                        "is_kit": bool(row.is_kit),
+                        "name": row.name,
+                        "sku": row.sku,
+                        "code": row.code,
+                        "external_code": row.external_code or "",
+                        "description": row.description or "",
+                        "image_url": row.image_url or "",
+                        "group_name": groups.get(int(row.group_id), "") if row.group_id else "",
+                        "country": row.country or "",
+                        "unit_name": units.get(int(row.unit_id), "") if row.unit_id else "",
+                        "weight": row.weight or "",
+                        "width_mm": row.width_mm or "",
+                        "height_mm": row.height_mm or "",
+                        "length_mm": row.length_mm or "",
+                        "volume": row.volume or "",
+                        "volume_manual": bool(row.volume_manual),
+                        "marking_type_name": (
+                            markings.get(int(row.marking_type_id), "")
+                            if row.marking_type_id
+                            else ""
+                        ),
+                        "barcodes": barcodes_by_product[int(row.id)],
+                        "components": components_by_product[int(row.id)],
+                        "prices": prices_by_product[int(row.id)],
+                    }
+                    for row in products
+                ],
+            }
+
     def list_products_picker(
         self,
         *,

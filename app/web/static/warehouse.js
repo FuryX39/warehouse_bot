@@ -248,6 +248,10 @@
       window.WhOzonFbo.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "fbs" && window.WhFbs) {
+      window.WhFbs.render(tab, item);
+      return;
+    }
     if (tab.id === "marketplaces" && item.id === "route-sheets" && window.WhRouteSheets) {
       window.WhRouteSheets.render(tab, item);
       return;

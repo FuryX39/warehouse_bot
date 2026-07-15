@@ -1,19 +1,24 @@
-"""Заказы Yandex Market «собрано» и PDF-этикетки FBS."""
+"""Заказы Yandex Market «готовы к сборке» и отдельные PDF-этикетки FBS."""
 
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from app.adapters.yandex_market import (
     YANDEX_AWAITING_ASSEMBLY_SUBSTATUS,
     YandexFbsOrder,
     YandexMarketAdapter,
 )
-from app.fbs_labels_common import build_fbs_sorted_flat_rows, build_labels_zip, merge_label_pdfs
+from app.fbs_assembly_order import apply_assembly_order_to_yandex_rows
+from app.fbs_labels_common import merge_label_pdfs
 from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_from_template
 from app.ozon_label_pdf import normalize_ozon_package_label_pdf
-from app.services import StockCoordinator
+
+if TYPE_CHECKING:
+    from app.services import StockCoordinator
 
 
 @dataclass(frozen=True)
@@ -43,13 +48,15 @@ def get_configured_yandex_adapter(coordinator: StockCoordinator) -> YandexMarket
 
 
 def build_sorted_list_rows(orders: list[YandexFbsOrder]) -> list[YandexFbsListRow]:
-    """Строки списка: одна на позицию; одиночные заказы — по артикулу, 2+ SKU — в конце без сортировки."""
-    flat = build_fbs_sorted_flat_rows(
-        orders,
-        iter_lines=lambda o: o.lines,
-        get_posting_key=lambda o: o.order_id,
-        get_status=lambda o: o.substatus,
-    )
+    """Строки списка: одна строка на каждую физическую товарную единицу."""
+    flat = []
+    for order in orders:
+        for sku, quantity in order.lines:
+            flat.extend(
+                (sku, order.order_id, 1, order.substatus)
+                for _ in range(max(0, int(quantity)))
+            )
+    flat.sort(key=lambda row: row[0].casefold())
     return [
         YandexFbsListRow(i + 1, order_id, sku, qty, status)
         for i, (sku, order_id, qty, status) in enumerate(flat)
@@ -70,20 +77,46 @@ def order_ids_in_list_order(list_rows: list[YandexFbsListRow]) -> list[str]:
 
 def _fetch_labels_in_order(
     adapter: YandexMarketAdapter,
-    order_ids: list[str],
+    orders: list[YandexFbsOrder],
+    list_rows: list[YandexFbsListRow],
     *,
     label_format: str = "A9_HORIZONTALLY",
     label_rotate_degrees: int = 0,
 ) -> tuple[list[tuple[str, bytes]], list[str]]:
-    label_files, warnings = adapter.fetch_order_label_pdf_parts(
-        order_ids,
-        label_format=label_format,
-    )
-    if label_rotate_degrees:
-        label_files = [
-            (name, normalize_ozon_package_label_pdf(data, rotate_degrees=label_rotate_degrees))
-            for name, data in label_files
-        ]
+    box_ids_by_order_sku: dict[tuple[str, str], deque[int]] = defaultdict(deque)
+    for order in orders:
+        box_ids = adapter.set_order_unit_boxes(order)
+        box_index = 0
+        for item in order.items:
+            key = (order.order_id, item.sku)
+            for _ in range(item.quantity):
+                box_ids_by_order_sku[key].append(box_ids[box_index])
+                box_index += 1
+
+    label_files: list[tuple[str, bytes]] = []
+    warnings: list[str] = []
+    for row in list_rows:
+        key = (row.order_id, row.sku)
+        if not box_ids_by_order_sku[key]:
+            warnings.append(
+                f"Заказ {row.order_id}, {row.sku}: не найдена отдельная коробка для этикетки"
+            )
+            continue
+        box_id = box_ids_by_order_sku[key].popleft()
+        try:
+            pdf = adapter.fetch_box_label_pdf(
+                row.order_id,
+                box_id,
+                label_format=label_format,
+            )
+            if label_rotate_degrees:
+                pdf = normalize_ozon_package_label_pdf(
+                    pdf, rotate_degrees=label_rotate_degrees
+                )
+            label_files.append((f"yandex_label_{row.order_id}_{box_id}.pdf", pdf))
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Заказ {row.order_id}, коробка {box_id}: {exc}")
+
     pdfs = [data for _, data in label_files]
     merged = merge_label_pdfs(pdfs)
     if merged is not None:
@@ -127,22 +160,35 @@ def fetch_awaiting_assembly_labels(
     fbs_list_template_sheet: str = "FBSTemplate",
     yandex_label_format: str = "A9_HORIZONTALLY",
     yandex_label_rotate_degrees: int = 0,
+    default_stocks_sheet_url: str = "",
+    fbs_assembly_sheet_name: str = "assembly",
+    assembly_sheet_gid: int | None = None,
 ) -> YandexAwaitingAssemblyBundle:
-    """Список по артикулу, этикетки в том же порядке, лист в Google Таблице."""
+    """Все STARTED-заказы: по единице в коробке, порядок списка и ярлыков — assembly."""
     orders = adapter.list_awaiting_assembly_orders(substatus=substatus)
     if not orders:
         return YandexAwaitingAssemblyBundle()
 
     list_rows = build_sorted_list_rows(orders)
+    list_rows, assembly_warnings = apply_assembly_order_to_yandex_rows(
+        list_rows,
+        default_stocks_sheet_url=default_stocks_sheet_url,
+        google_service_account_file=google_service_account_file,
+        assembly_sheet_name=fbs_assembly_sheet_name,
+        assembly_sheet_gid=assembly_sheet_gid,
+        row_factory=YandexFbsListRow,
+    )
     ids_ordered = order_ids_in_list_order(list_rows)
     sheet_title = fbs_list_sheet_title()
 
     label_files, warnings = _fetch_labels_in_order(
         adapter,
-        ids_ordered,
+        orders,
+        list_rows,
         label_format=yandex_label_format,
         label_rotate_degrees=yandex_label_rotate_degrees,
     )
+    warnings = assembly_warnings + warnings
 
     sheet_url: str | None = None
     sheet_url_cfg = (fbs_list_sheet_url or "").strip()

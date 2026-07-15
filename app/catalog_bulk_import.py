@@ -62,6 +62,92 @@ class CatalogImportResult:
     total_rows: int
 
 
+def build_products_export(repo: CatalogRepository, filters: dict[str, str]) -> bytes:
+    data = repo.list_products_for_export(filters)
+    products = data.get("products") or []
+    price_types = data.get("price_types") or []
+    extra_headers = ["Тип", "Состав комплекта"]
+    price_headers = [f"Цена: {item.get('name') or ''}" for item in price_types]
+    headers = [*_TEMPLATE_HEADERS, *extra_headers, *price_headers]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Товары"
+    ws.append(headers)
+
+    for product in products:
+        barcodes = "; ".join(
+            str(item.get("barcode") or "").strip()
+            for item in (product.get("barcodes") or [])
+            if str(item.get("barcode") or "").strip()
+        )
+        components = "; ".join(
+            f"{item.get('sku') or item.get('name') or ''} × {int(item.get('quantity') or 1)}"
+            for item in (product.get("components") or [])
+        )
+        prices = product.get("prices") or {}
+        ws.append(
+            [
+                product.get("name") or "",
+                product.get("sku") or "",
+                product.get("code") or "",
+                product.get("external_code") or "",
+                product.get("description") or "",
+                product.get("image_url") or "",
+                product.get("group_name") or "",
+                product.get("country") or "",
+                product.get("unit_name") or "",
+                product.get("weight") or "",
+                product.get("width_mm") or "",
+                product.get("height_mm") or "",
+                product.get("length_mm") or "",
+                product.get("volume") or "",
+                product.get("marking_type_name") or "",
+                barcodes,
+                "Комплект" if product.get("is_kit") else "Товар",
+                components,
+                *[prices.get(int(item["id"]), "") for item in price_types],
+            ]
+        )
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="E8EEF4")
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    widths = {
+        1: 42,
+        2: 20,
+        3: 14,
+        4: 18,
+        5: 45,
+        6: 36,
+        7: 24,
+        8: 16,
+        9: 18,
+        15: 25,
+        16: 34,
+        17: 12,
+        18: 40,
+    }
+    for column, width in widths.items():
+        ws.column_dimensions[ws.cell(row=1, column=column).column_letter].width = width
+    for column in range(19, len(headers) + 1):
+        ws.column_dimensions[ws.cell(row=1, column=column).column_letter].width = 18
+
+    note = wb.create_sheet("Описание")
+    note.append(["Массовая выгрузка каталога"])
+    note["A1"].font = Font(bold=True)
+    note.append(["Первые 16 колонок совместимы с массовой загрузкой товаров."])
+    note.append(["Комплекты выгружаются для просмотра, но массовая загрузка их не изменяет."])
+    note.append(["Колонки типа, состава комплекта и цен носят информационный характер."])
+    note.column_dimensions["A"].width = 85
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _cell_str(value: object) -> str:
     if value is None:
         return ""

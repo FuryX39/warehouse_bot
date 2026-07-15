@@ -46,6 +46,7 @@ from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.barcode_label_pdf import generate_barcode_label_pdf
 from app.fbs_labels_cache import pop_label_files, store_label_files
+from app.fbs_assembly_order import apply_assembly_order_to_yandex_rows
 from app.fbs_ship import (
     execute_fbs_ship,
     normalize_ship_scope,
@@ -64,6 +65,7 @@ from app.ozon_fbs_labels import (
     posting_numbers_in_list_order,
 )
 from app.yandex_fbs_labels import (
+    YandexFbsListRow,
     build_sorted_list_rows as build_yandex_sorted_list_rows,
     fetch_awaiting_assembly_labels,
     get_configured_yandex_adapter,
@@ -374,6 +376,17 @@ def create_dashboard_app(
         if user is None:
             raise HTTPException(status_code=401, detail="Требуется вход в новую панель")
         return user
+
+    async def require_fbs_access(request: Request) -> None:
+        """Разрешить FBS API из старой или новой авторизованной панели."""
+        if request.session.get("authenticated"):
+            return
+        user = _warehouse_user_from_session(request)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Требуется вход")
+        is_admin, permissions = _resolve_user_access(user)
+        if not is_admin and "fbs" not in permissions.get("marketplaces", []):
+            raise HTTPException(status_code=403, detail="Нет доступа к разделу FBS")
 
     async def require_warehouse_admin(
         user: WarehouseUserRow = Depends(require_warehouse_user),
@@ -724,7 +737,7 @@ def create_dashboard_app(
         n = inventory_repo.upsert_nomenclature_items({sku_n: (title, img, codes)})
         return {"upserted": n, "sku": sku_n}
 
-    @app.get("/api/ozon/awaiting-shipment", dependencies=[Depends(require_login)])
+    @app.get("/api/ozon/awaiting-shipment", dependencies=[Depends(require_fbs_access)])
     async def api_ozon_awaiting_shipment_list(
         first_posting: Annotated[str, Query(description="Первый номер отправления в диапазоне")] = "",
         last_posting: Annotated[str, Query(description="Последний номер отправления в диапазоне")] = "",
@@ -798,7 +811,7 @@ def create_dashboard_app(
             headers={"Content-Disposition": 'attachment; filename="ozon_awaiting_labels.zip"'},
         )
 
-    @app.post("/api/fbs/ozon/generate", dependencies=[Depends(require_login)])
+    @app.post("/api/fbs/ozon/generate", dependencies=[Depends(require_fbs_access)])
     async def api_fbs_ozon_generate(
         first_posting: Annotated[str, Form()] = "",
         last_posting: Annotated[str, Form()] = "",
@@ -864,7 +877,7 @@ def create_dashboard_app(
             "labels_token": labels_token,
         }
 
-    @app.get("/api/fbs/ozon/labels", dependencies=[Depends(require_login)])
+    @app.get("/api/fbs/ozon/labels", dependencies=[Depends(require_fbs_access)])
     async def api_fbs_ozon_labels(
         token: Annotated[str, Query(description="Токен после POST /api/fbs/ozon/generate")],
     ) -> Response:
@@ -873,9 +886,9 @@ def create_dashboard_app(
             raise HTTPException(status_code=404, detail="Ссылка на этикетки устарела или уже использована")
         return _fbs_label_files_response(label_files)
 
-    @app.get("/api/yandex/awaiting-assembly", dependencies=[Depends(require_login)])
+    @app.get("/api/yandex/awaiting-assembly", dependencies=[Depends(require_fbs_access)])
     async def api_yandex_awaiting_assembly_list() -> dict:
-        """Список FBS-заказов Yandex «собрано» (PROCESSING + READY_TO_SHIP)."""
+        """Все FBS-заказы Yandex «готовы к сборке» (PROCESSING + STARTED)."""
         adapter = get_configured_yandex_adapter(coordinator)
         if adapter is None:
             raise HTTPException(
@@ -890,15 +903,28 @@ def create_dashboard_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
         list_rows = build_yandex_sorted_list_rows(orders)
+        list_rows, assembly_warnings = await loop.run_in_executor(
+            None,
+            lambda: apply_assembly_order_to_yandex_rows(
+                list_rows,
+                default_stocks_sheet_url=settings.default_stocks_sheet_url,
+                google_service_account_file=settings.google_service_account_file,
+                assembly_sheet_name=settings.fbs_assembly_sheet_name,
+                assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
+                row_factory=YandexFbsListRow,
+            ),
+        )
         order_ids = order_ids_in_list_order(list_rows)
         by_id = {o.order_id: o for o in orders}
         orders_ordered = [by_id[oid] for oid in order_ids if oid in by_id]
         return {
             "count": len(orders_ordered),
             "status": "PROCESSING",
-            "substatus": "READY_TO_SHIP",
+            "substatus": "STARTED",
+            "warnings": assembly_warnings,
             "list_rows": [
                 {
+                    "seq": r.seq,
                     "sku": r.sku,
                     "quantity": r.quantity,
                     "order_id": r.order_id,
@@ -917,7 +943,7 @@ def create_dashboard_app(
             ],
         }
 
-    @app.post("/api/fbs/yandex/generate", dependencies=[Depends(require_login)])
+    @app.post("/api/fbs/yandex/generate", dependencies=[Depends(require_fbs_access)])
     async def api_fbs_yandex_generate() -> dict:
         """FBS Yandex: список в Google Таблице + этикетки (без тела запроса)."""
         adapter = get_configured_yandex_adapter(coordinator)
@@ -937,12 +963,15 @@ def create_dashboard_app(
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
                     yandex_label_format=settings.yandex_label_format,
                     yandex_label_rotate_degrees=settings.yandex_label_rotate_degrees,
+                    default_stocks_sheet_url=settings.default_stocks_sheet_url,
+                    fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
+                    assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
                 ),
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
         if not bundle.orders:
-            raise HTTPException(status_code=404, detail="Нет заказов PROCESSING + READY_TO_SHIP")
+            raise HTTPException(status_code=404, detail="Нет заказов PROCESSING + STARTED")
         labels_token: str | None = None
         if bundle.label_files:
             labels_token = store_label_files(bundle.label_files)
@@ -956,7 +985,7 @@ def create_dashboard_app(
         return {
             "count": len(bundle.list_rows),
             "status": "PROCESSING",
-            "substatus": "READY_TO_SHIP",
+            "substatus": "STARTED",
             "list_rows": [
                 {
                     "seq": r.seq,
@@ -973,7 +1002,7 @@ def create_dashboard_app(
             "labels_token": labels_token,
         }
 
-    @app.get("/api/fbs/yandex/labels", dependencies=[Depends(require_login)])
+    @app.get("/api/fbs/yandex/labels", dependencies=[Depends(require_fbs_access)])
     async def api_fbs_yandex_labels(
         token: Annotated[str, Query(description="Токен после POST /api/fbs/yandex/generate")],
     ) -> Response:

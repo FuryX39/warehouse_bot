@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import io
+
+from openpyxl import Workbook, load_workbook
+
 from app.yandex_repricer import (
     _needs_reprice,
     card_from_seller,
     card_from_showcase,
+    process_yandex_prices_workbook,
     seller_from_showcase,
     seller_from_target_card,
     showcase_from_seller,
@@ -126,3 +131,36 @@ def test_seller_from_target_card_inverts_chain() -> None:
 def test_seller_from_showcase_breakpoint() -> None:
     assert seller_from_showcase(253) < 500
     assert seller_from_showcase(754) >= 500
+
+
+def test_output_sets_old_price_to_double_recommended_price() -> None:
+    class Repo:
+        def list_products_for_price_type(self, price_type_id, filters):
+            return [{"sku": "SKU-1", "price": 500}]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "Ваш SKU *",
+            "Название товара",
+            "Цена *",
+            "Зачёркнутая цена",
+            "Минимум для акции",
+            "На витрине",
+        ]
+    )
+    sheet.append(["SKU-1", "Товар", 1000, 2000, 1000, 900])
+    source = io.BytesIO()
+    workbook.save(source)
+
+    result = process_yandex_prices_workbook(
+        source.getvalue(),
+        catalog_repo=Repo(),
+        price_type_id=1,
+    )
+
+    output = load_workbook(io.BytesIO(result.workbook_bytes), data_only=True).active
+    seller_price = output.cell(row=2, column=3).value
+    assert output.cell(row=2, column=4).value == seller_price * 2
+    assert output.cell(row=2, column=5).value == seller_price

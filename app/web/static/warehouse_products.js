@@ -442,6 +442,7 @@
           '<input type="search" id="whCatQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
           '<button type="button" class="wh-btn" id="whCatToggleFilter">Фильтр</button>' +
           '<button type="button" class="wh-btn" id="whCatBulkImport">Массовая загрузка</button>' +
+          '<button type="button" class="wh-btn" id="whCatBulkExport">Выгрузить Excel</button>' +
           '<button type="button" class="wh-btn" id="whCatBarcodeImport">Штрихкоды Excel</button>' +
           '<button type="button" class="wh-btn wh-btn-danger" id="whCatBulkDelete" disabled>Удалить выбранные</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whCatCreate">+ Товар</button>' +
@@ -872,6 +873,39 @@
       renderForm(null, true);
     });
     root.querySelector("#whCatBulkImport").addEventListener("click", openBulkImportModal);
+    root.querySelector("#whCatBulkExport").addEventListener("click", function () {
+      var btn = root.querySelector("#whCatBulkExport");
+      btn.disabled = true;
+      btn.textContent = "Формирование…";
+      fetch("/api/warehouse/catalog/products/export" + filtersQuery(), {
+        credentials: "include",
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            return response.text().then(function (text) {
+              var message = "Не удалось выгрузить товары";
+              try {
+                var data = text ? JSON.parse(text) : null;
+                if (data && data.detail) message = data.detail;
+              } catch (e) {
+                if (text) message = text;
+              }
+              throw new Error(message);
+            });
+          }
+          return response.blob();
+        })
+        .then(function (blob) {
+          downloadBlob(blob, "catalog_products.xlsx");
+        })
+        .catch(function (err) {
+          alert(err.message || "Ошибка выгрузки");
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.textContent = "Выгрузить Excel";
+        });
+    });
     root.querySelector("#whCatBarcodeImport").addEventListener("click", openBarcodeImportModal);
     var bulkDeleteBtn = root.querySelector("#whCatBulkDelete");
     if (bulkDeleteBtn) {

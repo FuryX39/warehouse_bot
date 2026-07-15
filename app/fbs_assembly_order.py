@@ -234,3 +234,55 @@ def apply_assembly_order_to_ozon_rows(
         )
 
     return reordered, warnings
+
+
+@dataclass(frozen=True)
+class _YandexAssemblyRowProxy:
+    seq: int
+    posting_number: str
+    sku: str
+    quantity: int
+    status: str
+
+
+def apply_assembly_order_to_yandex_rows(
+    list_rows: list,
+    *,
+    default_stocks_sheet_url: str,
+    google_service_account_file: str,
+    assembly_sheet_name: str,
+    assembly_sheet_gid: int | None = None,
+    row_factory,
+) -> tuple[list, list[str]]:
+    """Применить тот же порядок assembly к строкам Яндекса с полем order_id."""
+    proxy_rows = [
+        _YandexAssemblyRowProxy(
+            seq=int(row.seq),
+            posting_number=str(row.order_id),
+            sku=str(row.sku),
+            quantity=int(row.quantity),
+            status=str(row.status),
+        )
+        for row in list_rows
+    ]
+    reordered, warnings = apply_assembly_order_to_ozon_rows(
+        proxy_rows,
+        default_stocks_sheet_url=default_stocks_sheet_url,
+        google_service_account_file=google_service_account_file,
+        assembly_sheet_name=assembly_sheet_name,
+        assembly_sheet_gid=assembly_sheet_gid,
+        row_factory=_YandexAssemblyRowProxy,
+    )
+    return (
+        [
+            row_factory(
+                row.seq,
+                row.posting_number,
+                row.sku,
+                row.quantity,
+                row.status,
+            )
+            for row in reordered
+        ],
+        warnings,
+    )

@@ -44,6 +44,7 @@ class RepricerRowResult:
     estimated_card_price: Optional[int]
     catalog_price: Optional[float]
     recommended_seller_price: Optional[int]
+    recommended_old_price: Optional[int]
     updated: bool
     missing_catalog_price: bool
     note: str
@@ -261,6 +262,8 @@ def _column_map(header: tuple) -> dict[str, int]:
             mapping["sku"] = idx
         elif text == "цена *" or text.startswith("цена *"):
             mapping["seller"] = idx
+        elif "зач" in text and "цен" in text:
+            mapping["old_price"] = idx
         elif "минимум" in text and "акци" in text:
             mapping["min_promo"] = idx
         elif "витрин" in text:
@@ -272,6 +275,8 @@ def _column_map(header: tuple) -> dict[str, int]:
         raise ValueError(f"В файле нет обязательных колонок: {', '.join(missing)}")
     if "min_promo" not in mapping and "seller" in mapping:
         mapping["min_promo"] = mapping["seller"] + 1
+    if "old_price" not in mapping and "seller" in mapping:
+        mapping["old_price"] = mapping["seller"] + 1
     if "name" not in mapping:
         mapping["name"] = mapping["sku"] + 1
     return mapping
@@ -375,6 +380,7 @@ def process_yandex_prices_workbook(
 
         estimated_card: Optional[int] = None
         recommended: Optional[int] = None
+        recommended_old: Optional[int] = None
         updated = False
         missing_catalog_price = False
         note = ""
@@ -413,10 +419,12 @@ def process_yandex_prices_workbook(
                         stats["skipped_ok"] += 1
                         note = "рекомендуемая цена совпадает с текущей"
                     else:
+                        recommended_old = int(recommended) * 2
                         row_values = list(row)
                         if len(row_values) <= max_col_idx:
                             row_values.extend([None] * (max_col_idx + 1 - len(row_values)))
                         row_values[cols["seller"]] = int(recommended)
+                        row_values[cols["old_price"]] = recommended_old
                         row_values[cols["min_promo"]] = int(recommended)
                         updated_rows_data.append(tuple(row_values))
                         updated = True
@@ -436,6 +444,7 @@ def process_yandex_prices_workbook(
                 estimated_card_price=estimated_card,
                 catalog_price=catalog_price,
                 recommended_seller_price=recommended,
+                recommended_old_price=recommended_old,
                 updated=updated,
                 missing_catalog_price=missing_catalog_price,
                 note=note,
