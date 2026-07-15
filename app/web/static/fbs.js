@@ -214,7 +214,7 @@
           '</td><td class="num">' +
           (r.quantity != null ? r.quantity : "") +
           "</td><td>" +
-          escapeHtml(r.order_id || r.posting_number || "") +
+          escapeHtml(r.order_display || r.order_id || r.posting_number || "") +
           "</td></tr>"
         );
       })
@@ -431,8 +431,20 @@
     if (busy) return;
     setYandexBusy(true);
     try {
-      var data = await api("/api/fbs/yandex/generate", { method: "POST" });
+      var form = new FormData();
+      var limit = yandexItemLimit();
+      if (limit) form.append("item_limit", limit);
+      var data = await api("/api/fbs/yandex/generate", { method: "POST", body: form });
       applyYandexGenerateResult(data);
+      var summary = document.getElementById("yandexSummary");
+      if (summary) {
+        summary.textContent =
+          "Взято товаров: " +
+          (data.count || 0) +
+          " из " +
+          (data.available_count != null ? data.available_count : data.count || 0) +
+          ".";
+      }
     } catch (e) {
       alert(e.message || String(e));
     } finally {
@@ -444,11 +456,22 @@
     if (busy) return;
     setYandexBusy(true);
     try {
-      var data = await api("/api/yandex/awaiting-assembly");
+      var limit = yandexItemLimit();
+      var query = limit ? "?item_limit=" + encodeURIComponent(limit) : "";
+      var data = await api("/api/yandex/awaiting-assembly" + query);
       yandexLabelsToken = null;
       var dl = document.getElementById("btnYandexLabels");
       if (dl) dl.disabled = true;
       renderYandexListRows(data.list_rows || []);
+      var summary = document.getElementById("yandexSummary");
+      if (summary) {
+        summary.textContent =
+          "Показано товаров: " +
+          (data.count || 0) +
+          " из " +
+          (data.available_count != null ? data.available_count : data.count || 0) +
+          ".";
+      }
       applyYandexSheetLink(null, null);
       showYandexWarnings(data.warnings || []);
     } catch (e) {
@@ -471,6 +494,11 @@
     } finally {
       setYandexBusy(false);
     }
+  }
+
+  function yandexItemLimit() {
+    var input = document.getElementById("yandexItemLimit");
+    return input ? String(input.value || "").trim() : "";
   }
 
   var shipScope = "all";

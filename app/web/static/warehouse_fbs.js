@@ -62,11 +62,13 @@
       '<p class="wh-muted">Берутся все заказы PROCESSING / STARTED («Готовы к сборке»). ' +
       "Каждая товарная единица назначается в отдельную коробку и получает отдельную этикетку. " +
       "Статус заказа не изменяется; список и этикетки сортируются по assembly.</p>" +
+      '<div class="wh-route-form">' +
+      '<label>Количество товаров<input type="number" id="whFbsYandexItemLimit" min="1" step="1" placeholder="Все товары" /></label>' +
       '<div class="wh-route-actions">' +
       '<button type="button" class="wh-btn wh-fbs-action" id="whFbsRefresh">Обновить список</button>' +
       '<button type="button" class="wh-btn wh-btn-primary wh-fbs-action" id="whFbsGenerate">Сформировать список и этикетки</button>' +
       '<button type="button" class="wh-btn wh-fbs-action" id="whFbsDownload" disabled>Скачать этикетки</button>' +
-      "</div></div>"
+      "</div></div></div>"
     );
   }
 
@@ -88,7 +90,7 @@
           "</code></td><td>" +
           esc(row.quantity) +
           "</td><td>" +
-          esc(row.order_id || row.posting_number) +
+          esc(row.order_display || row.order_id || row.posting_number) +
           "</td></tr>"
         );
       })
@@ -105,7 +107,16 @@
   }
 
   function queryOrForm(root, asForm) {
-    if (activeMarketplace !== "ozon") return asForm ? new FormData() : "";
+    if (activeMarketplace === "yandex") {
+      var limitEl = root.querySelector("#whFbsYandexItemLimit");
+      var itemLimit = limitEl ? String(limitEl.value || "").trim() : "";
+      if (asForm) {
+        var yandexForm = new FormData();
+        if (itemLimit) yandexForm.append("item_limit", itemLimit);
+        return yandexForm;
+      }
+      return itemLimit ? "?item_limit=" + encodeURIComponent(itemLimit) : "";
+    }
     var first = String(root.querySelector("#whFbsFirstPosting").value || "").trim();
     var last = String(root.querySelector("#whFbsLastPosting").value || "").trim();
     if (asForm) {
@@ -128,13 +139,22 @@
     var url =
       activeMarketplace === "ozon"
         ? "/api/ozon/awaiting-shipment" + queryOrForm(root, false)
-        : "/api/yandex/awaiting-assembly";
+        : "/api/yandex/awaiting-assembly" + queryOrForm(root, false);
     shell()
       .fetchJson(url)
       .then(function (data) {
         labelTokens[activeMarketplace] = null;
         renderRows(root, data.list_rows || []);
         var warnings = data.warnings || [];
+        if (activeMarketplace === "yandex") {
+          warnings.unshift(
+            "Показано товаров: " +
+              (data.count || 0) +
+              " из " +
+              (data.available_count != null ? data.available_count : data.count || 0) +
+              "."
+          );
+        }
         setMessage(root, warnings.length ? warnings.join("\n") : "Список обновлён.", false);
       })
       .catch(function (error) {
@@ -157,14 +177,22 @@
     );
     var url =
       activeMarketplace === "ozon" ? "/api/fbs/ozon/generate" : "/api/fbs/yandex/generate";
-    var options = { method: "POST" };
-    if (activeMarketplace === "ozon") options.body = queryOrForm(root, true);
+    var options = { method: "POST", body: queryOrForm(root, true) };
     shell()
       .fetchJson(url, options)
       .then(function (data) {
         labelTokens[activeMarketplace] = data.labels_token || null;
         renderRows(root, data.list_rows || []);
         var notes = [];
+        if (activeMarketplace === "yandex") {
+          notes.push(
+            "Взято товаров: " +
+              (data.count || 0) +
+              " из " +
+              (data.available_count != null ? data.available_count : data.count || 0) +
+              "."
+          );
+        }
         if (data.sheet_url) notes.push("Список создан: " + data.sheet_url);
         notes = notes.concat(data.warnings || []);
         if (!notes.length) notes.push("Список и этикетки сформированы.");

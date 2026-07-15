@@ -52,9 +52,10 @@ def yandex_order_highlight_range(order_id: str) -> tuple[int, int]:
     oid = str(order_id or "").strip()
     if not oid:
         return 0, 0
-    digit_matches = list(re.finditer(r"\d", oid))
+    order_number = re.sub(r"\s+\d+/\d+$", "", oid)
+    digit_matches = list(re.finditer(r"\d", order_number))
     if not digit_matches:
-        return max(0, len(oid) - 4), len(oid)
+        return max(0, len(order_number) - 4), len(order_number)
     selected = digit_matches[-4:]
     return selected[0].start(), selected[-1].end()
 
@@ -87,47 +88,6 @@ def _posting_cell_with_highlight(
         "userEnteredValue": {"stringValue": pn},
         "textFormatRuns": runs,
     }
-
-
-def _merge_consecutive_posting_cells(
-    worksheet,
-    posting_numbers: Sequence[str],
-    *,
-    column_index: int = _FBS_POSTING_COL_INDEX,
-) -> None:
-    """Вертикально объединяет ячейки колонки отправления с одинаковым номером подряд."""
-    if len(posting_numbers) < 2:
-        return
-    requests: list[dict] = []
-    i = 0
-    while i < len(posting_numbers):
-        pn = posting_numbers[i]
-        j = i + 1
-        while j < len(posting_numbers) and posting_numbers[j] == pn:
-            j += 1
-        if j - i > 1:
-            start_row = 1 + i
-            end_row = 1 + j
-            cell_range = {
-                "sheetId": worksheet.id,
-                "startRowIndex": start_row,
-                "endRowIndex": end_row,
-                "startColumnIndex": column_index,
-                "endColumnIndex": column_index + 1,
-            }
-            requests.append({"mergeCells": {"range": cell_range, "mergeType": "MERGE_ALL"}})
-            requests.append(
-                {
-                    "repeatCell": {
-                        "range": cell_range,
-                        "cell": {"userEnteredFormat": {"verticalAlignment": "MIDDLE"}},
-                        "fields": "userEnteredFormat.verticalAlignment",
-                    }
-                }
-            )
-        i = j
-    if requests:
-        worksheet.spreadsheet.batch_update({"requests": requests})
 
 
 def _fill_posting_column_highlighted(
@@ -412,7 +372,7 @@ def write_fbs_list_from_template(
     """
     Копирует лист-шаблон (FBSTemplate), заполняет A, D, E: артикул, количество, номер отправления.
     Колонки B–C (картинка, название) не трогает — формулы из шаблона.
-    Подряд идущие строки с одним номером отправления (колонка E) объединяются по вертикали.
+    Каждая строка остаётся отдельной, даже если артикул или номер отправления повторяется подряд.
     """
     if not rows:
         raise ValueError("Нет строк для выгрузки в Google Таблицу")
@@ -438,6 +398,5 @@ def write_fbs_list_from_template(
     new_ws.update(f"A2:A{last_row}", skus, value_input_option="USER_ENTERED")
     new_ws.update(f"D2:D{last_row}", qtys, value_input_option="USER_ENTERED")
     _fill_posting_column_highlighted(new_ws, posting_numbers, highlight_style=highlight_style)
-    _merge_consecutive_posting_cells(new_ws, posting_numbers)
 
     return f"https://docs.google.com/spreadsheets/d/{sh.id}/edit#gid={new_ws.id}"

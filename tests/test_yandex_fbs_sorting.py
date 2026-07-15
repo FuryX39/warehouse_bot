@@ -9,10 +9,13 @@ from app.fbs_assembly_order import (
     apply_assembly_order_to_yandex_rows,
     parse_assembly_sheet_values,
 )
+from app.google_sheet_write import yandex_order_highlight_range
 from app.yandex_fbs_labels import (
     YandexFbsListRow,
     _fetch_labels_in_order,
+    build_order_box_labels,
     build_sorted_list_rows,
+    fetch_awaiting_assembly_labels,
 )
 
 
@@ -176,3 +179,54 @@ def test_yandex_box_labels_are_requested_in_sorted_list_order() -> None:
         "yandex_label_1001_7002.pdf",
         "yandex_label_1001_7001.pdf",
     ]
+
+
+def test_yandex_sheet_adds_box_number_matching_label_layout() -> None:
+    order = YandexFbsOrder(
+        order_id="123456",
+        status="PROCESSING",
+        substatus="STARTED",
+        lines=(("SKU-B", 1), ("SKU-A", 1)),
+        items=(
+            YandexFbsItem(item_id=501, sku="SKU-B", quantity=1),
+            YandexFbsItem(item_id=502, sku="SKU-A", quantity=1),
+        ),
+    )
+    assembly_sorted_rows = [
+        YandexFbsListRow(1, "123456", "SKU-A", 1, "STARTED"),
+        YandexFbsListRow(2, "123456", "SKU-B", 1, "STARTED"),
+    ]
+
+    assert build_order_box_labels(assembly_sorted_rows, [order]) == [
+        "123456 2/2",
+        "123456 1/2",
+    ]
+    assert yandex_order_highlight_range("123456 2/2") == (2, 6)
+
+
+def test_yandex_item_limit_takes_first_sorted_units_not_orders() -> None:
+    first_order = _order(quantity=3)
+    second_order = YandexFbsOrder(
+        order_id="1002",
+        status="PROCESSING",
+        substatus="STARTED",
+        lines=(("SKU-2", 2),),
+        items=(YandexFbsItem(item_id=502, sku="SKU-2", quantity=2),),
+    )
+
+    class FakeAdapter:
+        def list_awaiting_assembly_orders(self, *, substatus):
+            assert substatus == "STARTED"
+            return [first_order, second_order]
+
+    with patch(
+        "app.yandex_fbs_labels._fetch_labels_in_order",
+        return_value=([("labels.pdf", b"%PDF")], []),
+    ) as fetch_labels:
+        bundle = fetch_awaiting_assembly_labels(FakeAdapter(), max_units=4)
+
+    assert bundle.available_units == 5
+    assert len(bundle.list_rows) == 4
+    assert [row.order_id for row in bundle.list_rows] == ["1001", "1001", "1001", "1002"]
+    assert [order.order_id for order in bundle.orders] == ["1001", "1002"]
+    assert len(fetch_labels.call_args.args[2]) == 4

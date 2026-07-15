@@ -66,6 +66,7 @@ from app.ozon_fbs_labels import (
 )
 from app.yandex_fbs_labels import (
     YandexFbsListRow,
+    build_order_box_labels,
     build_sorted_list_rows as build_yandex_sorted_list_rows,
     fetch_awaiting_assembly_labels,
     get_configured_yandex_adapter,
@@ -887,7 +888,9 @@ def create_dashboard_app(
         return _fbs_label_files_response(label_files)
 
     @app.get("/api/yandex/awaiting-assembly", dependencies=[Depends(require_fbs_access)])
-    async def api_yandex_awaiting_assembly_list() -> dict:
+    async def api_yandex_awaiting_assembly_list(
+        item_limit: Annotated[int | None, Query(ge=1)] = None,
+    ) -> dict:
         """Все FBS-заказы Yandex «готовы к сборке» (PROCESSING + STARTED)."""
         adapter = get_configured_yandex_adapter(coordinator)
         if adapter is None:
@@ -914,11 +917,17 @@ def create_dashboard_app(
                 row_factory=YandexFbsListRow,
             ),
         )
+        available_count = len(list_rows)
+        if item_limit is not None:
+            list_rows = list_rows[:item_limit]
         order_ids = order_ids_in_list_order(list_rows)
         by_id = {o.order_id: o for o in orders}
         orders_ordered = [by_id[oid] for oid in order_ids if oid in by_id]
+        order_box_labels = build_order_box_labels(list_rows, orders)
         return {
-            "count": len(orders_ordered),
+            "count": len(list_rows),
+            "available_count": available_count,
+            "orders_count": len(orders_ordered),
             "status": "PROCESSING",
             "substatus": "STARTED",
             "warnings": assembly_warnings,
@@ -928,9 +937,10 @@ def create_dashboard_app(
                     "sku": r.sku,
                     "quantity": r.quantity,
                     "order_id": r.order_id,
+                    "order_display": order_display,
                     "posting_number": r.order_id,
                 }
-                for r in list_rows
+                for r, order_display in zip(list_rows, order_box_labels)
             ],
             "orders": [
                 {
@@ -944,7 +954,9 @@ def create_dashboard_app(
         }
 
     @app.post("/api/fbs/yandex/generate", dependencies=[Depends(require_fbs_access)])
-    async def api_fbs_yandex_generate() -> dict:
+    async def api_fbs_yandex_generate(
+        item_limit: Annotated[int | None, Form(ge=1)] = None,
+    ) -> dict:
         """FBS Yandex: список в Google Таблице + этикетки (без тела запроса)."""
         adapter = get_configured_yandex_adapter(coordinator)
         if adapter is None:
@@ -966,6 +978,7 @@ def create_dashboard_app(
                     default_stocks_sheet_url=settings.default_stocks_sheet_url,
                     fbs_assembly_sheet_name=settings.fbs_assembly_sheet_name,
                     assembly_sheet_gid=settings.fbs_assembly_sheet_gid,
+                    max_units=item_limit,
                 ),
             )
         except Exception as exc:
@@ -982,8 +995,11 @@ def create_dashboard_app(
             )
         else:
             raise HTTPException(status_code=502, detail="Не удалось получить PDF-этикетки")
+        order_box_labels = build_order_box_labels(bundle.list_rows, bundle.orders)
         return {
             "count": len(bundle.list_rows),
+            "available_count": bundle.available_units,
+            "orders_count": len(bundle.orders),
             "status": "PROCESSING",
             "substatus": "STARTED",
             "list_rows": [
@@ -992,9 +1008,10 @@ def create_dashboard_app(
                     "sku": r.sku,
                     "quantity": r.quantity,
                     "order_id": r.order_id,
+                    "order_display": order_display,
                     "posting_number": r.order_id,
                 }
-                for r in bundle.list_rows
+                for r, order_display in zip(bundle.list_rows, order_box_labels)
             ],
             "sheet_title": bundle.sheet_title,
             "sheet_url": bundle.sheet_url,

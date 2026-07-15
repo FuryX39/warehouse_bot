@@ -38,6 +38,7 @@ class YandexAwaitingAssemblyBundle:
     warnings: list[str] = field(default_factory=list)
     sheet_title: str = ""
     sheet_url: str | None = None
+    available_units: int = 0
 
 
 def get_configured_yandex_adapter(coordinator: StockCoordinator) -> YandexMarketAdapter | None:
@@ -138,9 +139,14 @@ def _export_list_to_google_sheet(
     credentials_path: str,
     sheet_title: str,
     list_rows: list[YandexFbsListRow],
+    orders: list[YandexFbsOrder],
     template_sheet_name: str,
 ) -> str:
-    data = [(r.sku, r.quantity, r.order_id) for r in list_rows]
+    display_numbers = build_order_box_labels(list_rows, orders)
+    data = [
+        (row.sku, row.quantity, display_number)
+        for row, display_number in zip(list_rows, display_numbers)
+    ]
     return write_fbs_list_from_template(
         spreadsheet_url,
         credentials_path,
@@ -149,6 +155,39 @@ def _export_list_to_google_sheet(
         template_sheet_name=template_sheet_name,
         highlight_style="yandex_last4_digits",
     )
+
+
+def build_order_box_labels(
+    list_rows: list[YandexFbsListRow],
+    orders: list[YandexFbsOrder],
+) -> list[str]:
+    """Номер заказа с номером коробки: 123456 1/2, 123456 2/2."""
+    totals = {
+        order.order_id: sum(max(0, int(quantity)) for _, quantity in order.lines)
+        for order in orders
+    }
+    positions_by_order_sku: dict[tuple[str, str], deque[int]] = defaultdict(deque)
+    for order in orders:
+        position = 1
+        for item in order.items:
+            for _ in range(max(0, int(item.quantity))):
+                positions_by_order_sku[(order.order_id, item.sku)].append(position)
+                position += 1
+
+    fallback_seen: dict[str, int] = defaultdict(int)
+    out: list[str] = []
+    for row in list_rows:
+        total = max(1, totals.get(row.order_id, 1))
+        positions = positions_by_order_sku[(row.order_id, row.sku)]
+        if positions:
+            position = positions.popleft()
+            fallback_seen[row.order_id] = max(fallback_seen[row.order_id], position)
+        else:
+            fallback_seen[row.order_id] += 1
+            position = fallback_seen[row.order_id]
+        suffix = f" {position}/{total}" if total > 1 else ""
+        out.append(f"{row.order_id}{suffix}")
+    return out
 
 
 def fetch_awaiting_assembly_labels(
@@ -163,6 +202,7 @@ def fetch_awaiting_assembly_labels(
     default_stocks_sheet_url: str = "",
     fbs_assembly_sheet_name: str = "assembly",
     assembly_sheet_gid: int | None = None,
+    max_units: int | None = None,
 ) -> YandexAwaitingAssemblyBundle:
     """Все STARTED-заказы: по единице в коробке, порядок списка и ярлыков — assembly."""
     orders = adapter.list_awaiting_assembly_orders(substatus=substatus)
@@ -178,12 +218,21 @@ def fetch_awaiting_assembly_labels(
         assembly_sheet_gid=assembly_sheet_gid,
         row_factory=YandexFbsListRow,
     )
+    available_units = len(list_rows)
+    if max_units is not None:
+        if int(max_units) <= 0:
+            raise ValueError("Количество товаров должно быть больше нуля")
+        list_rows = list_rows[: int(max_units)]
     ids_ordered = order_ids_in_list_order(list_rows)
+    orders_by_id = {order.order_id: order for order in orders}
+    selected_orders = [
+        orders_by_id[order_id] for order_id in ids_ordered if order_id in orders_by_id
+    ]
     sheet_title = fbs_list_sheet_title()
 
     label_files, warnings = _fetch_labels_in_order(
         adapter,
-        orders,
+        selected_orders,
         list_rows,
         label_format=yandex_label_format,
         label_rotate_degrees=yandex_label_rotate_degrees,
@@ -200,6 +249,7 @@ def fetch_awaiting_assembly_labels(
                 credentials_path=creds_path,
                 sheet_title=sheet_title,
                 list_rows=list_rows,
+                orders=selected_orders,
                 template_sheet_name=(fbs_list_template_sheet or "FBSTemplate").strip(),
             )
         except Exception as exc:  # noqa: BLE001
@@ -214,16 +264,14 @@ def fetch_awaiting_assembly_labels(
             "Google Таблица: задайте FBS_LIST_SHEET_URL (ссылка на таблицу для FBS-списков)."
         )
 
-    orders_by_id = {o.order_id: o for o in orders}
-    ordered_orders = [orders_by_id[oid] for oid in ids_ordered if oid in orders_by_id]
-
     return YandexAwaitingAssemblyBundle(
-        orders=ordered_orders,
+        orders=selected_orders,
         list_rows=list_rows,
         label_files=label_files,
         warnings=warnings,
         sheet_title=sheet_title,
         sheet_url=sheet_url,
+        available_units=available_units,
     )
 
 
