@@ -9,6 +9,7 @@ from fastapi.responses import Response
 
 from app.marketplace_route_sheets import (
     DEFAULT_ROUTE_SUPPLIER,
+    ROUTE_SHEET_CARGO_TYPES,
     generate_vseinstrumenti_route_sheets_pdf,
     list_route_purchase_statuses,
     normalize_vseinstrumenti_route_sheet_payload,
@@ -30,6 +31,10 @@ def register_warehouse_route_sheets_routes(app, require_warehouse_user) -> None:
                 "supplier": DEFAULT_ROUTE_SUPPLIER,
                 "statuses": [row["name"] for row in statuses],
                 "purchase_statuses": statuses,
+                "cargo_types": [
+                    {"id": cargo_id, "title": cargo_meta["title"]}
+                    for cargo_id, cargo_meta in ROUTE_SHEET_CARGO_TYPES.items()
+                ],
             },
             "marketplaces": [
                 {"id": "vseinstrumenti", "title": "ВсеИнструменты", "enabled": True},

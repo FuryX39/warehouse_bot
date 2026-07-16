@@ -20,6 +20,18 @@ DEFAULT_ROUTE_STATUSES = ("КЗ", "ПСО")
 ROUTE_SHEET_MARKETPLACE_TITLES = {
     "vseinstrumenti": "ВсеИнструменты",
 }
+ROUTE_SHEET_CARGO_TYPES = {
+    "pallets": {
+        "title": "Паллеты",
+        "count_label": "Кол-во паллет",
+        "sequence_label": "Паллет из",
+    },
+    "boxes": {
+        "title": "Короба",
+        "count_label": "Кол-во коробов",
+        "sequence_label": "Короб из",
+    },
+}
 _STATUSES_LOCK = threading.Lock()
 _STATUSES_FILE = Path(__file__).resolve().parent.parent / "data" / "route_sheet_purchase_statuses.json"
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -53,6 +65,7 @@ class VseinstrumentiRouteSheetData:
     purchase_number: str = ""
     purchase_status: str = ""
     delivery_date: str = ""
+    cargo_type: str = "pallets"
     pallet_count: int = 1
 
 
@@ -176,19 +189,37 @@ def normalize_vseinstrumenti_route_sheet_payload(payload: dict) -> Vseinstrument
     purchase_number = _clean(payload.get("purchase_number"))
     purchase_status = _clean(payload.get("purchase_status"))
     delivery_date = _display_date(_clean(payload.get("delivery_date")))
+    cargo_type = _clean(payload.get("cargo_type")).casefold() or "pallets"
+    cargo_type = {
+        "pallet": "pallets",
+        "pallets": "pallets",
+        "паллеты": "pallets",
+        "паллет": "pallets",
+        "box": "boxes",
+        "boxes": "boxes",
+        "короба": "boxes",
+        "короб": "boxes",
+    }.get(cargo_type, cargo_type)
+    if cargo_type not in ROUTE_SHEET_CARGO_TYPES:
+        raise ValueError("Выберите тип грузомест: паллеты или короба")
+    raw_count = payload.get("cargo_count")
+    if raw_count is None:
+        raw_count = payload.get("pallet_count")
+    cargo_title = ROUTE_SHEET_CARGO_TYPES[cargo_type]["title"].casefold()
     try:
-        pallet_count = int(payload.get("pallet_count") or 0)
+        pallet_count = int(raw_count or 0)
     except (TypeError, ValueError) as exc:
-        raise ValueError("Кол-во паллет должно быть числом") from exc
+        raise ValueError(f"Количество ({cargo_title}) должно быть числом") from exc
     if pallet_count < 1:
-        raise ValueError("Кол-во паллет должно быть не меньше 1")
+        raise ValueError(f"Количество ({cargo_title}) должно быть не меньше 1")
     if pallet_count > 200:
-        raise ValueError("Кол-во паллет слишком большое (макс. 200)")
+        raise ValueError(f"Количество ({cargo_title}) слишком большое (макс. 200)")
     return VseinstrumentiRouteSheetData(
         supplier=supplier,
         purchase_number=purchase_number,
         purchase_status=purchase_status,
         delivery_date=delivery_date,
+        cargo_type=cargo_type,
         pallet_count=pallet_count,
     )
 
@@ -215,12 +246,13 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
         bottomMargin=bottom_margin,
     )
     story = []
+    cargo_meta = ROUTE_SHEET_CARGO_TYPES[data.cargo_type]
     labels = [
         ("Поставщик", data.supplier),
         ("№ закупки", data.purchase_number),
         ("Статус закупки", data.purchase_status),
         ("Дата доставки", data.delivery_date),
-        ("Кол-во паллет", str(data.pallet_count)),
+        (cargo_meta["count_label"], str(data.pallet_count)),
     ]
     usable_width = page_width - left_margin - right_margin
     col_width = usable_width / 2
@@ -228,7 +260,9 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
     row_height = 36 * mm
     usable_height = page_height - top_margin - bottom_margin
     for pallet_num in range(1, data.pallet_count + 1):
-        rows = labels + [("Паллет из", f"{pallet_num}/{data.pallet_count}")]
+        rows = labels + [
+            (cargo_meta["sequence_label"], f"{pallet_num}/{data.pallet_count}")
+        ]
         table_height = row_height * len(rows)
         top_spacer = max(0, (usable_height - table_height) / 2)
         if top_spacer:

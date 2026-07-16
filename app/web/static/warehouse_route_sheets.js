@@ -7,7 +7,15 @@
       { id: "wildberries", title: "Wildberries", enabled: false },
       { id: "yandex_market", title: "Яндекс Маркет", enabled: false },
     ],
-    vseinstrumenti: { supplier: 'ООО "ШАЙН СИСТЕМС"', statuses: ["КЗ", "ПСО"], purchase_statuses: [] },
+    vseinstrumenti: {
+      supplier: 'ООО "ШАЙН СИСТЕМС"',
+      statuses: ["КЗ", "ПСО"],
+      purchase_statuses: [],
+      cargo_types: [
+        { id: "pallets", title: "Паллеты" },
+        { id: "boxes", title: "Короба" },
+      ],
+    },
   };
 
   function esc(s) {
@@ -255,9 +263,16 @@
   }
 
   function renderVseinstrumenti() {
+    var cargoTypes =
+      meta.vseinstrumenti.cargo_types && meta.vseinstrumenti.cargo_types.length
+        ? meta.vseinstrumenti.cargo_types
+        : [
+            { id: "pallets", title: "Паллеты" },
+            { id: "boxes", title: "Короба" },
+          ];
     return (
       '<div class="wh-route-card">' +
-      '<p class="wh-muted">PDF маршрутного листа для быстрого печати. Если паллет несколько, PDF будет содержать отдельную страницу для каждой паллеты.</p>' +
+      '<p class="wh-muted">PDF маршрутного листа для быстрой печати. Выберите паллеты или короба — для каждого грузоместа будет создана отдельная страница.</p>' +
       '<form id="whRouteVsiForm" class="wh-route-form">' +
       '<label><span>Поставщик</span><input name="supplier" value="' +
       esc(meta.vseinstrumenti.supplier) +
@@ -267,8 +282,15 @@
       buildStatusOptions("") +
       "</select></label>" +
       '<label><span>Дата доставки</span><input name="delivery_date" type="date" /></label>' +
-      '<label><span>Кол-во паллет</span><input name="pallet_count" type="number" min="1" step="1" required /></label>' +
-      '<label><span>Паллет из</span><input value="сформируется автоматически: 1/N, 2/N..." disabled /></label>' +
+      '<label><span>Тип грузомест</span><select name="cargo_type">' +
+      cargoTypes
+        .map(function (cargoType) {
+          return '<option value="' + esc(cargoType.id) + '">' + esc(cargoType.title) + "</option>";
+        })
+        .join("") +
+      "</select></label>" +
+      '<label><span id="whRouteCargoCountLabel">Кол-во паллет</span><input name="cargo_count" type="number" min="1" max="200" step="1" required /></label>' +
+      '<label><span id="whRouteCargoSequenceLabel">Паллет из</span><input value="сформируется автоматически: 1/N, 2/N..." disabled /></label>' +
       '<div class="wh-route-actions">' +
       '<button type="submit" class="wh-btn wh-btn-primary">Сформировать PDF</button>' +
       '<span id="whRouteMsg" class="wh-msg"></span>' +
@@ -315,6 +337,18 @@
     var msg = root.querySelector("#whRouteMsg");
     if (!form) return;
     var statusSelect = form.querySelector('select[name="purchase_status"]');
+    var cargoTypeSelect = form.querySelector('select[name="cargo_type"]');
+    var cargoCountLabel = form.querySelector("#whRouteCargoCountLabel");
+    var cargoSequenceLabel = form.querySelector("#whRouteCargoSequenceLabel");
+    function syncCargoTypeLabels() {
+      var boxes = cargoTypeSelect && cargoTypeSelect.value === "boxes";
+      cargoCountLabel.textContent = boxes ? "Кол-во коробов" : "Кол-во паллет";
+      cargoSequenceLabel.textContent = boxes ? "Короб из" : "Паллет из";
+    }
+    if (cargoTypeSelect) {
+      cargoTypeSelect.addEventListener("change", syncCargoTypeLabels);
+      syncCargoTypeLabels();
+    }
     bindConfigureSelect(statusSelect, function () {
       modalPurchaseStatusesEditor(function () {
         refreshStatusSelect(root);
@@ -330,7 +364,8 @@
         purchase_number: fd.get("purchase_number"),
         purchase_status: fd.get("purchase_status"),
         delivery_date: fd.get("delivery_date"),
-        pallet_count: fd.get("pallet_count"),
+        cargo_type: fd.get("cargo_type"),
+        cargo_count: fd.get("cargo_count"),
       };
       postPdf("/api/warehouse/marketplaces/route-sheets/vseinstrumenti.pdf", payload)
         .then(function () {

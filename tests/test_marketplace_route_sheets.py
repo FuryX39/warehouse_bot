@@ -15,7 +15,6 @@ from app.marketplace_route_sheets import (
     route_sheet_content_disposition,
     route_sheet_download_filename,
     save_route_purchase_statuses,
-    _STATUSES_FILE,
 )
 
 
@@ -35,10 +34,24 @@ def test_vseinstrumenti_pdf_pages_match_pallet_count() -> None:
     assert len(PdfReader(io.BytesIO(pdf)).pages) == 3
 
 
+def test_vseinstrumenti_boxes_use_selected_cargo_type_and_count() -> None:
+    payload = normalize_vseinstrumenti_route_sheet_payload(
+        {"cargo_type": "boxes", "cargo_count": "4"}
+    )
+    assert payload.cargo_type == "boxes"
+    assert payload.pallet_count == 4
+    pdf = generate_vseinstrumenti_route_sheets_pdf(payload)
+    reader = PdfReader(io.BytesIO(pdf))
+    assert len(reader.pages) == 4
+    assert "Кол-во коробов" in (reader.pages[0].extract_text() or "")
+    assert "Короб из" in (reader.pages[0].extract_text() or "")
+
+
 def test_route_purchase_statuses_defaults_and_save(tmp_path, monkeypatch) -> None:
+    statuses_file = tmp_path / "route_sheet_purchase_statuses.json"
     monkeypatch.setattr(
         "app.marketplace_route_sheets._STATUSES_FILE",
-        tmp_path / "route_sheet_purchase_statuses.json",
+        statuses_file,
     )
     defaults = list_route_purchase_statuses()
     assert [row["name"] for row in defaults] == list(DEFAULT_ROUTE_STATUSES)
@@ -50,7 +63,7 @@ def test_route_purchase_statuses_defaults_and_save(tmp_path, monkeypatch) -> Non
         ]
     )
     assert [row["name"] for row in saved] == ["КЗ", "ПСО", "Срочно"]
-    assert _STATUSES_FILE.is_file()
+    assert statuses_file.is_file()
 
 
 def test_route_sheet_download_filename() -> None:
