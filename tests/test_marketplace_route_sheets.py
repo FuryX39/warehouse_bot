@@ -36,15 +36,24 @@ def test_vseinstrumenti_pdf_pages_match_pallet_count() -> None:
 
 def test_vseinstrumenti_boxes_use_selected_cargo_type_and_count() -> None:
     payload = normalize_vseinstrumenti_route_sheet_payload(
-        {"cargo_type": "boxes", "cargo_count": "4"}
+        {
+            "cargo_type": "boxes",
+            "cargo_count": "4",
+            "transfer_number": "ПР-12345",
+        }
     )
     assert payload.cargo_type == "boxes"
     assert payload.pallet_count == 4
+    assert payload.transfer_number == "ПР-12345"
     pdf = generate_vseinstrumenti_route_sheets_pdf(payload)
     reader = PdfReader(io.BytesIO(pdf))
     assert len(reader.pages) == 4
     assert "Кол-во коробов" in (reader.pages[0].extract_text() or "")
     assert "Короб из" in (reader.pages[0].extract_text() or "")
+    assert all(
+        "Номер перемещения: ПР-12345" in (page.extract_text() or "")
+        for page in reader.pages
+    )
 
 
 def test_route_purchase_statuses_defaults_and_save(tmp_path, monkeypatch) -> None:

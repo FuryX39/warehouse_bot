@@ -282,6 +282,7 @@
       buildStatusOptions("") +
       "</select></label>" +
       '<label><span>Дата доставки</span><input name="delivery_date" type="date" /></label>' +
+      '<label><span>Номер перемещения <small>(необязательно)</small></span><input name="transfer_number" autocomplete="off" /></label>' +
       '<label><span>Тип грузомест</span><select name="cargo_type">' +
       cargoTypes
         .map(function (cargoType) {
@@ -364,6 +365,7 @@
         purchase_number: fd.get("purchase_number"),
         purchase_status: fd.get("purchase_status"),
         delivery_date: fd.get("delivery_date"),
+        transfer_number: fd.get("transfer_number"),
         cargo_type: fd.get("cargo_type"),
         cargo_count: fd.get("cargo_count"),
       };

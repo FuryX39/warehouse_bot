@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from xml.sax.saxutils import escape
 
 from app.pdf_fonts import get_pdf_label_fonts
 
@@ -65,6 +66,7 @@ class VseinstrumentiRouteSheetData:
     purchase_number: str = ""
     purchase_status: str = ""
     delivery_date: str = ""
+    transfer_number: str = ""
     cargo_type: str = "pallets"
     pallet_count: int = 1
 
@@ -189,6 +191,7 @@ def normalize_vseinstrumenti_route_sheet_payload(payload: dict) -> Vseinstrument
     purchase_number = _clean(payload.get("purchase_number"))
     purchase_status = _clean(payload.get("purchase_status"))
     delivery_date = _display_date(_clean(payload.get("delivery_date")))
+    transfer_number = _clean(payload.get("transfer_number"))
     cargo_type = _clean(payload.get("cargo_type")).casefold() or "pallets"
     cargo_type = {
         "pallet": "pallets",
@@ -219,6 +222,7 @@ def normalize_vseinstrumenti_route_sheet_payload(payload: dict) -> Vseinstrument
         purchase_number=purchase_number,
         purchase_status=purchase_status,
         delivery_date=delivery_date,
+        transfer_number=transfer_number,
         cargo_type=cargo_type,
         pallet_count=pallet_count,
     )
@@ -227,8 +231,16 @@ def normalize_vseinstrumenti_route_sheet_payload(payload: dict) -> Vseinstrument
 def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import (
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 
     regular_font, bold_font = get_pdf_label_fonts()
     buf = io.BytesIO()
@@ -259,11 +271,19 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
     font_size = 20
     row_height = 36 * mm
     usable_height = page_height - top_margin - bottom_margin
+    transfer_style = ParagraphStyle(
+        "TransferNumber",
+        fontName=regular_font,
+        fontSize=9,
+        leading=11,
+        alignment=0,
+    )
     for pallet_num in range(1, data.pallet_count + 1):
         rows = labels + [
             (cargo_meta["sequence_label"], f"{pallet_num}/{data.pallet_count}")
         ]
-        table_height = row_height * len(rows)
+        note_height = 8 * mm if data.transfer_number else 0
+        table_height = row_height * len(rows) + note_height
         top_spacer = max(0, (usable_height - table_height) / 2)
         if top_spacer:
             story.append(Spacer(1, top_spacer))
@@ -291,6 +311,14 @@ def generate_vseinstrumenti_route_sheets_pdf(data: VseinstrumentiRouteSheetData)
             )
         )
         story.append(table)
+        if data.transfer_number:
+            story.append(Spacer(1, 3 * mm))
+            story.append(
+                Paragraph(
+                    f"Номер перемещения: {escape(data.transfer_number)}",
+                    transfer_style,
+                )
+            )
         if pallet_num < data.pallet_count:
             story.append(PageBreak())
     doc.build(story)
