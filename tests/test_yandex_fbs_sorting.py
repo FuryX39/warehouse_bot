@@ -16,6 +16,7 @@ from app.yandex_fbs_labels import (
     build_order_box_labels,
     build_sorted_list_rows,
     fetch_awaiting_assembly_labels,
+    normalize_yandex_fbs_substatus,
 )
 
 
@@ -89,6 +90,32 @@ def test_yandex_adapter_takes_only_started_orders_and_keeps_item_ids() -> None:
     assert orders[0].order_id == "1001"
     assert orders[0].substatus == "STARTED"
     assert orders[0].items == (YandexFbsItem(item_id=501, sku="SKU-1", quantity=2),)
+
+
+def test_yandex_adapter_can_select_ready_to_ship_orders() -> None:
+    adapter = YandexMarketAdapter("123", "secret")
+    adapter._iter_orders = Mock(
+        return_value=iter(
+            [
+                {
+                    "id": 1001,
+                    "substatus": "STARTED",
+                    "items": [{"id": 501, "offerId": "SKU-1", "count": 1}],
+                },
+                {
+                    "id": 1002,
+                    "substatus": "READY_TO_SHIP",
+                    "items": [{"id": 502, "offerId": "SKU-2", "count": 1}],
+                },
+            ]
+        )
+    )
+
+    orders = adapter.list_awaiting_assembly_orders(substatus="READY_TO_SHIP")
+
+    assert [order.order_id for order in orders] == ["1002"]
+    assert orders[0].substatus == "READY_TO_SHIP"
+    assert normalize_yandex_fbs_substatus("ready_to_ship") == "READY_TO_SHIP"
 
 
 def test_yandex_order_iterator_uses_all_token_pages() -> None:
@@ -230,3 +257,33 @@ def test_yandex_item_limit_takes_first_sorted_units_not_orders() -> None:
     assert [row.order_id for row in bundle.list_rows] == ["1001", "1001", "1001", "1002"]
     assert [order.order_id for order in bundle.orders] == ["1001", "1002"]
     assert len(fetch_labels.call_args.args[2]) == 4
+
+
+def test_ready_to_ship_uses_existing_labels_without_recreating_boxes() -> None:
+    ready_order = YandexFbsOrder(
+        order_id="2001",
+        status="PROCESSING",
+        substatus="READY_TO_SHIP",
+        lines=(("SKU-READY", 1),),
+        items=(YandexFbsItem(item_id=601, sku="SKU-READY", quantity=1),),
+    )
+
+    class FakeAdapter:
+        def list_awaiting_assembly_orders(self, *, substatus):
+            assert substatus == "READY_TO_SHIP"
+            return [ready_order]
+
+        def fetch_order_label_pdf_parts(self, order_ids, *, label_format):
+            assert order_ids == ["2001"]
+            return [("ready.pdf", b"%PDF-ready")], []
+
+        def set_order_unit_boxes(self, order):
+            raise AssertionError("READY_TO_SHIP boxes must not be changed")
+
+    with patch("app.yandex_fbs_labels.merge_label_pdfs", return_value=b"%PDF-merged"):
+        bundle = fetch_awaiting_assembly_labels(
+            FakeAdapter(), substatus="READY_TO_SHIP"
+        )
+
+    assert bundle.orders == [ready_order]
+    assert bundle.label_files[0][1] == b"%PDF-merged"

@@ -59,10 +59,14 @@
     return (
       '<div class="wh-route-card">' +
       "<h3>Яндекс Маркет FBS</h3>" +
-      '<p class="wh-muted">Берутся все заказы PROCESSING / STARTED («Готовы к сборке»). ' +
-      "Каждая товарная единица назначается в отдельную коробку и получает отдельную этикетку. " +
+      '<p class="wh-muted">Берутся заказы PROCESSING с выбранным статусом: «Готовы к сборке» или «Готовы к отгрузке». ' +
+      "Для готовых к сборке каждая товарная единица назначается в отдельную коробку; для готовых к отгрузке используются уже созданные этикетки. " +
       "Статус заказа не изменяется; список и этикетки сортируются по assembly.</p>" +
       '<div class="wh-route-form">' +
+      '<label>Статус заказов<select id="whFbsYandexSubstatus">' +
+      '<option value="STARTED">Готовы к сборке</option>' +
+      '<option value="READY_TO_SHIP">Готовы к отгрузке</option>' +
+      "</select></label>" +
       '<label>Количество товаров<input type="number" id="whFbsYandexItemLimit" min="1" step="1" placeholder="Все товары" /></label>' +
       '<div class="wh-route-actions">' +
       '<button type="button" class="wh-btn wh-fbs-action" id="whFbsRefresh">Обновить список</button>' +
@@ -110,12 +114,18 @@
     if (activeMarketplace === "yandex") {
       var limitEl = root.querySelector("#whFbsYandexItemLimit");
       var itemLimit = limitEl ? String(limitEl.value || "").trim() : "";
+      var substatusEl = root.querySelector("#whFbsYandexSubstatus");
+      var substatus = substatusEl ? String(substatusEl.value || "STARTED") : "STARTED";
       if (asForm) {
         var yandexForm = new FormData();
         if (itemLimit) yandexForm.append("item_limit", itemLimit);
+        yandexForm.append("order_substatus", substatus);
         return yandexForm;
       }
-      return itemLimit ? "?item_limit=" + encodeURIComponent(itemLimit) : "";
+      var yandexParams = new URLSearchParams();
+      if (itemLimit) yandexParams.set("item_limit", itemLimit);
+      yandexParams.set("order_substatus", substatus);
+      return "?" + yandexParams.toString();
     }
     var first = String(root.querySelector("#whFbsFirstPosting").value || "").trim();
     var last = String(root.querySelector("#whFbsLastPosting").value || "").trim();

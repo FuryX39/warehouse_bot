@@ -65,11 +65,13 @@ from app.ozon_fbs_labels import (
     posting_numbers_in_list_order,
 )
 from app.yandex_fbs_labels import (
+    YANDEX_FBS_SUBSTATUS_OPTIONS,
     YandexFbsListRow,
     build_order_box_labels,
     build_sorted_list_rows as build_yandex_sorted_list_rows,
     fetch_awaiting_assembly_labels,
     get_configured_yandex_adapter,
+    normalize_yandex_fbs_substatus,
     order_ids_in_list_order,
 )
 from app.nomenclature_barcodes import parse_barcodes_cell
@@ -890,8 +892,13 @@ def create_dashboard_app(
     @app.get("/api/yandex/awaiting-assembly", dependencies=[Depends(require_fbs_access)])
     async def api_yandex_awaiting_assembly_list(
         item_limit: Annotated[int | None, Query(ge=1)] = None,
+        order_substatus: Annotated[str, Query()] = "STARTED",
     ) -> dict:
-        """Все FBS-заказы Yandex «готовы к сборке» (PROCESSING + STARTED)."""
+        """FBS-заказы Yandex выбранного подстатуса PROCESSING."""
+        try:
+            order_substatus = normalize_yandex_fbs_substatus(order_substatus)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         adapter = get_configured_yandex_adapter(coordinator)
         if adapter is None:
             raise HTTPException(
@@ -901,7 +908,10 @@ def create_dashboard_app(
         loop = asyncio.get_running_loop()
         try:
             orders = await loop.run_in_executor(
-                None, lambda: adapter.list_awaiting_assembly_orders()
+                None,
+                lambda: adapter.list_awaiting_assembly_orders(
+                    substatus=order_substatus
+                ),
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
@@ -929,7 +939,7 @@ def create_dashboard_app(
             "available_count": available_count,
             "orders_count": len(orders_ordered),
             "status": "PROCESSING",
-            "substatus": "STARTED",
+            "substatus": order_substatus,
             "warnings": assembly_warnings,
             "list_rows": [
                 {
@@ -956,8 +966,13 @@ def create_dashboard_app(
     @app.post("/api/fbs/yandex/generate", dependencies=[Depends(require_fbs_access)])
     async def api_fbs_yandex_generate(
         item_limit: Annotated[int | None, Form(ge=1)] = None,
+        order_substatus: Annotated[str, Form()] = "STARTED",
     ) -> dict:
         """FBS Yandex: список в Google Таблице + этикетки (без тела запроса)."""
+        try:
+            order_substatus = normalize_yandex_fbs_substatus(order_substatus)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         adapter = get_configured_yandex_adapter(coordinator)
         if adapter is None:
             raise HTTPException(
@@ -970,6 +985,7 @@ def create_dashboard_app(
                 None,
                 lambda: fetch_awaiting_assembly_labels(
                     adapter,
+                    substatus=order_substatus,
                     fbs_list_sheet_url=settings.fbs_list_sheet_url,
                     google_service_account_file=settings.google_service_account_file,
                     fbs_list_template_sheet=settings.fbs_list_template_sheet,
@@ -984,7 +1000,11 @@ def create_dashboard_app(
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
         if not bundle.orders:
-            raise HTTPException(status_code=404, detail="Нет заказов PROCESSING + STARTED")
+            status_title = YANDEX_FBS_SUBSTATUS_OPTIONS[order_substatus]
+            raise HTTPException(
+                status_code=404,
+                detail=f"Нет заказов PROCESSING + {order_substatus} («{status_title}»)",
+            )
         labels_token: str | None = None
         if bundle.label_files:
             labels_token = store_label_files(bundle.label_files)
@@ -1001,7 +1021,7 @@ def create_dashboard_app(
             "available_count": bundle.available_units,
             "orders_count": len(bundle.orders),
             "status": "PROCESSING",
-            "substatus": "STARTED",
+            "substatus": order_substatus,
             "list_rows": [
                 {
                     "seq": r.seq,

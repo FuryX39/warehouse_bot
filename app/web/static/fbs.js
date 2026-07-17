@@ -434,6 +434,7 @@
       var form = new FormData();
       var limit = yandexItemLimit();
       if (limit) form.append("item_limit", limit);
+      form.append("order_substatus", yandexOrderSubstatus());
       var data = await api("/api/fbs/yandex/generate", { method: "POST", body: form });
       applyYandexGenerateResult(data);
       var summary = document.getElementById("yandexSummary");
@@ -457,7 +458,10 @@
     setYandexBusy(true);
     try {
       var limit = yandexItemLimit();
-      var query = limit ? "?item_limit=" + encodeURIComponent(limit) : "";
+      var params = new URLSearchParams();
+      if (limit) params.set("item_limit", limit);
+      params.set("order_substatus", yandexOrderSubstatus());
+      var query = "?" + params.toString();
       var data = await api("/api/yandex/awaiting-assembly" + query);
       yandexLabelsToken = null;
       var dl = document.getElementById("btnYandexLabels");
@@ -499,6 +503,11 @@
   function yandexItemLimit() {
     var input = document.getElementById("yandexItemLimit");
     return input ? String(input.value || "").trim() : "";
+  }
+
+  function yandexOrderSubstatus() {
+    var select = document.getElementById("yandexOrderSubstatus");
+    return select ? String(select.value || "STARTED") : "STARTED";
   }
 
   var shipScope = "all";

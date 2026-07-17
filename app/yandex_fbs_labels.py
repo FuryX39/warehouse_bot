@@ -20,6 +20,18 @@ from app.ozon_label_pdf import normalize_ozon_package_label_pdf
 if TYPE_CHECKING:
     from app.services import StockCoordinator
 
+YANDEX_FBS_SUBSTATUS_OPTIONS = {
+    "STARTED": "Готовы к сборке",
+    "READY_TO_SHIP": "Готовы к отгрузке",
+}
+
+
+def normalize_yandex_fbs_substatus(value: object) -> str:
+    substatus = str(value or YANDEX_AWAITING_ASSEMBLY_SUBSTATUS).strip().upper()
+    if substatus not in YANDEX_FBS_SUBSTATUS_OPTIONS:
+        raise ValueError("Выберите статус заказов: готовы к сборке или готовы к отгрузке")
+    return substatus
+
 
 @dataclass(frozen=True)
 class YandexFbsListRow:
@@ -133,6 +145,37 @@ def _fetch_labels_in_order(
     return label_files, warnings
 
 
+def _fetch_existing_order_labels(
+    adapter: YandexMarketAdapter,
+    list_rows: list[YandexFbsListRow],
+    *,
+    label_format: str = "A9_HORIZONTALLY",
+    label_rotate_degrees: int = 0,
+) -> tuple[list[tuple[str, bytes]], list[str]]:
+    """Получить уже созданные этикетки READY_TO_SHIP, не меняя коробки заказа."""
+    order_ids = order_ids_in_list_order(list_rows)
+    label_files, warnings = adapter.fetch_order_label_pdf_parts(
+        order_ids, label_format=label_format
+    )
+    normalized_files: list[tuple[str, bytes]] = []
+    for filename, pdf in label_files:
+        if label_rotate_degrees:
+            pdf = normalize_ozon_package_label_pdf(
+                pdf, rotate_degrees=label_rotate_degrees
+            )
+        normalized_files.append((filename, pdf))
+    merged = merge_label_pdfs([data for _, data in normalized_files])
+    if merged is not None:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return [(f"yandex_labels_sorted_{ts}.pdf", merged)], warnings
+    if len(normalized_files) > 1:
+        warnings.append(
+            "Не удалось объединить PDF в один файл (установите pypdf). "
+            "Файлы в ZIP идут в порядке заказов из списка."
+        )
+    return normalized_files, warnings
+
+
 def _export_list_to_google_sheet(
     *,
     spreadsheet_url: str,
@@ -204,7 +247,8 @@ def fetch_awaiting_assembly_labels(
     assembly_sheet_gid: int | None = None,
     max_units: int | None = None,
 ) -> YandexAwaitingAssemblyBundle:
-    """Все STARTED-заказы: по единице в коробке, порядок списка и ярлыков — assembly."""
+    """Заказы выбранного подстатуса: список по единицам в порядке assembly."""
+    substatus = normalize_yandex_fbs_substatus(substatus)
     orders = adapter.list_awaiting_assembly_orders(substatus=substatus)
     if not orders:
         return YandexAwaitingAssemblyBundle()
@@ -230,13 +274,21 @@ def fetch_awaiting_assembly_labels(
     ]
     sheet_title = fbs_list_sheet_title()
 
-    label_files, warnings = _fetch_labels_in_order(
-        adapter,
-        selected_orders,
-        list_rows,
-        label_format=yandex_label_format,
-        label_rotate_degrees=yandex_label_rotate_degrees,
-    )
+    if substatus == "READY_TO_SHIP":
+        label_files, warnings = _fetch_existing_order_labels(
+            adapter,
+            list_rows,
+            label_format=yandex_label_format,
+            label_rotate_degrees=yandex_label_rotate_degrees,
+        )
+    else:
+        label_files, warnings = _fetch_labels_in_order(
+            adapter,
+            selected_orders,
+            list_rows,
+            label_format=yandex_label_format,
+            label_rotate_degrees=yandex_label_rotate_degrees,
+        )
     warnings = assembly_warnings + warnings
 
     sheet_url: str | None = None

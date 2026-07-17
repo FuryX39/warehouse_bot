@@ -158,11 +158,19 @@
               <div><dt>Google Таблица</dt><dd id="yandexSheetStatus">—</dd></div>
             </dl>
             <p class="muted" style="margin:0 0 0.75rem;">
-              Все заказы <code>PROCESSING / STARTED</code> («Готовы к сборке»).
-              Каждая единица оформляется отдельной коробкой и получает отдельную этикетку.
+              Заказы <code>PROCESSING</code> с выбранным статусом.
+              Для готовых к сборке каждая единица оформляется отдельной коробкой;
+              для готовых к отгрузке используются уже созданные этикетки.
               Статус заказа не меняется, порядок берётся из <code>assembly</code>.
             </p>
             <div class="toolbar">
+              <label>
+                Статус заказов
+                <select id="yandexOrderSubstatus" class="input">
+                  <option value="STARTED">Готовы к сборке</option>
+                  <option value="READY_TO_SHIP">Готовы к отгрузке</option>
+                </select>
+              </label>
               <label>
                 Количество товаров
                 <input type="number" id="yandexItemLimit" min="1" step="1" placeholder="Все" />
