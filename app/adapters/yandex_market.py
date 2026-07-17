@@ -72,9 +72,13 @@ class YandexMarketAdapter(MarketplaceAdapter):
     @staticmethod
     def _orders_date_range_query() -> dict[str, str]:
         today = datetime.now(timezone.utc).date()
-        start = today - timedelta(days=_ORDER_LIST_SPAN_DAYS)
+        # В API Яндекса toDate фактически является исключающей границей:
+        # toDate=сегодня возвращает заказы только по вчера включительно.
+        # Запрашиваем до завтра, сохраняя максимально допустимый интервал 30 суток.
+        end = today + timedelta(days=1)
+        start = end - timedelta(days=_ORDER_LIST_SPAN_DAYS)
         fmt = "%d-%m-%Y"
-        return {"fromDate": start.strftime(fmt), "toDate": today.strftime(fmt)}
+        return {"fromDate": start.strftime(fmt), "toDate": end.strftime(fmt)}
 
     def _iter_orders(
         self,

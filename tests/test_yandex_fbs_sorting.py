@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from app.adapters.yandex_market import (
@@ -138,6 +139,16 @@ def test_yandex_order_iterator_uses_all_token_pages() -> None:
     assert [order["id"] for order in orders] == [1, 2]
     assert "pageToken" not in get.call_args_list[0].kwargs["params"]
     assert get.call_args_list[1].kwargs["params"]["pageToken"] == "next-50"
+
+
+def test_yandex_order_date_range_includes_current_market_day() -> None:
+    query = YandexMarketAdapter._orders_date_range_query()
+    start = datetime.strptime(query["fromDate"], "%d-%m-%Y").date()
+    end = datetime.strptime(query["toDate"], "%d-%m-%Y").date()
+    today = datetime.now(timezone.utc).date()
+
+    assert end == today + timedelta(days=1)
+    assert (end - start).days == 30
 
 
 def test_yandex_adapter_creates_one_box_per_unit_without_status_request() -> None:
