@@ -122,6 +122,7 @@
       preview.innerHTML = "";
 
       var priceTypeId = root.querySelector("#whRepricerPriceType").value;
+      var repriceDirection = root.querySelector("#whRepricerDirection").value;
       var fileInput = root.querySelector("#whRepricerFile");
       if (!priceTypeId) {
         msg.className = "wh-msg wh-msg-error";
@@ -136,6 +137,7 @@
 
       var formData = new FormData();
       formData.append("price_type_id", priceTypeId);
+      formData.append("reprice_direction", repriceDirection);
       formData.append("file", fileInput.files[0]);
 
       var submitBtn = root.querySelector("#whRepricerSubmit");
@@ -200,11 +202,16 @@
         root.innerHTML =
           '<div class="wh-route-card">' +
           '<p class="wh-muted">Загрузите файл базовых цен Яндекс Маркета. Для строк с ценой «На витрине» рассчитается примерная цена по карте. ' +
-          "Цена меняется, если по карте ниже вида цен на 1% и более или выше на 10% и более. В файл попадут только товары с изменённой ценой.</p>" +
+          "Можно менять цены только ниже выбранного вида цен, только выше него либо в обе стороны. Пороги: ниже на 1% и более, выше на 10% и более.</p>" +
           '<form id="whRepricerForm" class="wh-repricer-form">' +
           '<label><span>Вид цен для сравнения</span><select id="whRepricerPriceType" required>' +
           '<option value="">— выберите —</option>' +
           buildPriceTypeOptions("") +
+          "</select></label>" +
+          '<label><span>Какие цены менять</span><select id="whRepricerDirection">' +
+          '<option value="all">Все: ниже и выше вида цен</option>' +
+          '<option value="below">Только ниже вида цен</option>' +
+          '<option value="above">Только выше вида цен</option>' +
           "</select></label>" +
           '<label class="wh-import-file-label">Файл цен Яндекс (.xlsx)<input type="file" id="whRepricerFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /></label>' +
           '<div class="wh-tools-actions">' +

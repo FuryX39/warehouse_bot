@@ -26,6 +26,14 @@ def test_needs_reprice_thresholds() -> None:
     assert _needs_reprice(1100, catalog)
 
 
+def test_needs_reprice_respects_selected_direction() -> None:
+    catalog = 1000.0
+    assert _needs_reprice(990, catalog, "below")
+    assert not _needs_reprice(990, catalog, "above")
+    assert _needs_reprice(1100, catalog, "above")
+    assert not _needs_reprice(1100, catalog, "below")
+
+
 def test_seller_from_target_card_never_undershoots_on_raise() -> None:
     for target in range(50, 2500, 7):
         recommended = seller_from_target_card(float(target), raise_price=True)
@@ -195,3 +203,51 @@ def test_output_sets_old_price_to_double_recommended_price() -> None:
     ]
     assert audit.cell(row=2, column=12).value == "Да"
     assert audit.cell(row=3, column=12).value == "Нет"
+
+
+def test_workbook_updates_only_selected_price_direction() -> None:
+    class Repo:
+        def list_products_for_price_type(self, price_type_id, filters):
+            return [
+                {"sku": "SKU-BELOW", "price": 1000},
+                {"sku": "SKU-ABOVE", "price": 1000},
+            ]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "Ваш SKU *",
+            "Название товара",
+            "Цена *",
+            "Зачёркнутая цена",
+            "Минимум для акции",
+            "На витрине",
+        ]
+    )
+    sheet.append(["SKU-BELOW", "Ниже", 1000, 2000, 1000, 700])
+    sheet.append(["SKU-ABOVE", "Выше", 2000, 4000, 2000, 1300])
+    source = io.BytesIO()
+    workbook.save(source)
+
+    below = process_yandex_prices_workbook(
+        source.getvalue(),
+        catalog_repo=Repo(),
+        price_type_id=1,
+        reprice_direction="below",
+    )
+    below_book = load_workbook(io.BytesIO(below.workbook_bytes), data_only=True)
+    assert below_book.active.max_row == 2
+    assert below_book.active.cell(row=2, column=1).value == "SKU-BELOW"
+    assert below.stats["skipped_direction"] == 1
+
+    above = process_yandex_prices_workbook(
+        source.getvalue(),
+        catalog_repo=Repo(),
+        price_type_id=1,
+        reprice_direction="above",
+    )
+    above_book = load_workbook(io.BytesIO(above.workbook_bytes), data_only=True)
+    assert above_book.active.max_row == 2
+    assert above_book.active.cell(row=2, column=1).value == "SKU-ABOVE"
+    assert above.stats["skipped_direction"] == 1

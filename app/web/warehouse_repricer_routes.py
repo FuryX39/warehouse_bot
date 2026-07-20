@@ -43,6 +43,7 @@ def register_warehouse_repricer_routes(
     @app.post("/api/warehouse/marketplaces/repricer/calculate")
     async def api_repricer_calculate(
         price_type_id: int = Form(...),
+        reprice_direction: str = Form("all"),
         file: UploadFile = File(...),
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> Response:
@@ -75,6 +76,7 @@ def register_warehouse_repricer_routes(
                 catalog_repo=catalog_repo,
                 price_type_id=pt_id,
                 price_type_name=price_type_name,
+                reprice_direction=reprice_direction,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

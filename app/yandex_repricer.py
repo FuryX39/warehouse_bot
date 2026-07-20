@@ -282,12 +282,30 @@ def _column_map(header: tuple) -> dict[str, int]:
     return mapping
 
 
-def _needs_reprice(card_price: float, catalog_price: float) -> bool:
+def _normalize_reprice_direction(value: object) -> str:
+    direction = str(value or "all").strip().lower()
+    if direction not in {"all", "below", "above"}:
+        raise ValueError("Режим изменения цен: ниже вида цен, выше вида цен или все")
+    return direction
+
+
+def _needs_reprice(
+    card_price: float,
+    catalog_price: float,
+    direction: str = "all",
+) -> bool:
     if catalog_price <= 0:
         return False
-    if card_price >= catalog_price * _CARD_HIGHER_THRESHOLD:
+    direction = _normalize_reprice_direction(direction)
+    if (
+        direction in {"all", "above"}
+        and card_price >= catalog_price * _CARD_HIGHER_THRESHOLD
+    ):
         return True
-    if card_price <= catalog_price * _CARD_LOWER_THRESHOLD:
+    if (
+        direction in {"all", "below"}
+        and card_price <= catalog_price * _CARD_LOWER_THRESHOLD
+    ):
         return True
     return False
 
@@ -376,6 +394,7 @@ def process_yandex_prices_workbook(
     catalog_repo: Any,
     price_type_id: int,
     price_type_name: str = "",
+    reprice_direction: str = "all",
 ) -> RepricerResult:
     try:
         from openpyxl import load_workbook
@@ -384,6 +403,7 @@ def process_yandex_prices_workbook(
 
     if not data:
         raise ValueError("Файл пустой")
+    reprice_direction = _normalize_reprice_direction(reprice_direction)
 
     wb = load_workbook(io.BytesIO(data))
     ws = wb.active
@@ -412,6 +432,7 @@ def process_yandex_prices_workbook(
         "skipped_no_catalog_price": 0,
         "skipped_ok": 0,
         "skipped_same_price": 0,
+        "skipped_direction": 0,
     }
 
     max_col_idx = max(cols.values())
@@ -453,7 +474,13 @@ def process_yandex_prices_workbook(
                 note = missing_price_label
             else:
                 stats["with_catalog_price"] += 1
-                if _needs_reprice(float(estimated_card), catalog_price):
+                needs_reprice = _needs_reprice(
+                    float(estimated_card), catalog_price, reprice_direction
+                )
+                needs_reprice_any_direction = _needs_reprice(
+                    float(estimated_card), catalog_price
+                )
+                if needs_reprice:
                     raise_price = float(estimated_card) < catalog_price
                     current_seller = int(round(seller)) if seller and seller > 0 else None
                     showcase_ratio = (
@@ -486,6 +513,13 @@ def process_yandex_prices_workbook(
                         updated = True
                         stats["updated"] += 1
                         note = _reprice_note(float(estimated_card), catalog_price, updated=True)
+                elif needs_reprice_any_direction:
+                    stats["skipped_direction"] += 1
+                    stats["skipped_ok"] += 1
+                    if reprice_direction == "below":
+                        note = "пропущено: выбран режим «только ниже вида цен»"
+                    else:
+                        note = "пропущено: выбран режим «только выше вида цен»"
                 else:
                     stats["skipped_ok"] += 1
                     note = _reprice_note(float(estimated_card), catalog_price, updated=False)
