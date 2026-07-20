@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 
 from fastapi import Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -10,9 +12,24 @@ from fastapi.responses import Response
 from app.cargo_place_calculator import build_cargo_place_template, calculate_cargo_places
 from app.pdf_merge import merge_pdfs_in_order
 from app.warehouse_users_repository import WarehouseUserRow
+from app.yandex_label_sorter import sort_yandex_labels_from_sheet, warnings_header_json
+
+_PDF_MAX_BYTES = 30 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
-def register_warehouse_tools_routes(app, catalog_repo, require_warehouse_user) -> None:
+def _header_json(value: object) -> str:
+    """JSON для HTTP-заголовка: только ASCII (latin-1), иначе Starlette отдаёт 500."""
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+
+
+def register_warehouse_tools_routes(
+    app,
+    catalog_repo,
+    require_warehouse_user,
+    *,
+    google_service_account_file: str = "",
+) -> None:
     @app.post("/api/warehouse/tools/pdf-merge")
     async def api_tools_pdf_merge(
         files: list[UploadFile] = File(...),
@@ -107,3 +124,56 @@ def register_warehouse_tools_routes(app, catalog_repo, require_warehouse_user) -
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"item": item}
+
+    @app.post("/api/warehouse/tools/yandex-label-sort")
+    async def api_tools_yandex_label_sort(
+        spreadsheet_url: str = Form(...),
+        file: UploadFile = File(...),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        url = str(spreadsheet_url or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="Укажите ссылку на Google Таблицу")
+        creds = str(google_service_account_file or "").strip()
+        if not creds:
+            raise HTTPException(
+                status_code=500,
+                detail="Не настроен GOOGLE_SERVICE_ACCOUNT_FILE",
+            )
+
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="PDF пустой")
+        if len(data) > _PDF_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="PDF слишком большой (макс. 30 МБ)")
+        filename = (file.filename or "").lower()
+        if not (filename.endswith(".pdf") or data.startswith(b"%PDF")):
+            raise HTTPException(status_code=400, detail="Нужен файл PDF с ярлыками")
+
+        try:
+            result = await asyncio.to_thread(
+                sort_yandex_labels_from_sheet,
+                data,
+                url,
+                credentials_path=creds,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("yandex label sort failed")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Не удалось отсортировать ярлыки: {exc}",
+            ) from exc
+
+        return Response(
+            content=result.pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": 'attachment; filename="yandex_labels_sorted.pdf"',
+                "X-Label-Sort-Stats": _header_json(result.stats),
+                "X-Label-Sort-Warnings": warnings_header_json(result.warnings),
+            },
+        )

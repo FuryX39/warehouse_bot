@@ -357,6 +357,46 @@ body.wh-body {
   flex-wrap: wrap;
 }
 
+.wh-label-sort-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.wh-label-sort-url {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+
+.wh-label-sort-url input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.wh-label-sort-stats {
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.92rem;
+}
+
+.wh-label-sort-warnings {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+  color: #8a5a00;
+}
+
+.wh-msg-warn {
+  color: #8a5a00;
+}
+
 .wh-cargo-card {
   max-width: none;
 }

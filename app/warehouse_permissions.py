@@ -78,6 +78,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "items": [
             {"id": "pdf-merge", "title": "PDFMerge"},
             {"id": "cargo-places", "title": "Подсчёт грузомест"},
+            {"id": "yandex-label-sort", "title": "Сортировка ярлыков Яндекс"},
         ],
     },
     {

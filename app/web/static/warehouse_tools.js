@@ -560,6 +560,162 @@
     });
   }
 
+  function parseHeaderJson(name, headers) {
+    var raw = headers.get(name);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderYandexLabelSort(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML =
+      '<div class="wh-tools-card">' +
+      '<p class="wh-muted">Вставьте ссылку на Google Таблицу с нужной вкладкой FBS Яндекс (в URL должен быть <code>#gid=...</code>) ' +
+      "и загрузите PDF ярлыков. Страницы будут выстроены по номерам заказов и дробям грузомест из листа. " +
+      "Лишние ярлыки исключаются; отсутствующие показываются предупреждением.</p>" +
+      '<div class="wh-label-sort-form">' +
+      '<label class="wh-label-sort-url"><span>Ссылка на Google Таблицу</span>' +
+      '<input type="url" id="whLabelSortUrl" placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=..." /></label>' +
+      '<label class="wh-import-file-label">PDF ярлыков<input type="file" id="whLabelSortFile" accept=".pdf,application/pdf" /></label>' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whLabelSortBtn">Отсортировать и скачать</button>' +
+      "</div>" +
+      '<span id="whLabelSortMsg" class="wh-msg"></span>' +
+      '<div id="whLabelSortStats" class="wh-label-sort-stats" hidden></div>' +
+      '<ul id="whLabelSortWarnings" class="wh-label-sort-warnings" hidden></ul>' +
+      "</div>";
+
+    var urlInput = root.querySelector("#whLabelSortUrl");
+    var fileInput = root.querySelector("#whLabelSortFile");
+    var btn = root.querySelector("#whLabelSortBtn");
+    var msg = root.querySelector("#whLabelSortMsg");
+    var statsEl = root.querySelector("#whLabelSortStats");
+    var warnEl = root.querySelector("#whLabelSortWarnings");
+
+    function clearResult() {
+      statsEl.hidden = true;
+      statsEl.innerHTML = "";
+      warnEl.hidden = true;
+      warnEl.innerHTML = "";
+    }
+
+    function renderStats(stats, warningsPayload) {
+      var sheetKeys = stats && stats.sheet_keys != null ? stats.sheet_keys : "—";
+      var matched = stats && stats.matched != null ? stats.matched : "—";
+      var missing = stats && stats.missing != null ? stats.missing : "—";
+      var extras = stats && stats.extras_dropped != null ? stats.extras_dropped : "—";
+      var output = stats && stats.output_pages != null ? stats.output_pages : "—";
+      var title = stats && stats.sheet_title ? String(stats.sheet_title) : "";
+      statsEl.hidden = false;
+      statsEl.innerHTML =
+        (title ? '<div class="wh-muted">Лист: ' + esc(title) + "</div>" : "") +
+        "<div>В листе: <strong>" +
+        esc(sheetKeys) +
+        "</strong> · совпало: <strong>" +
+        esc(matched) +
+        "</strong> · нет ярлыка: <strong>" +
+        esc(missing) +
+        "</strong> · лишних исключено: <strong>" +
+        esc(extras) +
+        "</strong> · в PDF: <strong>" +
+        esc(output) +
+        "</strong></div>";
+
+      var warnings = (warningsPayload && warningsPayload.warnings) || [];
+      var total =
+        warningsPayload && warningsPayload.total != null
+          ? warningsPayload.total
+          : warnings.length;
+      if (!warnings.length) {
+        warnEl.hidden = true;
+        warnEl.innerHTML = "";
+        return;
+      }
+      warnEl.hidden = false;
+      warnEl.innerHTML = warnings
+        .map(function (w) {
+          return "<li>" + esc(w) + "</li>";
+        })
+        .join("");
+      if (total > warnings.length) {
+        warnEl.innerHTML +=
+          '<li class="wh-muted">… и ещё ' + esc(total - warnings.length) + "</li>";
+      }
+    }
+
+    btn.addEventListener("click", function () {
+      var url = String(urlInput.value || "").trim();
+      var file = fileInput.files && fileInput.files[0];
+      clearResult();
+      if (!url) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Укажите ссылку на Google Таблицу.";
+        return;
+      }
+      if (!file) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите PDF с ярлыками.";
+        return;
+      }
+      var form = new FormData();
+      form.append("spreadsheet_url", url);
+      form.append("file", file, file.name);
+      btn.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сортируем ярлыки...";
+      fetch("/api/warehouse/tools/yandex-label-sort", {
+        method: "POST",
+        credentials: "include",
+        body: form,
+      })
+        .then(function (r) {
+          if (r.ok) {
+            var stats = parseHeaderJson("X-Label-Sort-Stats", r.headers);
+            var warnings = parseHeaderJson("X-Label-Sort-Warnings", r.headers);
+            return downloadBlob(r).then(function () {
+              return { stats: stats, warnings: warnings };
+            });
+          }
+          return r.text().then(function (text) {
+            var detail = text || "HTTP " + r.status;
+            try {
+              var parsed = JSON.parse(text);
+              if (parsed && parsed.detail) {
+                detail =
+                  typeof parsed.detail === "string"
+                    ? parsed.detail
+                    : String(parsed.detail);
+              }
+            } catch (e) {}
+            throw new Error(detail);
+          });
+        })
+        .then(function (payload) {
+          renderStats(payload.stats, payload.warnings);
+          var missing = payload.stats && Number(payload.stats.missing || 0);
+          var extras = payload.stats && Number(payload.stats.extras_dropped || 0);
+          if (missing || extras || (payload.warnings && payload.warnings.total)) {
+            msg.className = "wh-msg wh-msg-warn";
+            msg.textContent = "PDF скачан с предупреждениями.";
+          } else {
+            msg.className = "wh-msg wh-msg-ok";
+            msg.textContent = "PDF отсортирован и скачан.";
+          }
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+        })
+        .finally(function () {
+          btn.disabled = false;
+        });
+    });
+  }
+
   function render(tab, item) {
     if (item.id === "pdf-merge") {
       renderPdfMerge(tab, item);
@@ -567,6 +723,10 @@
     }
     if (item.id === "cargo-places") {
       renderCargoPlaces(tab, item);
+      return;
+    }
+    if (item.id === "yandex-label-sort") {
+      renderYandexLabelSort(tab, item);
       return;
     }
     preparePanel(tab, item);
