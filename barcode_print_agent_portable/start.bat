@@ -19,6 +19,6 @@ if not exist ".venv\Scripts\python.exe" (
 
 :RUN
 if not exist config.env if exist config.env.example copy /Y config.env.example config.env >nul
-echo Агент печати запущен. Не закрывайте окно. Остановка: Ctrl+C
+echo Агент печати: откроется окно статуса. Закрытие окна останавливает агент.
 ".venv\Scripts\python.exe" agent.py
 if errorlevel 1 pause

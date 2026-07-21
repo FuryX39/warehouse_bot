@@ -104,26 +104,15 @@
   }
 
   function downloadBlob(response) {
-    return response.blob().then(function (blob) {
-      var dispo = response.headers.get("Content-Disposition") || "";
-      var filename = "merged.pdf";
-      var m = dispo.match(/filename="([^"]+)"/);
-      if (m) filename = m[1];
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () {
-        URL.revokeObjectURL(url);
-      }, 500);
+    return global.WhTaskAttach.parsePdfResponse(response, "merged.pdf").then(function (result) {
+      global.WhTaskAttach.downloadPdfResult(result);
+      return result;
     });
   }
 
   function renderPdfMerge(tab, item) {
     fileQueue = [];
+    var lastPdfResult = null;
     preparePanel(tab, item);
     var root = panelEl();
     root.innerHTML =
@@ -136,16 +125,22 @@
       '<div id="whPdfMergeList" class="wh-pdf-merge-list-wrap"><p class="wh-muted">Файлы пока не выбраны.</p></div>' +
       '<div class="wh-tools-actions">' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whPdfMergeBtn" disabled>Объединить PDF</button>' +
+      '<button type="button" class="wh-btn" id="whPdfMergeAttachBtn" disabled>Привязать к задаче</button>' +
       '<span id="whPdfMergeMsg" class="wh-msg"></span>' +
       "</div>" +
       "</div>";
     var input = root.querySelector("#whPdfMergeInput");
     var clearBtn = root.querySelector("#whPdfMergeClear");
     var mergeBtn = root.querySelector("#whPdfMergeBtn");
+    var attachBtn = root.querySelector("#whPdfMergeAttachBtn");
     var msg = root.querySelector("#whPdfMergeMsg");
 
     function syncClearBtn() {
       if (clearBtn) clearBtn.disabled = !fileQueue.length;
+    }
+
+    function syncAttachBtn() {
+      if (attachBtn) attachBtn.disabled = !lastPdfResult;
     }
 
     input.addEventListener("change", function () {
@@ -160,19 +155,38 @@
 
     clearBtn.addEventListener("click", function () {
       fileQueue = [];
+      lastPdfResult = null;
       renderFileList(root);
       syncClearBtn();
+      syncAttachBtn();
       if (msg) {
         msg.className = "wh-msg";
         msg.textContent = "";
       }
     });
 
+    if (attachBtn) {
+      attachBtn.addEventListener("click", function () {
+        if (!lastPdfResult) return;
+        global.WhTaskAttach.openModal({
+          pdfBlob: lastPdfResult.blob,
+          defaultFilename: lastPdfResult.filename,
+          defaultKind: "a4",
+          onSuccess: function () {
+            msg.className = "wh-msg wh-msg-ok";
+            msg.textContent = "PDF прикреплён к задаче.";
+          },
+        });
+      });
+    }
+
     mergeBtn.addEventListener("click", function () {
       if (!fileQueue.length) return;
       msg.className = "wh-msg";
       msg.textContent = "Объединяем PDF...";
       mergeBtn.disabled = true;
+      if (attachBtn) attachBtn.disabled = true;
+      lastPdfResult = null;
       var formData = new FormData();
       fileQueue.forEach(function (file) {
         formData.append("files", file, file.name);
@@ -195,9 +209,11 @@
             throw new Error(detail);
           });
         })
-        .then(function () {
+        .then(function (result) {
+          lastPdfResult = result;
+          syncAttachBtn();
           msg.className = "wh-msg wh-msg-ok";
-          msg.textContent = "PDF сформирован и скачан.";
+          msg.textContent = "PDF сформирован и скачан. Можно привязать к задаче.";
         })
         .catch(function (err) {
           msg.className = "wh-msg wh-msg-error";
@@ -210,6 +226,167 @@
 
     renderFileList(root);
     syncClearBtn();
+    syncAttachBtn();
+  }
+
+  function isExcelFile(file) {
+    if (!file) return false;
+    var name = String(file.name || "").toLowerCase();
+    return (
+      name.endsWith(".xlsx") ||
+      name.endsWith(".xlsm") ||
+      file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+  }
+
+  function renderExcelToPdf(tab, item) {
+    var selectedFile = null;
+    var lastPdfResult = null;
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML =
+      '<div class="wh-tools-card">' +
+      '<p class="wh-muted">Загрузите Excel (.xlsx) и выберите тип преобразования. PDF формируется с переносом таблицы на страницы.</p>' +
+      '<div class="wh-excel-pdf-form">' +
+      '<label><span>Тип</span><select id="whExcelPdfProfile"></select></label>' +
+      '<label class="wh-import-file-label">Файл Excel<input type="file" id="whExcelPdfInput" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
+      '<p id="whExcelPdfFileName" class="wh-muted">Файл не выбран.</p>' +
+      "</div>" +
+      '<div class="wh-tools-actions">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whExcelPdfBtn" disabled>Сформировать PDF</button>' +
+      '<button type="button" class="wh-btn" id="whExcelPdfAttachBtn" disabled>Привязать к задаче</button>' +
+      '<span id="whExcelPdfMsg" class="wh-msg"></span>' +
+      "</div>" +
+      "</div>";
+
+    var profileSelect = root.querySelector("#whExcelPdfProfile");
+    var input = root.querySelector("#whExcelPdfInput");
+    var fileNameEl = root.querySelector("#whExcelPdfFileName");
+    var convertBtn = root.querySelector("#whExcelPdfBtn");
+    var attachBtn = root.querySelector("#whExcelPdfAttachBtn");
+    var msg = root.querySelector("#whExcelPdfMsg");
+
+    function syncAttachBtn() {
+      if (attachBtn) attachBtn.disabled = !lastPdfResult;
+    }
+
+    function syncConvertBtn() {
+      if (convertBtn) convertBtn.disabled = !selectedFile;
+    }
+
+    function setFile(file) {
+      selectedFile = file || null;
+      lastPdfResult = null;
+      syncAttachBtn();
+      syncConvertBtn();
+      if (!fileNameEl) return;
+      if (!selectedFile) {
+        fileNameEl.textContent = "Файл не выбран.";
+        return;
+      }
+      fileNameEl.textContent = selectedFile.name + " (" + formatSize(selectedFile.size) + ")";
+    }
+
+    jsonRequest("/api/warehouse/tools/excel-to-pdf/profiles")
+      .then(function (data) {
+        var profiles = data.profiles || [];
+        profileSelect.innerHTML = profiles
+          .map(function (profile) {
+            var label = profile.title || profile.id;
+            if (profile.description) label += " — " + profile.description;
+            return (
+              '<option value="' +
+              esc(profile.id) +
+              '">' +
+              esc(label) +
+              "</option>"
+            );
+          })
+          .join("");
+      })
+      .catch(function () {
+        profileSelect.innerHTML =
+          '<option value="free">Свободный</option>' +
+          '<option value="vseinstrumenti">ВсеИнструменты</option>';
+      });
+
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (!file) {
+        setFile(null);
+        return;
+      }
+      if (!isExcelFile(file)) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Можно загружать только Excel (.xlsx).";
+        input.value = "";
+        setFile(null);
+        return;
+      }
+      msg.className = "wh-msg";
+      msg.textContent = "";
+      setFile(file);
+    });
+
+    if (attachBtn) {
+      attachBtn.addEventListener("click", function () {
+        if (!lastPdfResult) return;
+        global.WhTaskAttach.openModal({
+          pdfBlob: lastPdfResult.blob,
+          defaultFilename: lastPdfResult.filename,
+          defaultKind: "a4",
+          onSuccess: function () {
+            msg.className = "wh-msg wh-msg-ok";
+            msg.textContent = "PDF прикреплён к задаче.";
+          },
+        });
+      });
+    }
+
+    convertBtn.addEventListener("click", function () {
+      if (!selectedFile) return;
+      msg.className = "wh-msg";
+      msg.textContent = "Формируем PDF...";
+      convertBtn.disabled = true;
+      if (attachBtn) attachBtn.disabled = true;
+      lastPdfResult = null;
+      var formData = new FormData();
+      formData.append("file", selectedFile, selectedFile.name);
+      formData.append("profile", profileSelect.value || "free");
+      fetch("/api/warehouse/tools/excel-to-pdf", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      })
+        .then(function (r) {
+          if (r.ok) return downloadBlob(r);
+          return r.text().then(function (text) {
+            var detail = text || "HTTP " + r.status;
+            try {
+              var json = JSON.parse(text);
+              if (json && json.detail) {
+                detail = typeof json.detail === "string" ? json.detail : String(json.detail);
+              }
+            } catch (e) {}
+            throw new Error(detail);
+          });
+        })
+        .then(function (result) {
+          lastPdfResult = result;
+          syncAttachBtn();
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent = "PDF сформирован и скачан. Можно привязать к задаче.";
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+        })
+        .finally(function () {
+          syncConvertBtn();
+        });
+    });
+
+    setFile(null);
   }
 
   var cargoState = { types: [], result: null };
@@ -719,6 +896,10 @@
   function render(tab, item) {
     if (item.id === "pdf-merge") {
       renderPdfMerge(tab, item);
+      return;
+    }
+    if (item.id === "excel-to-pdf") {
+      renderExcelToPdf(tab, item);
       return;
     }
     if (item.id === "cargo-places") {

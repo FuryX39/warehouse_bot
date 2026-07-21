@@ -260,6 +260,7 @@ def create_dashboard_app(
         transfers_repo,
         catalog_repo,
         crm_repo,
+        task_files_data_dir=settings.warehouse_task_files_data_dir,
     )
     tasks_repo.init_schema()
 

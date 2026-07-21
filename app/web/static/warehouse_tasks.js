@@ -16,6 +16,7 @@
   var editingId = null;
   var formAssigneeIds = [];
   var formDocuments = [];
+  var formAttachmentUploads = [];
   var summaryYear = null;
   var summaryMonth = null;
   var CONFIGURE_VALUE = "__configure__";
@@ -28,8 +29,8 @@
 
   var TASK_SORT_OPTIONS = [
     { id: "status", label: "Статус" },
-    { id: "start_date", label: "Дата начала" },
-    { id: "end_date", label: "Дата окончания" },
+    { id: "start_date", label: "Дата сборки" },
+    { id: "end_date", label: "Дата отгрузки" },
     { id: "id", label: "№" },
     { id: "task_type", label: "Тип" },
     { id: "author", label: "Автор" },
@@ -265,10 +266,10 @@
       filterField("assignee_id", "Ответственный", "select", meta.assignees) +
       filterField("created_by_user_id", "Автор", "select", meta.assignees) +
       filterField("counterparty_id", "Контрагент", "select", meta.counterparties) +
-      filterField("start_date_from", "Дата начала с", "date") +
-      filterField("start_date_to", "Дата начала по", "date") +
-      filterField("end_date_from", "Дата окончания с", "date") +
-      filterField("end_date_to", "Дата окончания по", "date") +
+      filterField("start_date_from", "Дата сборки с", "date") +
+      filterField("start_date_to", "Дата сборки по", "date") +
+      filterField("end_date_from", "Дата отгрузки с", "date") +
+      filterField("end_date_to", "Дата отгрузки по", "date") +
       filterField("entity_type", "Тип документа", "select", meta.document_types) +
       filterField("entity_id", "ID документа", "text") +
       "</div>" +
@@ -677,6 +678,7 @@
       task_type_id: "",
       status_id: "",
       comment: "",
+      description: "",
       work_hours: "",
       start_date: "",
       end_date: "",
@@ -694,6 +696,9 @@
       task_type_id: root.querySelector("#whTkType").value,
       status_id: root.querySelector("#whTkStatus") ? root.querySelector("#whTkStatus").value : "",
       comment: root.querySelector("#whTkComment").value.trim(),
+      description: root.querySelector("#whTkDescription")
+        ? root.querySelector("#whTkDescription").value.trim()
+        : "",
       work_hours: root.querySelector("#whTkWorkHours")
         ? root.querySelector("#whTkWorkHours").value.trim()
         : "",
@@ -729,6 +734,7 @@
       task_type_id: draft.task_type_id != null ? draft.task_type_id : "",
       status_id: draft.status_id != null ? draft.status_id : "",
       comment: draft.comment || "",
+      description: draft.description || "",
       work_hours: draft.work_hours != null ? draft.work_hours : "",
       start_date: draft.start_date || "",
       end_date: draft.end_date || "",
@@ -839,7 +845,7 @@
       return (
         '<div class="wh-modal-row wh-crm-dict-row" data-id="' + esc(item.id) + '">' +
         '<input type="text" class="wh-crm-dict-name" value="' + esc(item.name) + '" placeholder="Название" />' +
-        '<input type="text" class="wh-crm-dict-comment" value="' + esc(item.comment || "") + '" placeholder="Комментарий" />' +
+        '<input type="text" class="wh-crm-dict-comment" value="' + esc(item.comment || "") + '" placeholder="Шаблон описания" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button></div>'
       );
     });
@@ -882,7 +888,7 @@
       row.className = "wh-modal-row wh-crm-dict-row";
       row.innerHTML =
         '<input type="text" class="wh-crm-dict-name" placeholder="Название" />' +
-        '<input type="text" class="wh-crm-dict-comment" placeholder="Комментарий" />' +
+        '<input type="text" class="wh-crm-dict-comment" placeholder="Шаблон описания" />' +
         '<button type="button" class="wh-btn wh-btn-sm wh-crm-dict-remove">Удалить</button>';
       backdrop.querySelector("#whTkTypeRows").appendChild(row);
     });
@@ -1009,6 +1015,164 @@
       });
   }
 
+  function renderAttachmentKindOptions(selected) {
+    var kinds = [
+      { id: "a4", label: "А4" },
+      { id: "label", label: "Этикетки" },
+    ];
+    return kinds
+      .map(function (k) {
+        var sel = String(selected || "a4") === k.id ? " selected" : "";
+        return '<option value="' + esc(k.id) + '"' + sel + ">" + esc(k.label) + "</option>";
+      })
+      .join("");
+  }
+
+  function renderExistingAttachmentsBlock(attachments, taskId) {
+    var items = attachments || [];
+    if (!items.length) {
+      return '<p class="wh-muted">Прикреплённых PDF пока нет.</p>';
+    }
+    return (
+      '<ul class="wh-task-attachments-existing">' +
+      items
+        .map(function (a) {
+          return (
+            '<li class="wh-task-attachment-item" data-attachment-id="' +
+            esc(a.id) +
+            '">' +
+            '<span class="wh-badge">' +
+            esc(a.kind_label || a.kind) +
+            "</span> " +
+            '<a class="wh-link" href="/api/warehouse/tasks/' +
+            esc(taskId) +
+            "/attachments/" +
+            esc(a.id) +
+            '" target="_blank" rel="noopener noreferrer">' +
+            esc(a.filename || a.original_filename || "file.pdf") +
+            "</a> " +
+            '<button type="button" class="wh-btn wh-btn-sm wh-task-attachment-remove">Убрать</button>' +
+            "</li>"
+          );
+        })
+        .join("") +
+      "</ul>"
+    );
+  }
+
+  function renderPendingAttachmentsBlock() {
+    if (!formAttachmentUploads.length) {
+      return '<p class="wh-muted">Новые файлы не выбраны.</p>';
+    }
+    return (
+      '<ul class="wh-task-attachments-pending">' +
+      formAttachmentUploads
+        .map(function (item, idx) {
+          return (
+            '<li class="wh-task-attachment-item">' +
+            '<span class="wh-badge">' +
+            esc(item.kind === "label" ? "Этикетки" : "А4") +
+            "</span> " +
+            esc(item.file.name) +
+            '<button type="button" class="wh-btn wh-btn-sm wh-task-attachment-pending-remove" data-idx="' +
+            idx +
+            '">Убрать</button></li>'
+          );
+        })
+        .join("") +
+      "</ul>"
+    );
+  }
+
+  function refreshPendingAttachmentsDom(root) {
+    var wrap = root.querySelector("#whTkPendingAttachments");
+    if (wrap) wrap.innerHTML = renderPendingAttachmentsBlock();
+    bindPendingAttachmentEvents(root);
+  }
+
+  function bindPendingAttachmentEvents(root) {
+    root.querySelectorAll(".wh-task-attachment-pending-remove").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-idx") || "", 10);
+        if (idx >= 0 && idx < formAttachmentUploads.length) {
+          formAttachmentUploads.splice(idx, 1);
+          refreshPendingAttachmentsDom(root);
+        }
+      });
+    });
+  }
+
+  function bindExistingAttachmentEvents(root, taskId) {
+    root.querySelectorAll(".wh-task-attachment-remove").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var li = btn.closest(".wh-task-attachment-item");
+        var attachmentId = parseInt(li.getAttribute("data-attachment-id") || "", 10);
+        if (!attachmentId) return;
+        if (!confirm("Удалить прикреплённый PDF?")) return;
+        fetchJson("/api/warehouse/tasks/" + taskId + "/attachments/" + attachmentId, {
+          method: "DELETE",
+        })
+          .then(function (data) {
+            var list = root.querySelector("#whTkExistingAttachments");
+            if (list) {
+              list.innerHTML = renderExistingAttachmentsBlock(
+                (data.task && data.task.attachments) || [],
+                taskId
+              );
+              bindExistingAttachmentEvents(root, taskId);
+            }
+          })
+          .catch(function (err) {
+            alert(err.message || "Ошибка удаления");
+          });
+      });
+    });
+  }
+
+  function applyDescriptionTemplateFromType(root) {
+    var typeEl = root.querySelector("#whTkType");
+    var descEl = root.querySelector("#whTkDescription");
+    if (!typeEl || !descEl) return;
+    if (String(descEl.value || "").trim()) return;
+    var typeId = parseInt(typeEl.value || "", 10);
+    if (!typeId) return;
+    var match = (meta.task_types || []).find(function (t) {
+      return parseInt(t.id, 10) === typeId;
+    });
+    if (match && match.comment) descEl.value = match.comment;
+  }
+
+  function uploadPendingAttachments(taskId, root) {
+    if (!formAttachmentUploads.length) return Promise.resolve();
+    var chain = Promise.resolve();
+    formAttachmentUploads.forEach(function (item) {
+      chain = chain.then(function () {
+        var form = new FormData();
+        form.append("kind", item.kind);
+        form.append("file", item.file, item.file.name);
+        return fetch("/api/warehouse/tasks/" + taskId + "/attachments", {
+          method: "POST",
+          credentials: "include",
+          body: form,
+        }).then(function (response) {
+          if (response.ok) return response.json();
+          return response.text().then(function (text) {
+            var detail = text || "HTTP " + response.status;
+            try {
+              var json = JSON.parse(text);
+              if (json && json.detail) detail = json.detail;
+            } catch (e) {}
+            throw new Error(typeof detail === "string" ? detail : String(detail));
+          });
+        });
+      });
+    });
+    return chain.then(function () {
+      formAttachmentUploads = [];
+      refreshPendingAttachmentsDom(root);
+    });
+  }
+
   function collectAssigneesFromDom(root) {
     var ids = [];
     root.querySelectorAll(".wh-task-assignee-cb:checked").forEach(function (cb) {
@@ -1075,8 +1239,8 @@
               sortableHeader("documents", "Документы") +
               "<th scope=\"col\">Часы</th>" +
               sortableHeader("comment", "Комментарий") +
-              sortableHeader("start_date", "Начало") +
-              sortableHeader("end_date", "Окончание") +
+              sortableHeader("start_date", "Сборка") +
+              sortableHeader("end_date", "Отгрузка") +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Задачи не найдены.</p>') +
           "</div>";
@@ -1226,6 +1390,7 @@
             label: d.label,
           };
         });
+        formAttachmentUploads = [];
         var docTypeOpts = '<option value="">Все типы</option>';
         meta.document_types.forEach(function (dt) {
           docTypeOpts += '<option value="' + esc(dt.id) + '">' + esc(dt.title) + "</option>";
@@ -1253,8 +1418,8 @@
           '<div><label>Автор</label><div class="wh-input-readonly" id="whTkAuthor">' + esc(authorName) + "</div></div>" +
           '<div><label>Контрагент</label><select id="whTkCounterparty">' +
           buildCounterpartyOptions(meta.counterparties, t.counterparty_id) + "</select></div>" +
-          '<div><label>Дата начала</label><input type="date" id="whTkStart" value="' + esc(t.start_date || "") + '" /></div>' +
-          '<div><label>Дата окончания</label><input type="date" id="whTkEnd" value="' + esc(t.end_date || "") + '" /></div>' +
+          '<div><label>Дата сборки</label><input type="date" id="whTkStart" value="' + esc(t.start_date || "") + '" /></div>' +
+          '<div><label>Дата отгрузки</label><input type="date" id="whTkEnd" value="' + esc(t.end_date || "") + '" /></div>' +
           '<div><label>Часы на выполнение</label><input type="text" id="whTkWorkHours" value="' +
           esc(workHoursVal) +
           '" inputmode="decimal" placeholder="0" /></div>' +
@@ -1270,11 +1435,61 @@
           '<div id="whTkDocuments" class="wh-task-docs">' + renderDocumentsBlock() + "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Дополнительные поля</h4>' +
           '<div id="whTkCustomFields">' + renderCustomFieldsBlock(t) + "</div></section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Описание задачи</h4>' +
+          '<p class="wh-muted">Видно упаковщикам в desktop-приложении. При выборе типа подставляется шаблон, если поле пустое.</p>' +
+          '<textarea id="whTkDescription" class="wh-rc-comment" rows="5" placeholder="Что нужно собрать и напечатать">' +
+          esc(t.description || "") +
+          "</textarea></section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Файлы для печати</h4>' +
+          '<p class="wh-muted">PDF для печати на А4 или на принтере этикеток.</p>' +
+          (taskId
+            ? '<div id="whTkExistingAttachments">' +
+              renderExistingAttachmentsBlock(t.attachments || [], taskId) +
+              "</div>"
+            : "") +
+          '<div id="whTkPendingAttachments">' +
+          renderPendingAttachmentsBlock() +
+          "</div>" +
+          '<div class="wh-task-attachment-add">' +
+          '<label>Тип<select id="whTkAttachmentKind">' +
+          renderAttachmentKindOptions("a4") +
+          "</select></label>" +
+          '<label class="wh-import-file-label">PDF<input type="file" id="whTkAttachmentFile" accept=".pdf,application/pdf" /></label>' +
+          '<button type="button" class="wh-btn" id="whTkAttachmentAdd">Добавить в список</button>' +
+          "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Комментарий</h4>' +
+          '<p class="wh-muted">Внутренняя заметка, упаковщикам не показывается.</p>' +
           '<textarea id="whTkComment" class="wh-rc-comment" rows="4" placeholder="Необязательно">' + esc(t.comment) + "</textarea></section>";
 
         bindAssigneeEvents(root);
         bindDocumentEvents(root);
+        bindPendingAttachmentEvents(root);
+        if (taskId) bindExistingAttachmentEvents(root, taskId);
+        var typeSelect = root.querySelector("#whTkType");
+        if (typeSelect) {
+          typeSelect.addEventListener("change", function () {
+            applyDescriptionTemplateFromType(root);
+          });
+          if (!taskId) applyDescriptionTemplateFromType(root);
+        }
+        var attachmentAddBtn = root.querySelector("#whTkAttachmentAdd");
+        if (attachmentAddBtn) {
+          attachmentAddBtn.addEventListener("click", function () {
+            var kindEl = root.querySelector("#whTkAttachmentKind");
+            var fileEl = root.querySelector("#whTkAttachmentFile");
+            var file = fileEl && fileEl.files && fileEl.files[0];
+            if (!file) {
+              alert("Выберите PDF-файл");
+              return;
+            }
+            formAttachmentUploads.push({
+              kind: kindEl ? kindEl.value || "a4" : "a4",
+              file: file,
+            });
+            if (fileEl) fileEl.value = "";
+            refreshPendingAttachmentsDom(root);
+          });
+        }
         bindConfigureSelect(root.querySelector("#whTkType"), function () {
           var formDraft = captureFormDraft(root);
           modalTaskTypesEditor(function () {
@@ -1354,6 +1569,9 @@
       task_type_id: typeVal,
       status_id: statusVal || null,
       comment: root.querySelector("#whTkComment").value.trim(),
+      description: root.querySelector("#whTkDescription")
+        ? root.querySelector("#whTkDescription").value.trim()
+        : "",
       work_hours: root.querySelector("#whTkWorkHours").value.trim(),
       start_date: root.querySelector("#whTkStart").value,
       end_date: root.querySelector("#whTkEnd").value,
@@ -1376,15 +1594,27 @@
           body: JSON.stringify(body),
         });
     req
-      .then(function () {
+      .then(function (data) {
+        var savedId = taskId || (data.task && data.task.id);
+        if (!savedId) {
+          throw new Error("Не удалось определить id задачи");
+        }
+        return uploadPendingAttachments(savedId, root).then(function () {
+          return savedId;
+        });
+      })
+      .then(function (savedId) {
         msg.className = "wh-msg wh-msg-ok";
         msg.textContent = "Сохранено.";
         if (!taskId) {
           editingId = null;
           formAssigneeIds = [];
           formDocuments = [];
+          formAttachmentUploads = [];
           renderList();
+          return;
         }
+        renderForm(savedId);
       })
       .catch(function (err) {
         msg.className = "wh-msg wh-msg-error";
@@ -1397,6 +1627,7 @@
     editingId = null;
     formAssigneeIds = [];
     formDocuments = [];
+    formAttachmentUploads = [];
     listFilters = {};
     filterPanelOpen = false;
     loadMeta()

@@ -10,6 +10,7 @@ from fastapi import Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.cargo_place_calculator import build_cargo_place_template, calculate_cargo_places
+from app.excel_to_pdf import excel_to_pdf, excel_to_pdf_download_name, list_excel_to_pdf_profiles
 from app.pdf_merge import merge_pdfs_in_order
 from app.warehouse_users_repository import WarehouseUserRow
 from app.yandex_label_sorter import sort_yandex_labels_from_sheet, warnings_header_json
@@ -52,6 +53,36 @@ def register_warehouse_tools_routes(
             content=merged,
             media_type="application/pdf",
             headers={"Content-Disposition": 'attachment; filename="merged.pdf"'},
+        )
+
+    @app.get("/api/warehouse/tools/excel-to-pdf/profiles")
+    async def api_tools_excel_to_pdf_profiles(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        return {"profiles": list_excel_to_pdf_profiles()}
+
+    @app.post("/api/warehouse/tools/excel-to-pdf")
+    async def api_tools_excel_to_pdf(
+        file: UploadFile = File(...),
+        profile: str = Form("free"),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        data = await file.read()
+        filename = (file.filename or "table.xlsx").strip() or "table.xlsx"
+        try:
+            pdf = await asyncio.to_thread(
+                excel_to_pdf,
+                data,
+                profile=profile,
+                original_filename=filename,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        out_name = excel_to_pdf_download_name(filename, profile)
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
         )
 
     @app.get("/api/warehouse/tools/cargo-places/types")

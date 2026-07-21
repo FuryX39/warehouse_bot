@@ -100,6 +100,7 @@ class Settings:
     dealer_analysis_data_dir: str = ""
     # Bearer-токен для внешнего API задач (/api/v1/tasks). Пустой = только сессия панели.
     warehouse_tasks_api_token: str = ""
+    warehouse_task_files_data_dir: str = ""
 
 
 def dealer_analysis_db_url_default() -> str:
@@ -111,6 +112,13 @@ def dealer_analysis_data_dir_default() -> Path:
     if raw:
         return Path(raw)
     return _PROJECT_ROOT / "data" / "dealer_analysis"
+
+
+def warehouse_task_files_data_dir_default() -> Path:
+    raw = os.getenv("WAREHOUSE_TASK_FILES_DATA_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    return _PROJECT_ROOT / "data" / "warehouse_task_files"
 
 
 def resolve_warehouse_admin_credentials(settings: Settings) -> tuple[str, str]:
@@ -172,6 +180,7 @@ def load_settings() -> Settings:
         dealer_analysis_db_url=dealer_analysis_db_url_default(),
         dealer_analysis_data_dir=str(dealer_analysis_data_dir_default()),
         warehouse_tasks_api_token=os.getenv("WAREHOUSE_TASKS_API_TOKEN", "").strip(),
+        warehouse_task_files_data_dir=str(warehouse_task_files_data_dir_default()),
     )
 
 

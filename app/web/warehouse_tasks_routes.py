@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 
 from app.web.warehouse_tasks_api_auth import TasksApiActor, resolve_created_by
 from app.crm_repository import CrmRepository
@@ -15,6 +18,13 @@ from app.warehouse_tasks_repository import ENTITY_LABELS, WarehouseTasksReposito
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _attachment_disposition(filename: str) -> str:
+    safe = str(filename or "file.pdf").replace('"', "")
+    ascii_name = "".join(ch if ord(ch) < 128 else "_" for ch in safe) or "file.pdf"
+    utf8_name = quote(safe)
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
 
 def register_warehouse_tasks_routes(
@@ -389,6 +399,18 @@ def _register_on_prefix(
             "sort_dir2": "asc" if sort_asc2 else "desc",
         }
 
+    @app.get(f"{prefix}/my")
+    async def api_tasks_my(
+        actor: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        if actor.user is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Эндпоинт /my доступен только при входе пользователя",
+            )
+        rows = tasks_repo.list_my_tasks(int(actor.user.id))
+        return {"tasks": [tasks_repo.task_to_dict(r) for r in rows]}
+
     @app.get(f"{prefix}/{{task_id}}")
     async def api_tasks_get(
         task_id: int,
@@ -398,6 +420,72 @@ def _register_on_prefix(
         if row is None:
             raise HTTPException(status_code=404, detail="Задача не найдена")
         return {"task": tasks_repo.task_to_dict(row)}
+
+    @app.post(f"{prefix}/{{task_id}}/attachments")
+    async def api_tasks_upload_attachment(
+        task_id: int,
+        kind: str = Form(...),
+        file: UploadFile = File(...),
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        data = await file.read()
+        filename = (file.filename or "file.pdf").strip() or "file.pdf"
+        try:
+            attachment = tasks_repo.add_attachment(
+                task_id,
+                kind=kind,
+                original_filename=filename,
+                content=data,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        task = tasks_repo.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Задача не найдена")
+        return {
+            "attachment": {
+                "id": attachment.id,
+                "kind": attachment.kind,
+                "kind_label": attachment.kind_label,
+                "filename": attachment.original_filename,
+                "file_size": attachment.file_size,
+            },
+            "task": tasks_repo.task_to_dict(task),
+        }
+
+    @app.get(f"{prefix}/{{task_id}}/attachments/{{attachment_id}}")
+    async def api_tasks_download_attachment(
+        task_id: int,
+        attachment_id: int,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> Response:
+        found = tasks_repo.get_attachment_file(task_id, attachment_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        attachment, path = found
+        return FileResponse(
+            path=str(path),
+            media_type=attachment.mime_type or "application/pdf",
+            filename=attachment.original_filename or "file.pdf",
+            headers={
+                "Content-Disposition": _attachment_disposition(
+                    attachment.original_filename or "file.pdf"
+                )
+            },
+        )
+
+    @app.delete(f"{prefix}/{{task_id}}/attachments/{{attachment_id}}")
+    async def api_tasks_delete_attachment(
+        task_id: int,
+        attachment_id: int,
+        _: TasksApiActor = Depends(require_tasks_access),
+    ) -> dict:
+        if not tasks_repo.delete_attachment(task_id, attachment_id):
+            raise HTTPException(status_code=404, detail="Файл не найден")
+        task = tasks_repo.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Задача не найдена")
+        return {"ok": True, "task": tasks_repo.task_to_dict(task)}
 
     @app.post(f"{prefix}/bulk")
     async def api_tasks_bulk_create(

@@ -205,21 +205,9 @@
   }
 
   function downloadBlob(response, fallbackName) {
-    return response.blob().then(function (blob) {
-      var dispo = response.headers.get("Content-Disposition") || "";
-      var filename = fallbackName || "route_sheets.pdf";
-      var m = dispo.match(/filename="([^"]+)"/);
-      if (m) filename = m[1];
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () {
-        URL.revokeObjectURL(url);
-      }, 500);
+    return global.WhTaskAttach.parsePdfResponse(response, fallbackName).then(function (result) {
+      global.WhTaskAttach.downloadPdfResult(result);
+      return result;
     });
   }
 
@@ -294,6 +282,7 @@
       '<label><span id="whRouteCargoSequenceLabel">Паллет из</span><input value="сформируется автоматически: 1/N, 2/N..." disabled /></label>' +
       '<div class="wh-route-actions">' +
       '<button type="submit" class="wh-btn wh-btn-primary">Сформировать PDF</button>' +
+      '<button type="button" class="wh-btn" id="whRouteAttachBtn" disabled>Привязать к задаче</button>' +
       '<span id="whRouteMsg" class="wh-msg"></span>' +
       "</div>" +
       "</form>" +
@@ -336,6 +325,8 @@
   function bindVseinstrumenti(root) {
     var form = root.querySelector("#whRouteVsiForm");
     var msg = root.querySelector("#whRouteMsg");
+    var attachBtn = root.querySelector("#whRouteAttachBtn");
+    var lastPdfResult = null;
     if (!form) return;
     var statusSelect = form.querySelector('select[name="purchase_status"]');
     var cargoTypeSelect = form.querySelector('select[name="cargo_type"]');
@@ -355,10 +346,32 @@
         refreshStatusSelect(root);
       });
     });
+    if (attachBtn) {
+      attachBtn.addEventListener("click", function () {
+        if (!lastPdfResult) return;
+        var fd = new FormData(form);
+        var purchaseNumber = String(fd.get("purchase_number") || "").trim();
+        var defaultName = lastPdfResult.filename;
+        if (purchaseNumber) {
+          defaultName = global.WhTaskAttach.ensurePdfFilename("Маршрутный лист " + purchaseNumber);
+        }
+        global.WhTaskAttach.openModal({
+          pdfBlob: lastPdfResult.blob,
+          defaultFilename: defaultName,
+          defaultKind: "a4",
+          onSuccess: function () {
+            msg.className = "wh-msg wh-msg-ok";
+            msg.textContent = "PDF прикреплён к задаче.";
+          },
+        });
+      });
+    }
     form.addEventListener("submit", function (e) {
       e.preventDefault();
       msg.className = "wh-msg";
       msg.textContent = "Формируем PDF...";
+      if (attachBtn) attachBtn.disabled = true;
+      lastPdfResult = null;
       var fd = new FormData(form);
       var payload = {
         supplier: fd.get("supplier"),
@@ -370,9 +383,11 @@
         cargo_count: fd.get("cargo_count"),
       };
       postPdf("/api/warehouse/marketplaces/route-sheets/vseinstrumenti.pdf", payload)
-        .then(function () {
+        .then(function (result) {
+          lastPdfResult = result;
+          if (attachBtn) attachBtn.disabled = false;
           msg.className = "wh-msg wh-msg-ok";
-          msg.textContent = "PDF сформирован.";
+          msg.textContent = "PDF сформирован и скачан. Можно привязать к задаче.";
         })
         .catch(function (err) {
           msg.className = "wh-msg wh-msg-error";

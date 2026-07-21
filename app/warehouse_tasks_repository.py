@@ -6,6 +6,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, func, nulls_first, nulls_last, or_, select
@@ -15,6 +16,11 @@ from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmCounterparty, CrmRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
+from app.warehouse_task_files import (
+    TASK_ATTACHMENT_KINDS,
+    TASK_ATTACHMENT_KIND_LABELS,
+    WarehouseTaskFileStorage,
+)
 from app.warehouse_users_repository import WarehouseUser, WarehouseUsersRepository
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 
@@ -86,6 +92,7 @@ class WarehouseTask(_Base):
         Integer, ForeignKey("warehouse_task_types.id"), nullable=False
     )
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    description: Mapped[str] = mapped_column(String(4096), nullable=False, default="")
     work_hours: Mapped[str] = mapped_column(String(32), nullable=False, default="0")
     start_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
     end_date_ts: Mapped[int] = mapped_column(Integer, nullable=True)
@@ -139,6 +146,34 @@ class WarehouseTaskCustomFieldValue(_Base):
     value: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
 
 
+class WarehouseTaskAttachment(_Base):
+    __tablename__ = "warehouse_task_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("warehouse_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    stored_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False, default="application/pdf")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    uploaded_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+@dataclass
+class TaskAttachmentRow:
+    id: int
+    kind: str
+    kind_label: str
+    original_filename: str
+    file_size: int
+    mime_type: str
+    sort_order: int
+    uploaded_at_ts: int
+
+
 @dataclass
 class TaskCustomFieldValueRow:
     field_id: int
@@ -170,6 +205,7 @@ class TaskRow:
     status_name: str
     status_color: str
     comment: str
+    description: str
     work_hours: float
     start_date_ts: int | None
     end_date_ts: int | None
@@ -181,6 +217,7 @@ class TaskRow:
     updated_at_ts: int
     assignees: list[TaskAssigneeRow] = field(default_factory=list)
     documents: list[TaskDocumentRow] = field(default_factory=list)
+    attachments: list[TaskAttachmentRow] = field(default_factory=list)
     custom_fields: list[TaskCustomFieldValueRow] = field(default_factory=list)
 
 
@@ -245,6 +282,8 @@ class WarehouseTasksRepository:
         transfers_repo: WarehouseTransfersRepository,
         catalog_repo: CatalogRepository,
         crm_repo: CrmRepository,
+        *,
+        task_files_data_dir: str | Path = "",
     ) -> None:
         from sqlalchemy import create_engine
 
@@ -255,6 +294,9 @@ class WarehouseTasksRepository:
         self.transfers_repo = transfers_repo
         self.catalog_repo = catalog_repo
         self.crm_repo = crm_repo
+        self.file_storage = WarehouseTaskFileStorage(
+            Path(task_files_data_dir) if task_files_data_dir else Path("data/warehouse_task_files")
+        )
 
     def init_schema(self) -> None:
         self._ensure_schema()
@@ -279,6 +321,7 @@ class WarehouseTasksRepository:
         self._migrate_status_column()
         self._migrate_task_type_coefficient_column()
         self._migrate_task_work_hours_column()
+        self._migrate_task_description_column()
         self._seed_task_statuses()
 
     def _migrate_task_type_coefficient_column(self) -> None:
@@ -334,6 +377,23 @@ class WarehouseTasksRepository:
                 text(
                     "ALTER TABLE warehouse_tasks "
                     "ADD COLUMN work_hours VARCHAR(32) NOT NULL DEFAULT '0'"
+                )
+            )
+            session.commit()
+
+    def _migrate_task_description_column(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "warehouse_tasks" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_tasks")}
+        if "description" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE warehouse_tasks "
+                    "ADD COLUMN description VARCHAR(4096) NOT NULL DEFAULT ''"
                 )
             )
             session.commit()
@@ -856,6 +916,85 @@ class WarehouseTasksRepository:
                 return None
             return self._task_row(session, row)
 
+    def list_my_tasks(self, user_id: int, *, limit: int = 500) -> list[TaskRow]:
+        return self.list_tasks(
+            {"assignee_id": str(int(user_id))},
+            limit=limit,
+            offset=0,
+            sort_by="start_date",
+            sort_dir="asc",
+            sort_by2="end_date",
+            sort_dir2="asc",
+        )
+
+    def add_attachment(
+        self,
+        task_id: int,
+        *,
+        kind: str,
+        original_filename: str,
+        content: bytes,
+    ) -> TaskAttachmentRow:
+        kind_norm = str(kind or "").strip().lower()
+        if kind_norm not in TASK_ATTACHMENT_KINDS:
+            raise ValueError("Тип файла: a4 или label")
+        with Session(self.engine) as session:
+            if session.get(WarehouseTask, int(task_id)) is None:
+                raise ValueError("Задача не найдена")
+            max_order = session.scalar(
+                select(func.coalesce(func.max(WarehouseTaskAttachment.sort_order), -1)).where(
+                    WarehouseTaskAttachment.task_id == int(task_id)
+                )
+            )
+            sort_order = int(max_order or -1) + 1
+        stored_name, file_size = self.file_storage.store_pdf(
+            content=content,
+            original_filename=original_filename,
+        )
+        now = int(time.time())
+        with Session(self.engine) as session:
+            row = WarehouseTaskAttachment(
+                task_id=int(task_id),
+                kind=kind_norm,
+                original_filename=str(original_filename or "file.pdf").strip()[:512] or "file.pdf",
+                stored_name=stored_name,
+                file_size=file_size,
+                mime_type="application/pdf",
+                sort_order=sort_order,
+                uploaded_at_ts=now,
+            )
+            session.add(row)
+            task = session.get(WarehouseTask, int(task_id))
+            if task is not None:
+                task.updated_at_ts = now
+            session.commit()
+            session.refresh(row)
+            return self._attachment_row(row)
+
+    def get_attachment_file(self, task_id: int, attachment_id: int) -> tuple[TaskAttachmentRow, Path] | None:
+        with Session(self.engine) as session:
+            row = session.get(WarehouseTaskAttachment, int(attachment_id))
+            if row is None or int(row.task_id) != int(task_id):
+                return None
+            path = self.file_storage.path_for(row.stored_name)
+            if path is None:
+                return None
+            return self._attachment_row(row), path
+
+    def delete_attachment(self, task_id: int, attachment_id: int) -> bool:
+        with Session(self.engine) as session:
+            row = session.get(WarehouseTaskAttachment, int(attachment_id))
+            if row is None or int(row.task_id) != int(task_id):
+                return False
+            stored_name = str(row.stored_name)
+            session.delete(row)
+            task = session.get(WarehouseTask, int(task_id))
+            if task is not None:
+                task.updated_at_ts = int(time.time())
+            session.commit()
+        self.file_storage.delete_stored(stored_name)
+        return True
+
     def create_task(self, data: dict[str, Any], *, created_by_user_id: int | None) -> TaskRow:
         return self._save_task(None, data, created_by_user_id=created_by_user_id)
 
@@ -873,6 +1012,7 @@ class WarehouseTasksRepository:
             "task_type_id": current.task_type_id,
             "status_id": current.status_id,
             "comment": current.comment,
+            "description": current.description,
             "work_hours": current.work_hours,
             "start_date": _ts_to_day_str(current.start_date_ts) or None,
             "end_date": _ts_to_day_str(current.end_date_ts) or None,
@@ -889,6 +1029,7 @@ class WarehouseTasksRepository:
             "task_type_id",
             "status_id",
             "comment",
+            "description",
             "work_hours",
             "start_date",
             "end_date",
@@ -1128,7 +1269,8 @@ class WarehouseTasksRepository:
             ],
             "task_fields": {
                 "task_type_id": "int, обязателен при создании",
-                "comment": "string",
+                "comment": "string, внутренний комментарий",
+                "description": "string, описание для упаковщиков",
                 "work_hours": "decimal >= 0, часы на выполнение задачи",
                 "start_date": "YYYY-MM-DD",
                 "end_date": "YYYY-MM-DD",
@@ -1161,8 +1303,16 @@ class WarehouseTasksRepository:
             row = session.get(WarehouseTask, int(task_id))
             if row is None:
                 return False
+            attachment_rows = session.scalars(
+                select(WarehouseTaskAttachment).where(
+                    WarehouseTaskAttachment.task_id == int(task_id)
+                )
+            ).all()
+            stored_names = [str(a.stored_name) for a in attachment_rows]
             session.delete(row)
             session.commit()
+        for stored_name in stored_names:
+            self.file_storage.delete_stored(stored_name)
         return True
 
     def search_documents(
@@ -1196,6 +1346,8 @@ class WarehouseTasksRepository:
             "status_color": row.status_color,
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
+            "description": row.description,
+            "description_short": _truncate_comment(row.description),
             "work_hours": row.work_hours,
             "start_date": _ts_to_day_str(row.start_date_ts),
             "end_date": _ts_to_day_str(row.end_date_ts),
@@ -1223,6 +1375,19 @@ class WarehouseTasksRepository:
                 for d in row.documents
             ],
             "documents_short": ", ".join(d.label for d in row.documents) or "—",
+            "attachments": [
+                {
+                    "id": a.id,
+                    "kind": a.kind,
+                    "kind_label": a.kind_label,
+                    "filename": a.original_filename,
+                    "file_size": a.file_size,
+                    "mime_type": a.mime_type,
+                    "sort_order": a.sort_order,
+                    "uploaded_at_ts": a.uploaded_at_ts,
+                }
+                for a in row.attachments
+            ],
             "custom_fields": [
                 {
                     "field_id": f.field_id,
@@ -1261,11 +1426,12 @@ class WarehouseTasksRepository:
         except (TypeError, ValueError) as exc:
             raise ValueError("Выберите тип задачи") from exc
         comment = str(data.get("comment") or "").strip()[:2048]
+        description = str(data.get("description") or "").strip()[:4096]
         work_hours = _work_hours_storage(data.get("work_hours"))
         start_date_ts = _day_to_ts(_parse_day(data.get("start_date")))
         end_date_ts = _day_to_ts(_parse_day(data.get("end_date")))
         if start_date_ts and end_date_ts and end_date_ts < start_date_ts:
-            raise ValueError("Дата окончания не может быть раньше даты начала")
+            raise ValueError("Дата отгрузки не может быть раньше даты сборки")
 
         assignee_ids = self._normalize_assignee_ids(data.get("assignee_ids"))
         documents = self._normalize_documents(data.get("documents"))
@@ -1292,6 +1458,7 @@ class WarehouseTasksRepository:
                 task = WarehouseTask(
                     task_type_id=task_type_id,
                     comment=comment,
+                    description=description,
                     work_hours=work_hours,
                     start_date_ts=start_date_ts,
                     end_date_ts=end_date_ts,
@@ -1307,6 +1474,7 @@ class WarehouseTasksRepository:
                     raise ValueError("Задача не найдена")
                 task.task_type_id = task_type_id
                 task.comment = comment
+                task.description = description
                 task.work_hours = work_hours
                 task.start_date_ts = start_date_ts
                 task.end_date_ts = end_date_ts
@@ -1539,6 +1707,13 @@ class WarehouseTasksRepository:
                 )
             )
 
+        attachment_rows = session.scalars(
+            select(WarehouseTaskAttachment)
+            .where(WarehouseTaskAttachment.task_id == int(row.id))
+            .order_by(WarehouseTaskAttachment.sort_order, WarehouseTaskAttachment.id)
+        ).all()
+        attachments = [self._attachment_row(ar) for ar in attachment_rows]
+
         return TaskRow(
             id=int(row.id),
             task_type_id=int(row.task_type_id),
@@ -1547,6 +1722,7 @@ class WarehouseTasksRepository:
             status_name=status_name,
             status_color=status_color,
             comment=str(row.comment or ""),
+            description=str(getattr(row, "description", "") or ""),
             work_hours=_work_hours_float(row.work_hours),
             start_date_ts=int(row.start_date_ts) if row.start_date_ts is not None else None,
             end_date_ts=int(row.end_date_ts) if row.end_date_ts is not None else None,
@@ -1558,7 +1734,21 @@ class WarehouseTasksRepository:
             updated_at_ts=int(row.updated_at_ts),
             assignees=assignees,
             documents=documents,
+            attachments=attachments,
             custom_fields=custom_fields,
+        )
+
+    def _attachment_row(self, row: WarehouseTaskAttachment) -> TaskAttachmentRow:
+        kind = str(row.kind or "").strip().lower()
+        return TaskAttachmentRow(
+            id=int(row.id),
+            kind=kind,
+            kind_label=TASK_ATTACHMENT_KIND_LABELS.get(kind, kind),
+            original_filename=str(row.original_filename or ""),
+            file_size=int(row.file_size or 0),
+            mime_type=str(row.mime_type or "application/pdf"),
+            sort_order=int(row.sort_order or 0),
+            uploaded_at_ts=int(row.uploaded_at_ts or 0),
         )
 
     def _list_filter_conditions(self, session: Session, filters: dict[str, str]) -> list:
