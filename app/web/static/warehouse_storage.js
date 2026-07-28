@@ -350,6 +350,9 @@
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whStorageBackList">&larr; К списку</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whStorageSave">Сохранить</button>' +
+          (warehouseId
+            ? '<button type="button" class="wh-btn wh-btn-danger" id="whStorageClearStocks">Очистить остатки</button>'
+            : "") +
           "</div>" +
           '<p class="wh-msg" id="whStorageFormMsg"></p>' +
           (wh.is_default
@@ -400,9 +403,50 @@
         root.querySelector("#whStorageSave").addEventListener("click", function () {
           saveWarehouse(root, warehouseId);
         });
+        var clearBtn = root.querySelector("#whStorageClearStocks");
+        if (clearBtn) {
+          clearBtn.addEventListener("click", function () {
+            clearWarehouseStocks(root, warehouseId, wh.name);
+          });
+        }
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
+  function clearWarehouseStocks(root, warehouseId, warehouseName) {
+    if (
+      !confirm(
+        "Обнулить все остатки на складе «" +
+          (warehouseName || "") +
+          "»?\n\nБудут удалены все позиции на этом складе. Действие нельзя отменить."
+      )
+    ) {
+      return;
+    }
+    var msg = root.querySelector("#whStorageFormMsg");
+    msg.textContent = "";
+    msg.className = "wh-msg";
+    var btn = root.querySelector("#whStorageClearStocks");
+    if (btn) btn.disabled = true;
+    fetchJson("/api/warehouse/storage/warehouses/" + warehouseId + "/stocks/clear", {
+      method: "POST",
+    })
+      .then(function (data) {
+        msg.className = "wh-msg wh-msg-ok";
+        msg.textContent =
+          "Остатки очищены: " +
+          (data.cleared_skus || 0) +
+          " поз., " +
+          (data.cleared_units || 0) +
+          " шт.";
+        renderForm(warehouseId);
+      })
+      .catch(function (err) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = err.message || "Не удалось очистить остатки";
+        if (btn) btn.disabled = false;
       });
   }
 

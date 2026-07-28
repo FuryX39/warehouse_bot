@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, func, inspect, or_, select, text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 _DEFAULT_WAREHOUSE_NAME = "Основной склад"
@@ -86,9 +86,9 @@ class StorageWarehouseRepository:
         from app.db import create_db_engine
 
         self.engine = create_db_engine(db_url)
-        self._on_sku_changed: Callable[[str], None] | None = None
+        self._on_sku_changed: Callable[[set[str]], None] | None = None
 
-    def set_stock_balance_hook(self, on_sku_changed: Callable[[str], None] | None) -> None:
+    def set_stock_balance_hook(self, on_sku_changed: Callable[[set[str]], None] | None) -> None:
         self._on_sku_changed = on_sku_changed
 
     def get_default_warehouse_id(self) -> int | None:
@@ -447,7 +447,7 @@ class StorageWarehouseRepository:
             if row is None:
                 if qty == 0:
                     if not skip_recalc and self._on_sku_changed:
-                        self._on_sku_changed(sku_n)
+                        self._on_sku_changed({sku_n})
                     return
                 session.add(StorageStock(warehouse_id=int(warehouse_id), sku=sku_n, stock=qty))
             else:
@@ -457,7 +457,7 @@ class StorageWarehouseRepository:
                     row.stock = qty
             session.commit()
         if not skip_recalc and self._on_sku_changed:
-            self._on_sku_changed(sku_n)
+            self._on_sku_changed({sku_n})
 
     def adjust_stock(
         self, warehouse_id: int, sku: str, delta: int, *, skip_recalc: bool = False
@@ -472,16 +472,34 @@ class StorageWarehouseRepository:
     ) -> None:
         if not deltas_by_sku:
             return
+        changed: set[str] = set()
         for sku, delta in deltas_by_sku.items():
             sku_n = str(sku or "").strip()
             if not sku_n or not int(delta):
                 continue
             self.adjust_stock(int(warehouse_id), sku_n, int(delta), skip_recalc=True)
-        if not skip_recalc and self._on_sku_changed:
-            for sku in deltas_by_sku:
-                sku_n = str(sku or "").strip()
-                if sku_n:
-                    self._on_sku_changed(sku_n)
+            changed.add(sku_n)
+        if not skip_recalc and self._on_sku_changed and changed:
+            self._on_sku_changed(changed)
+
+    def clear_stocks_for_warehouse(self, warehouse_id: int) -> dict[str, Any]:
+        """Обнуляет все остатки на складе (удаляет записи storage_stocks)."""
+        wid = int(warehouse_id)
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(StorageStock).where(StorageStock.warehouse_id == wid)
+            ).all()
+            skus = sorted({str(r.sku).strip() for r in rows if str(r.sku or "").strip()})
+            cleared_units = sum(max(0, int(r.stock)) for r in rows)
+            session.execute(delete(StorageStock).where(StorageStock.warehouse_id == wid))
+            session.commit()
+        if skus and self._on_sku_changed:
+            self._on_sku_changed(set(skus))
+        return {
+            "cleared_skus": len(skus),
+            "cleared_units": cleared_units,
+            "skus": skus,
+        }
 
     def list_stocks_for_warehouse(self, warehouse_id: int) -> dict[str, int]:
         with Session(self.engine) as session:

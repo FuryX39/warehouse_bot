@@ -85,6 +85,16 @@ def register_warehouse_storage_routes(
         stocks = storage_repo.list_stocks_for_warehouse(warehouse_id)
         return {"stocks": [{"sku": sku, "stock": qty} for sku, qty in sorted(stocks.items())]}
 
+    @app.post("/api/warehouse/storage/warehouses/{warehouse_id}/stocks/clear")
+    async def api_storage_clear_warehouse_stocks(
+        warehouse_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        if storage_repo.get_warehouse(warehouse_id) is None:
+            raise HTTPException(status_code=404, detail="Склад не найден")
+        result = storage_repo.clear_stocks_for_warehouse(warehouse_id)
+        return {"ok": True, **result}
+
 
 def _filters_from_query(params: Any) -> dict[str, str]:
     keys = (
