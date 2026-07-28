@@ -23,6 +23,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
 from app.db import create_db_engine
+from app.kit_stock import compute_kit_aware_available, load_kit_leaf_boms
 from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 
 # Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
@@ -775,40 +776,50 @@ class InventoryRepository:
             ).all()
             return set(ids)
 
+    def _direct_reserves_map(self, session: Session) -> dict[str, int]:
+        reserves_by_sku: dict[str, int] = {}
+        for reserve in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all():
+            sku = str(reserve.sku or "").strip()
+            if not sku:
+                continue
+            reserves_by_sku[sku] = reserves_by_sku.get(sku, 0) + int(reserve.quantity)
+        return reserves_by_sku
+
+    def _kit_aware_available_map(
+        self,
+        session: Session,
+        *,
+        clamp: bool = False,
+        extra_skus: set[str] | None = None,
+    ) -> dict[str, int]:
+        stocks = self._read_stocks_map(session)
+        reserves = self._direct_reserves_map(session)
+        kit_boms = load_kit_leaf_boms(session)
+        available = compute_kit_aware_available(stocks, reserves, kit_boms, clamp=clamp)
+        if extra_skus:
+            for sku in extra_skus:
+                sku_n = str(sku or "").strip()
+                if sku_n and sku_n not in available:
+                    available[sku_n] = 0 if clamp else (0 - int(reserves.get(sku_n, 0)))
+        return available
+
     def build_force_push_available_map(self) -> dict[str, int]:
         """
-        Полная карта для принудительного пуша: все SKU из product_stocks и из order_items (любой статус).
-        Нет строки на складе → stock=0; резерв только по order_items в состоянии added.
+        Полная карта для принудительного пуша: physical SKU, комплекты из каталога,
+        и SKU из order_items. Нет строки на складе → stock=0; резервы комплектов
+        списывают составляющие.
         """
         with Session(self.engine) as session:
-            stocks = self._read_stocks_map(session)
-            reserve_by_sku: dict[str, int] = {}
-            for oi in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all():
-                reserve_by_sku[oi.sku] = reserve_by_sku.get(oi.sku, 0) + int(oi.quantity)
-            order_skus = {str(s) for s in session.scalars(select(OrderItem.sku).distinct()).all()}
-            all_skus = set(stocks.keys()) | set(reserve_by_sku.keys()) | order_skus
-            return {
-                sku: max(int(stocks.get(sku, 0)) - int(reserve_by_sku.get(sku, 0)), 0)
-                for sku in sorted(all_skus)
+            order_skus = {
+                str(s).strip()
+                for s in session.scalars(select(OrderItem.sku).distinct()).all()
+                if str(s or "").strip()
             }
+            return self._kit_aware_available_map(session, clamp=True, extra_skus=order_skus)
 
     def get_available_stock_map(self) -> dict[str, int]:
         with Session(self.engine) as session:
-            stocks = self._read_stocks_map(session)
-            reserves_by_sku: dict[str, int] = {}
-            active_order_items = session.scalars(
-                select(OrderItem).where(OrderItem.state == "added")
-            ).all()
-            for reserve in active_order_items:
-                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + int(reserve.quantity)
-
-            all_skus = set(stocks.keys()) | set(reserves_by_sku.keys())
-            available: dict[str, int] = {}
-            for sku in all_skus:
-                stock = stocks.get(sku, 0)
-                reserve = reserves_by_sku.get(sku, 0)
-                available[sku] = stock - reserve
-            return available
+            return self._kit_aware_available_map(session, clamp=False)
 
     def get_inventory_snapshot(self) -> list[InventorySnapshot]:
         with Session(self.engine) as session:
@@ -820,19 +831,15 @@ class InventoryRepository:
             else:
                 top_rows = session.scalars(select(ProductStock).where(ProductStock.is_top.is_(True))).all()
                 top_flags = {row.sku: True for row in top_rows}
-            reserves_by_sku: dict[str, int] = {}
-            active_order_items = session.scalars(
-                select(OrderItem).where(OrderItem.state == "added")
-            ).all()
-            for reserve in active_order_items:
-                reserves_by_sku[reserve.sku] = reserves_by_sku.get(reserve.sku, 0) + int(reserve.quantity)
-
-            all_skus = sorted(set(stocks.keys()) | set(reserves_by_sku.keys()))
+            reserves_by_sku = self._direct_reserves_map(session)
+            available_map = self._kit_aware_available_map(session, clamp=False)
+            all_skus = sorted(set(stocks.keys()) | set(reserves_by_sku.keys()) | set(available_map.keys()))
             nom = self._load_nomenclature_rows(session, all_skus)
             snapshots: list[InventorySnapshot] = []
             for sku in all_skus:
                 stock = stocks.get(sku, 0)
                 reserve = reserves_by_sku.get(sku, 0)
+                available = int(available_map.get(sku, stock - reserve))
                 is_top = bool(top_flags.get(sku, False))
                 meta = nom.get(sku)
                 if meta is None:
@@ -847,7 +854,7 @@ class InventoryRepository:
                         sku=sku,
                         stock=stock,
                         reserve=reserve,
-                        available=stock - reserve,
+                        available=available,
                         name=disp_name,
                         image_url=img,
                         is_top=is_top,

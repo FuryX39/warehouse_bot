@@ -11,6 +11,11 @@ from sqlalchemy import Boolean, Integer, String, delete, func, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogKitComponent, CatalogProduct, CatalogProductGroup
+from app.kit_stock import (
+    expand_skus_with_kit_components,
+    kit_component_allocations,
+    load_kit_leaf_boms,
+)
 from app.storage_warehouse_repository import StorageStock, StorageWarehouse
 from app.repositories import OrderItem
 
@@ -138,14 +143,17 @@ class WarehouseStockRepository:
             return
         with Session(self.engine) as session:
             expanded = self._expand_with_parent_kits(session, seed)
+            expanded |= expand_skus_with_kit_components(session, expanded)
             product_skus = {
                 s
                 for s in expanded
                 if not self._is_kit_sku(session, s)
             }
             kit_ids = self._kit_ids_for_skus(session, expanded - product_skus)
+            reserve_map = self._reserve_by_sku(session)
+            allocations = kit_component_allocations(reserve_map, load_kit_leaf_boms(session))
             for sku in product_skus:
-                self._recalc_product_sku(session, sku)
+                self._recalc_product_sku(session, sku, allocations=allocations)
             for kit_id in self._kits_sorted_by_depth(session, kit_ids):
                 self._recalc_kit(session, kit_id)
             session.commit()
@@ -531,14 +539,21 @@ class WarehouseStockRepository:
         row.free_stock = int(free_stock)
         row.updated_at_ts = now
 
-    def _recalc_product_sku(self, session: Session, sku: str) -> None:
+    def _recalc_product_sku(
+        self,
+        session: Session,
+        sku: str,
+        *,
+        allocations: dict[str, int] | None = None,
+    ) -> None:
         product = self._catalog_product_by_sku(session, sku)
         if product and product.is_kit:
             return
         full_map = self._full_by_sku(session)
         reserve_map = self._reserve_by_sku(session)
+        alloc = allocations if allocations is not None else {}
         full_stock = int(full_map.get(sku, 0))
-        reserve = int(reserve_map.get(sku, 0))
+        reserve = int(reserve_map.get(sku, 0)) + int(alloc.get(sku, 0))
         free_stock = full_stock - reserve
         self._upsert_cache(
             session,
@@ -570,8 +585,6 @@ class WarehouseStockRepository:
             return
         full_candidates: list[int] = []
         free_candidates: list[int] = []
-        full_map = self._full_by_sku(session)
-        reserve_map = self._reserve_by_sku(session)
         for comp in components:
             comp_product = session.get(CatalogProduct, int(comp.component_product_id))
             if comp_product is None:
@@ -580,16 +593,20 @@ class WarehouseStockRepository:
                 continue
             comp_sku = str(comp_product.sku or "").strip()
             qty = max(1, int(comp.quantity))
-            if comp_product.is_kit:
-                cache = session.scalar(
-                    select(StockBalanceCache).where(StockBalanceCache.sku == comp_sku)
-                )
-                comp_full = int(cache.full_stock) if cache else 0
-                comp_free = int(cache.free_stock) if cache else 0
+            cache = session.scalar(
+                select(StockBalanceCache).where(StockBalanceCache.sku == comp_sku)
+            )
+            if cache is not None:
+                comp_full = int(cache.full_stock)
+                comp_free = int(cache.free_stock)
             else:
+                full_map = self._full_by_sku(session)
+                reserve_map = self._reserve_by_sku(session)
+                allocations = kit_component_allocations(reserve_map, load_kit_leaf_boms(session))
                 comp_full = int(full_map.get(comp_sku, 0))
-                comp_reserve = int(reserve_map.get(comp_sku, 0))
-                comp_free = comp_full - comp_reserve
+                comp_free = comp_full - int(reserve_map.get(comp_sku, 0)) - int(
+                    allocations.get(comp_sku, 0)
+                )
             full_candidates.append(comp_full // qty)
             free_candidates.append(comp_free // qty)
         kit_full = min(full_candidates) if full_candidates else 0
