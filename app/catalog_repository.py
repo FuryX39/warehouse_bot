@@ -322,9 +322,9 @@ def _parse_barcode_item(item: Any) -> dict[str, str]:
 
 class CatalogRepository:
     def __init__(self, db_url: str) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
@@ -333,7 +333,40 @@ class CatalogRepository:
         self._migrate_barcode_label()
         self._migrate_barcode_group()
         self._migrate_product_dimensions()
+        self._cleanup_orphan_product_rows()
         self._seed_defaults()
+
+    def _cleanup_orphan_product_rows(self) -> None:
+        """Удаляет штрихкоды/цены/состав комплектов без существующего товара (SQLite без FK)."""
+        from sqlalchemy import inspect, text
+
+        tables = set(inspect(self.engine).get_table_names())
+        if "catalog_products" not in tables:
+            return
+        with Session(self.engine) as session:
+            if "catalog_product_barcodes" in tables:
+                session.execute(
+                    text(
+                        "DELETE FROM catalog_product_barcodes WHERE product_id NOT IN "
+                        "(SELECT id FROM catalog_products)"
+                    )
+                )
+            if "catalog_product_prices" in tables:
+                session.execute(
+                    text(
+                        "DELETE FROM catalog_product_prices WHERE product_id NOT IN "
+                        "(SELECT id FROM catalog_products)"
+                    )
+                )
+            if "catalog_kit_components" in tables:
+                session.execute(
+                    text(
+                        "DELETE FROM catalog_kit_components WHERE kit_product_id NOT IN "
+                        "(SELECT id FROM catalog_products) OR component_product_id NOT IN "
+                        "(SELECT id FROM catalog_products)"
+                    )
+                )
+            session.commit()
 
     def _migrate_barcode_group(self) -> None:
         from sqlalchemy import inspect, text
@@ -1173,6 +1206,23 @@ class CatalogRepository:
                 raise ValueError(
                     "Нельзя удалить: товар входит в состав комплектов: " + "; ".join(parts)
                 )
+            pid = int(product_id)
+            # Явно чистим связанные строки: в SQLite CASCADE часто не срабатывает
+            # (PRAGMA foreign_keys и старые таблицы без ON DELETE CASCADE).
+            session.execute(
+                delete(CatalogProductBarcode).where(CatalogProductBarcode.product_id == pid)
+            )
+            session.execute(
+                delete(CatalogProductPrice).where(CatalogProductPrice.product_id == pid)
+            )
+            session.execute(
+                delete(CatalogKitComponent).where(
+                    or_(
+                        CatalogKitComponent.kit_product_id == pid,
+                        CatalogKitComponent.component_product_id == pid,
+                    )
+                )
+            )
             session.delete(row)
             session.commit()
             return True
@@ -1383,8 +1433,18 @@ class CatalogRepository:
                     CatalogProductBarcode.product_id != exclude_product_id,
                 )
             )
-            if other is not None:
-                raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+            if other is None:
+                continue
+            if session.get(CatalogProduct, int(other)) is None:
+                # Сиротский ШК от удалённого товара — освобождаем.
+                session.execute(
+                    delete(CatalogProductBarcode).where(
+                        CatalogProductBarcode.barcode == code,
+                        CatalogProductBarcode.product_id == int(other),
+                    )
+                )
+                continue
+            raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
 
     def merge_product_barcode(
         self,
@@ -1419,7 +1479,15 @@ class CatalogRepository:
                 )
             )
             if other is not None:
-                raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+                if session.get(CatalogProduct, int(other)) is None:
+                    session.execute(
+                        delete(CatalogProductBarcode).where(
+                            CatalogProductBarcode.barcode == code,
+                            CatalogProductBarcode.product_id == int(other),
+                        )
+                    )
+                else:
+                    raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
             max_order = session.scalar(
                 select(func.max(CatalogProductBarcode.sort_order)).where(
                     CatalogProductBarcode.product_id == int(product_id)
