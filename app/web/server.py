@@ -288,7 +288,7 @@ def create_dashboard_app(
         after_stock_write=_sync_legacy_stock_to_storage,
     )
     # Пересчёт кэша остатков после смены логики комплектов/резервов.
-    _stock_logic_ver = 2
+    _stock_logic_ver = 4
     if inventory_repo.get_sync_int("stock_balance_logic_version") != _stock_logic_ver:
         stock_repo.rebuild_all()
         inventory_repo.set_sync_int("stock_balance_logic_version", _stock_logic_ver)

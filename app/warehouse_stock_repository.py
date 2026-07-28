@@ -14,7 +14,7 @@ from app.catalog_repository import CatalogKitComponent, CatalogProduct, CatalogP
 from app.kit_stock import (
     expand_skus_with_kit_components,
     kit_component_allocations,
-    load_kit_leaf_boms,
+    load_kit_bom_index,
 )
 from app.storage_warehouse_repository import StorageStock, StorageWarehouse
 from app.repositories import OrderItem
@@ -151,7 +151,7 @@ class WarehouseStockRepository:
             }
             kit_ids = self._kit_ids_for_skus(session, expanded - product_skus)
             reserve_map = self._reserve_by_sku(session)
-            allocations = kit_component_allocations(reserve_map, load_kit_leaf_boms(session))
+            allocations = kit_component_allocations(reserve_map, load_kit_bom_index(session))
             for sku in product_skus:
                 self._recalc_product_sku(session, sku, allocations=allocations)
             for kit_id in self._kits_sorted_by_depth(session, kit_ids):
@@ -245,25 +245,32 @@ class WarehouseStockRepository:
                     for r in rows
                 ]
                 # Резервы комплектов, в которые входит этот товар.
-                kit_boms = load_kit_leaf_boms(session)
-                kit_skus_for_leaf = [
-                    kit_sku
-                    for kit_sku, bom in kit_boms.items()
-                    if any(leaf == sku_n for leaf, _qty in bom)
-                ]
+                kit_index = load_kit_bom_index(session)
+                sku_fold = sku_n.casefold()
+                kit_skus_for_leaf: list[str] = []
+                leaf_qty_by_kit: dict[str, int] = {}
+                for kit_sku, bom in kit_index.boms.items():
+                    for leaf, qty in bom:
+                        if str(leaf).casefold() == sku_fold:
+                            kit_skus_for_leaf.append(kit_sku)
+                            leaf_qty_by_kit[kit_sku] = int(qty)
+                            break
                 if kit_skus_for_leaf:
+                    # Заказы могут приходить по sku или code комплекта (любой регистр).
+                    offer_folds = set()
+                    for kit_sku in kit_skus_for_leaf:
+                        offer_folds.add(kit_sku.casefold())
+                    for offer_fold, kit_sku in kit_index.offer_to_kit.items():
+                        if kit_sku in leaf_qty_by_kit:
+                            offer_folds.add(offer_fold)
                     kit_orders = session.scalars(
-                        select(OrderItem).where(
-                            OrderItem.sku.in_(kit_skus_for_leaf),
-                            OrderItem.state == "added",
-                        )
+                        select(OrderItem).where(OrderItem.state == "added")
                     ).all()
-                    leaf_qty_by_kit = {
-                        kit_sku: next(q for leaf, q in kit_boms[kit_sku] if leaf == sku_n)
-                        for kit_sku in kit_skus_for_leaf
-                    }
                     for r in kit_orders:
-                        kit_sku = str(r.sku or "").strip()
+                        offer = str(r.sku or "").strip()
+                        if offer.casefold() not in offer_folds:
+                            continue
+                        kit_sku = kit_index.resolve_kit_sku(offer) or offer
                         leaf_qty = int(leaf_qty_by_kit.get(kit_sku, 0))
                         if leaf_qty <= 0:
                             continue
@@ -531,8 +538,37 @@ class WarehouseStockRepository:
             or 0
         )
 
+    def _qty_for_sku(self, values: dict[str, int], sku: str) -> int:
+        sku_n = str(sku or "").strip()
+        if not sku_n:
+            return 0
+        if sku_n in values:
+            # Плюс другие варианты регистра того же артикула.
+            fold = sku_n.casefold()
+            total = 0
+            for key, qty in values.items():
+                if str(key).strip().casefold() == fold:
+                    total += int(qty)
+            return total
+        fold = sku_n.casefold()
+        total = 0
+        found = False
+        for key, qty in values.items():
+            if str(key).strip().casefold() == fold:
+                total += int(qty)
+                found = True
+        return total if found else 0
+
     def _catalog_product_by_sku(self, session: Session, sku: str) -> CatalogProduct | None:
-        return session.scalar(select(CatalogProduct).where(CatalogProduct.sku == sku))
+        sku_n = str(sku or "").strip()
+        if not sku_n:
+            return None
+        row = session.scalar(select(CatalogProduct).where(CatalogProduct.sku == sku_n))
+        if row is not None:
+            return row
+        return session.scalar(
+            select(CatalogProduct).where(func.lower(CatalogProduct.sku) == sku_n.casefold())
+        )
 
     def _is_kit_sku(self, session: Session, sku: str) -> bool:
         row = self._catalog_product_by_sku(session, sku)
@@ -584,12 +620,14 @@ class WarehouseStockRepository:
         full_map = self._full_by_sku(session)
         reserve_map = self._reserve_by_sku(session)
         alloc = allocations if allocations is not None else {}
-        full_stock = int(full_map.get(sku, 0))
-        reserve = int(reserve_map.get(sku, 0)) + int(alloc.get(sku, 0))
+        full_stock = self._qty_for_sku(full_map, sku)
+        reserve = self._qty_for_sku(reserve_map, sku) + self._qty_for_sku(alloc, sku)
         free_stock = full_stock - reserve
+        # В кэше храним канонический артикул из каталога, если он есть.
+        cache_sku = str(product.sku).strip() if product and product.sku else sku
         self._upsert_cache(
             session,
-            sku=sku,
+            sku=cache_sku,
             product=product,
             is_kit=False,
             full_stock=full_stock,
@@ -634,7 +672,7 @@ class WarehouseStockRepository:
             else:
                 full_map = self._full_by_sku(session)
                 reserve_map = self._reserve_by_sku(session)
-                allocations = kit_component_allocations(reserve_map, load_kit_leaf_boms(session))
+                allocations = kit_component_allocations(reserve_map, load_kit_bom_index(session))
                 comp_full = int(full_map.get(comp_sku, 0))
                 comp_free = comp_full - int(reserve_map.get(comp_sku, 0)) - int(
                     allocations.get(comp_sku, 0)

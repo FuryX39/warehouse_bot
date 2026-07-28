@@ -56,9 +56,14 @@ def _check_runtime_dependencies() -> None:
 
 
 def _exit_if_port_busy(host: str, port: int) -> None:
-    """Понятная ошибка вместо сырого WinError 10048, если порт уже слушает другой процесс."""
+    """Понятная ошибка, если порт реально слушает другой процесс.
+
+    Важно: SO_REUSEADDR — как у uvicorn. Без него после systemctl restart
+    проверка ложно срабатывает на TIME_WAIT только что остановленного процесса.
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
     except OSError as exc:
         in_use = exc.errno == errno.EADDRINUSE or getattr(exc, "winerror", None) == 10048
@@ -72,7 +77,10 @@ def _exit_if_port_busy(host: str, port: int) -> None:
         logger.error(
             "Варианты: закройте старый процесс веба; либо в .env в корне проекта задайте другой WEB_PORT."
         )
-        logger.error("Проверка занятости (Windows): netstat -ano | findstr \":%s\"", port)
+        if sys.platform.startswith("win"):
+            logger.error("Проверка занятости (Windows): netstat -ano | findstr \":%s\"", port)
+        else:
+            logger.error("Проверка занятости (Linux): ss -ltnp | grep ':%s'", port)
         sys.exit(1)
 
 

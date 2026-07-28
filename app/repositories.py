@@ -27,7 +27,7 @@ from app.kit_stock import (
     compute_kit_aware_available,
     expand_skus_with_kit_components,
     kit_component_allocations,
-    load_kit_leaf_boms,
+    load_kit_bom_index,
 )
 from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 
@@ -804,8 +804,8 @@ class InventoryRepository:
     ) -> dict[str, int]:
         stocks = self._read_stocks_map(session)
         reserves = self._direct_reserves_map(session)
-        kit_boms = load_kit_leaf_boms(session)
-        available = compute_kit_aware_available(stocks, reserves, kit_boms, clamp=clamp)
+        kit_index = load_kit_bom_index(session)
+        available = compute_kit_aware_available(stocks, reserves, kit_index, clamp=clamp)
         if extra_skus:
             for sku in extra_skus:
                 sku_n = str(sku or "").strip()
@@ -842,22 +842,29 @@ class InventoryRepository:
                 top_rows = session.scalars(select(ProductStock).where(ProductStock.is_top.is_(True))).all()
                 top_flags = {row.sku: True for row in top_rows}
             reserves_by_sku = self._direct_reserves_map(session)
-            kit_boms = load_kit_leaf_boms(session)
-            allocations = kit_component_allocations(reserves_by_sku, kit_boms)
+            kit_index = load_kit_bom_index(session)
+            allocations = kit_component_allocations(reserves_by_sku, kit_index)
             available_map = compute_kit_aware_available(
-                stocks, reserves_by_sku, kit_boms, clamp=False
+                stocks, reserves_by_sku, kit_index, clamp=False
             )
             all_skus = sorted(set(stocks.keys()) | set(reserves_by_sku.keys()) | set(available_map.keys()))
             nom = self._load_nomenclature_rows(session, all_skus)
-            kit_skus = set(kit_boms.keys())
+            kit_skus = set(kit_index.boms.keys())
             snapshots: list[InventorySnapshot] = []
             for sku in all_skus:
-                stock = stocks.get(sku, 0)
+                stock = int(stocks.get(sku, 0))
                 direct = int(reserves_by_sku.get(sku, 0))
-                if sku in kit_skus:
+                is_kit_offer = sku in kit_skus or kit_index.resolve_kit_sku(sku) is not None
+                if is_kit_offer:
                     reserve = direct
                 else:
                     reserve = direct + int(allocations.get(sku, 0))
+                    if reserve == direct and allocations:
+                        sku_fold = sku.casefold()
+                        for leaf, qty in allocations.items():
+                            if str(leaf).casefold() == sku_fold:
+                                reserve = direct + int(qty)
+                                break
                 available = int(available_map.get(sku, stock - reserve))
                 is_top = bool(top_flags.get(sku, False))
                 meta = nom.get(sku)
