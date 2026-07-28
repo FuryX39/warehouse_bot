@@ -235,14 +235,46 @@ class WarehouseStockRepository:
                         OrderItem.state == "added",
                     )
                 ).all()
-                lines = [
+                lines: list[dict[str, Any]] = [
                     {
                         "source": r.source,
                         "external_order_id": r.external_order_id,
                         "quantity": int(r.quantity),
+                        "from_kit": "",
                     }
                     for r in rows
                 ]
+                # Резервы комплектов, в которые входит этот товар.
+                kit_boms = load_kit_leaf_boms(session)
+                kit_skus_for_leaf = [
+                    kit_sku
+                    for kit_sku, bom in kit_boms.items()
+                    if any(leaf == sku_n for leaf, _qty in bom)
+                ]
+                if kit_skus_for_leaf:
+                    kit_orders = session.scalars(
+                        select(OrderItem).where(
+                            OrderItem.sku.in_(kit_skus_for_leaf),
+                            OrderItem.state == "added",
+                        )
+                    ).all()
+                    leaf_qty_by_kit = {
+                        kit_sku: next(q for leaf, q in kit_boms[kit_sku] if leaf == sku_n)
+                        for kit_sku in kit_skus_for_leaf
+                    }
+                    for r in kit_orders:
+                        kit_sku = str(r.sku or "").strip()
+                        leaf_qty = int(leaf_qty_by_kit.get(kit_sku, 0))
+                        if leaf_qty <= 0:
+                            continue
+                        lines.append(
+                            {
+                                "source": r.source,
+                                "external_order_id": r.external_order_id,
+                                "quantity": int(r.quantity) * leaf_qty,
+                                "from_kit": kit_sku,
+                            }
+                        )
                 total = sum(int(x["quantity"]) for x in lines)
                 return {"metric": metric_n, "sku": sku_n, "lines": lines, "total": total}
 

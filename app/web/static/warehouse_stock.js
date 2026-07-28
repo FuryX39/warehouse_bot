@@ -217,10 +217,14 @@
     if (metric === "reserve") {
       var reserveRows = lines
         .map(function (line) {
+          var kitNote = line.from_kit
+            ? ' <span class="wh-muted">(комплект ' + esc(line.from_kit) + ")</span>"
+            : "";
           return (
             "<li><span class=\"wh-stock-bd-source\">" + esc(line.source) + "</span> " +
-            "<span class=\"wh-stock-bd-order\">" + esc(line.external_order_id) + "</span>: " +
-            "<strong>" + esc(line.quantity) + "</strong></li>"
+            "<span class=\"wh-stock-bd-order\">" + esc(line.external_order_id) + "</span>" +
+            kitNote +
+            ": <strong>" + esc(line.quantity) + "</strong></li>"
           );
         })
         .join("");

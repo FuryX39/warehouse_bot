@@ -23,7 +23,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.adapters.base import ReservationAction
 from app.db import create_db_engine
-from app.kit_stock import compute_kit_aware_available, load_kit_leaf_boms
+from app.kit_stock import (
+    compute_kit_aware_available,
+    expand_skus_with_kit_components,
+    kit_component_allocations,
+    load_kit_leaf_boms,
+)
 from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 
 # Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
@@ -197,6 +202,11 @@ class InventoryRepository:
 
     def _notify_skus(self, skus: Iterable[str]) -> None:
         normalized = {str(s or "").strip() for s in skus if str(s or "").strip()}
+        if not normalized:
+            return
+        # Заказ комплекта должен пересчитать и составляющие.
+        with Session(self.engine) as session:
+            normalized |= expand_skus_with_kit_components(session, normalized)
         if self._on_skus_affected and normalized:
             self._on_skus_affected(normalized)
 
@@ -832,13 +842,22 @@ class InventoryRepository:
                 top_rows = session.scalars(select(ProductStock).where(ProductStock.is_top.is_(True))).all()
                 top_flags = {row.sku: True for row in top_rows}
             reserves_by_sku = self._direct_reserves_map(session)
-            available_map = self._kit_aware_available_map(session, clamp=False)
+            kit_boms = load_kit_leaf_boms(session)
+            allocations = kit_component_allocations(reserves_by_sku, kit_boms)
+            available_map = compute_kit_aware_available(
+                stocks, reserves_by_sku, kit_boms, clamp=False
+            )
             all_skus = sorted(set(stocks.keys()) | set(reserves_by_sku.keys()) | set(available_map.keys()))
             nom = self._load_nomenclature_rows(session, all_skus)
+            kit_skus = set(kit_boms.keys())
             snapshots: list[InventorySnapshot] = []
             for sku in all_skus:
                 stock = stocks.get(sku, 0)
-                reserve = reserves_by_sku.get(sku, 0)
+                direct = int(reserves_by_sku.get(sku, 0))
+                if sku in kit_skus:
+                    reserve = direct
+                else:
+                    reserve = direct + int(allocations.get(sku, 0))
                 available = int(available_map.get(sku, stock - reserve))
                 is_top = bool(top_flags.get(sku, False))
                 meta = nom.get(sku)

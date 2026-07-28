@@ -21,6 +21,7 @@ def _setup(tmp_path):
     inventory.attach_storage_repo(storage)
     stock = WarehouseStockRepository(db_url)
     stock.init_schema()
+    inventory.set_stock_balance_hook(stock.recalculate_skus)
     return catalog, storage, inventory, stock
 
 
@@ -61,21 +62,18 @@ def test_kit_available_pushed_and_component_reduced_by_kit_reserve(tmp_path) -> 
     assert available.get("KIT-1") == 5
     assert available.get("SKU-A") == 10
 
-    with Session(inventory.engine) as session:
-        session.add(
-            OrderItem(
+    inventory.upsert_order_items_from_actions(
+        [
+            __import__("app.adapters.base", fromlist=["ReservationAction"]).ReservationAction(
                 source="ozon",
-                external_order_id="ord-1",
+                external_order_id="ord-1:KIT-1",
                 sku="KIT-1",
                 quantity=2,
-                state="added",
-                first_seen_ts=1,
-                last_seen_ts=1,
             )
-        )
-        session.commit()
+        ],
+        sync_ts=1,
+    )
 
-    stock.recalculate_skus({"KIT-1"})
     rows = {r.sku: r for r in stock.list_by_products({})}
     assert rows["SKU-A"].full_stock == 10
     assert rows["SKU-A"].reserve == 4  # 2 комплекта × 2 шт
@@ -89,6 +87,14 @@ def test_kit_available_pushed_and_component_reduced_by_kit_reserve(tmp_path) -> 
     force = inventory.build_force_push_available_map()
     assert force.get("KIT-1") == 3
     assert force.get("SKU-A") == 6
+
+    bd = stock.breakdown("SKU-A", "reserve")
+    assert bd["total"] == 4
+    assert any(line.get("from_kit") == "KIT-1" for line in bd["lines"])
+
+    snap = {s.sku: s for s in inventory.get_inventory_snapshot()}
+    assert snap["SKU-A"].reserve == 4
+    assert snap["SKU-A"].available == 6
 
 
 def test_nested_kit_reserve_allocates_leaf_components(tmp_path) -> None:
