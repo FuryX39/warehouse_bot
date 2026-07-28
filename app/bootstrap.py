@@ -43,7 +43,7 @@ def create_inventory_stack() -> tuple[
     inventory_repo.attach_storage_repo(storage_repo)
 
     def _sync_legacy_stock_to_storage(sku: str, stock: int) -> None:
-        wh_id = storage_repo.get_legacy_warehouse_id()
+        wh_id = inventory_repo.get_sync_source_warehouse_id()
         if wh_id is None:
             return
         storage_repo.set_stock(int(wh_id), sku, int(stock), skip_recalc=True)

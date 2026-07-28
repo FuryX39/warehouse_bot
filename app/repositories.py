@@ -27,6 +27,7 @@ from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 
 # Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
 AVAILABLE_STOCK_SYNC_KEY = "available_stock_push_hash"
+STOCK_SYNC_SOURCE_WAREHOUSE_KEY = "stock_sync_source_warehouse_id"
 
 
 def available_stock_map_hash(available_stock: dict[str, int]) -> int:
@@ -143,17 +144,46 @@ class InventoryRepository:
             return None
         return self._storage_repo.get_legacy_warehouse_id()
 
-    def _read_stocks_map(self, session: Session) -> dict[str, int]:
+    def get_sync_source_warehouse_id(self) -> int | None:
+        """Склад, с которого маркетплейсы берут остатки (настраивается в UI)."""
+        if self._storage_repo is None:
+            return None
+        configured = self.get_sync_int(STOCK_SYNC_SOURCE_WAREHOUSE_KEY)
+        if configured is not None and int(configured) > 0:
+            if self._storage_repo.get_warehouse(int(configured)) is not None:
+                return int(configured)
         legacy_id = self._legacy_warehouse_id()
-        if legacy_id is not None and self._storage_repo is not None:
-            return dict(self._storage_repo.list_stocks_for_warehouse(legacy_id))
+        if legacy_id is not None:
+            return int(legacy_id)
+        default_id = self._storage_repo.get_default_warehouse_id()
+        return int(default_id) if default_id is not None else None
+
+    def set_sync_source_warehouse_id(self, warehouse_id: int) -> int:
+        if self._storage_repo is None:
+            raise ValueError("Склады не инициализированы")
+        wh_id = int(warehouse_id)
+        if wh_id <= 0:
+            raise ValueError("Некорректный склад")
+        if self._storage_repo.get_warehouse(wh_id) is None:
+            raise ValueError("Склад не найден")
+        self.set_sync_int(STOCK_SYNC_SOURCE_WAREHOUSE_KEY, wh_id)
+        return wh_id
+
+    def _read_stocks_map(self, session: Session) -> dict[str, int]:
+        source_id = self.get_sync_source_warehouse_id()
+        if source_id is not None and self._storage_repo is not None:
+            return dict(self._storage_repo.list_stocks_for_warehouse(source_id))
         return {row.sku: int(row.stock) for row in session.scalars(select(ProductStock)).all()}
 
-    def _sync_stock_to_legacy_warehouse(self, sku: str, stock: int) -> None:
-        legacy_id = self._legacy_warehouse_id()
-        if legacy_id is None or self._storage_repo is None:
+    def _sync_stock_to_sync_source_warehouse(self, sku: str, stock: int) -> None:
+        source_id = self.get_sync_source_warehouse_id()
+        if source_id is None or self._storage_repo is None:
             return
-        self._storage_repo.set_stock(int(legacy_id), sku, max(int(stock), 0), skip_recalc=True)
+        self._storage_repo.set_stock(int(source_id), sku, max(int(stock), 0), skip_recalc=True)
+
+    def _sync_stock_to_legacy_warehouse(self, sku: str, stock: int) -> None:
+        """Совместимость: пишет в выбранный склад синхронизации."""
+        self._sync_stock_to_sync_source_warehouse(sku, stock)
 
     def set_stock_balance_hook(
         self,
@@ -784,7 +814,7 @@ class InventoryRepository:
         with Session(self.engine) as session:
             stocks = self._read_stocks_map(session)
             top_flags: dict[str, bool] = {}
-            if self._legacy_warehouse_id() is None:
+            if self.get_sync_source_warehouse_id() is None:
                 stock_rows = session.scalars(select(ProductStock)).all()
                 top_flags = {row.sku: bool(getattr(row, "is_top", False)) for row in stock_rows}
             else:

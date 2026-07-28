@@ -256,6 +256,10 @@
       window.WhRouteSheets.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "stock-sync" && window.WhStockSync) {
+      window.WhStockSync.render(tab, item);
+      return;
+    }
     if (tab.id === "marketplaces" && item.id === "repricer" && window.WhRepricer) {
       window.WhRepricer.render(tab, item);
       return;

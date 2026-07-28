@@ -109,6 +109,7 @@ from app.web.warehouse_tasks_api_auth import make_require_tasks_access
 from app.warehouse_tasks_repository import WarehouseTasksRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.web.warehouse_stock_routes import register_warehouse_stock_routes
+from app.web.warehouse_stock_sync_routes import register_warehouse_stock_sync_routes
 from app.ozon_fbo_supply_repository import OzonFboSupplyRepository
 from app.web.warehouse_ozon_fbo_routes import register_warehouse_ozon_fbo_routes
 from app.adapters.ozon import OzonAdapter
@@ -273,7 +274,7 @@ def create_dashboard_app(
     )
 
     def _sync_legacy_stock_to_storage(sku: str, stock: int) -> None:
-        wh_id = storage_repo.get_legacy_warehouse_id()
+        wh_id = inventory_repo.get_sync_source_warehouse_id()
         if wh_id is None:
             return
         storage_repo.set_stock(int(wh_id), sku, int(stock), skip_recalc=True)
@@ -523,6 +524,14 @@ def create_dashboard_app(
     register_warehouse_barcode_print_routes(app, require_warehouse_user)
     register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo, crm_repo)
     register_warehouse_stock_routes(app, stock_repo, require_warehouse_user)
+    register_warehouse_stock_sync_routes(
+        app,
+        settings=settings,
+        inventory_repo=inventory_repo,
+        storage_repo=storage_repo,
+        coordinator=coordinator,
+        require_warehouse_user=require_warehouse_user,
+    )
     register_warehouse_ozon_fbo_routes(
         app, ozon_fbo_repo, require_warehouse_user, ozon_adapter, crm_repo
     )
