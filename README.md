@@ -52,7 +52,7 @@ Put keys into `.env`:
 - `OZON_ANALYTICS_PERIOD_DAYS` - default lookback window for `/ozon_analytics` (1–365 days)
 
 - `WB_API_TOKEN` - Wildberries API token
-- `WB_WAREHOUSE_ID` - Wildberries warehouse id for stock updates
+- `WB_WAREHOUSE_ID` - Wildberries seller warehouse id(s) for stock updates (comma-separated for several warehouses; orders still come from the whole cabinet)
 
 - `YANDEX_CAMPAIGN_ID` - Yandex Market campaign id
 - `YANDEX_API_KEY` - Yandex Market API key

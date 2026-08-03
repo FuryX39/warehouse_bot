@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 
 import requests
@@ -94,15 +95,46 @@ def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
     raise RuntimeError("unreachable")
 
 
+def _parse_wb_warehouse_ids(raw: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Один или несколько id складов WB (через запятую / ; / пробел)."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        parts = [str(x).strip() for x in raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return []
+        parts = re.split(r"[,;\s]+", text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        wid = str(part or "").strip()
+        if not wid or not is_value_configured(wid):
+            continue
+        if wid in seen:
+            continue
+        seen.add(wid)
+        out.append(wid)
+    return out
+
+
 class WildberriesAdapter(MarketplaceAdapter):
     name = "wildberries"
     base_url = "https://marketplace-api.wildberries.ru"
     # Полный снимок сборочных заданий (GET /api/v3/orders + статусы) + reconcile в БД.
     supports_reserve_reconciliation = True
 
-    def __init__(self, api_token: str, warehouse_id: str, content_token: str = "") -> None:
+    def __init__(
+        self,
+        api_token: str,
+        warehouse_id: str | list[str] | tuple[str, ...] = "",
+        content_token: str = "",
+    ) -> None:
         self.api_token = api_token
-        self.warehouse_id = warehouse_id
+        self.warehouse_ids = _parse_wb_warehouse_ids(warehouse_id)
+        # Совместимость: первый склад (старый код мог читать .warehouse_id).
+        self.warehouse_id = self.warehouse_ids[0] if self.warehouse_ids else ""
         # Категория «Контент» для списка карточек (vendorCode → chrtId). Часто совпадает с Marketplace-токеном.
         self._content_token = (content_token.strip() or api_token).strip()
         self._vendor_chrt_cache: tuple[float, dict[str, list[int]]] | None = None
@@ -457,7 +489,13 @@ class WildberriesAdapter(MarketplaceAdapter):
         return [(chrt_ids[i], base + (1 if i < rem else 0)) for i in range(n)]
 
     def sync_available_stock(self, available_stock_by_sku: dict[str, int]) -> None:
-        if not self.is_configured() or not self.warehouse_id or not available_stock_by_sku:
+        if not self.is_configured() or not available_stock_by_sku:
+            return
+        if not self.warehouse_ids:
+            logger.warning(
+                "Wildberries: синк остатков пропущен — не задан WB_WAREHOUSE_ID "
+                "(id склада из GET /api/v3/warehouses; можно несколько через запятую)"
+            )
             return
         headers = {
             "Authorization": self.api_token,
@@ -507,15 +545,30 @@ class WildberriesAdapter(MarketplaceAdapter):
 
         stocks_list = [{"chrtId": cid, "amount": amt} for cid, amt in merged.items()]
 
-        for i in range(0, len(stocks_list), _STOCKS_CHUNK):
-            chunk = stocks_list[i : i + _STOCKS_CHUNK]
-            payload = {"stocks": chunk}
-            response = _wb_request(
-                "PUT",
-                f"{self.base_url}/api/v3/stocks/{self.warehouse_id}",
-                headers=headers,
-                json=payload,
-                timeout=60,
+        errors: list[str] = []
+        for warehouse_id in self.warehouse_ids:
+            try:
+                for i in range(0, len(stocks_list), _STOCKS_CHUNK):
+                    chunk = stocks_list[i : i + _STOCKS_CHUNK]
+                    payload = {"stocks": chunk}
+                    response = _wb_request(
+                        "PUT",
+                        f"{self.base_url}/api/v3/stocks/{warehouse_id}",
+                        headers=headers,
+                        json=payload,
+                        timeout=60,
+                    )
+                    if not response.ok:
+                        raise _wb_http_error(response)
+                logger.info(
+                    "Wildberries: остатки отправлены на склад %s (%s позиций)",
+                    warehouse_id,
+                    len(stocks_list),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Wildberries: ошибка пуша остатков на склад %s", warehouse_id)
+                errors.append(f"{warehouse_id}: {exc}")
+        if errors:
+            raise RuntimeError(
+                "Wildberries stock sync failed for warehouse(s): " + "; ".join(errors)
             )
-            if not response.ok:
-                raise _wb_http_error(response)
