@@ -100,6 +100,70 @@ def build_price_type_prices_template(catalog_repo: CatalogRepository) -> bytes:
     return buf.getvalue()
 
 
+def build_price_type_prices_export(
+    catalog_repo: CatalogRepository,
+    *,
+    price_type_id: int,
+    price_type_name: str,
+) -> bytes:
+    """Выгрузка вида цен в формате, совместимом с массовой загрузкой."""
+    name = str(price_type_name or "").strip()
+    if not name:
+        raise ValueError("Не указано название вида цен")
+    export_data = catalog_repo.list_products_for_export({})
+    products = export_data.get("products") or []
+    pt_id = int(price_type_id)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Цены"
+    ws.append([_PRICE_TYPE_LABEL + "*", name[:128]])
+    ws.append(list(_TEMPLATE_HEADERS))
+
+    if products:
+        for product in products:
+            barcodes = product.get("barcodes") or []
+            first_barcode = ""
+            if barcodes:
+                first = barcodes[0]
+                if isinstance(first, dict):
+                    first_barcode = str(first.get("barcode") or "").strip()
+                else:
+                    first_barcode = str(first or "").strip()
+            prices = product.get("prices") or {}
+            price_val = prices.get(pt_id)
+            if price_val is None and isinstance(prices, dict):
+                # ключи могли прийти строками
+                price_val = prices.get(str(pt_id))
+            ws.append(
+                [
+                    product.get("sku") or "",
+                    product.get("code") or "",
+                    first_barcode,
+                    product.get("name") or "",
+                    "" if price_val is None else str(price_val),
+                ]
+            )
+    else:
+        ws.append(list(_EXAMPLE_ROW))
+
+    for col in range(1, len(_TEMPLATE_HEADERS) + 1):
+        cell = ws.cell(row=2, column=col)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="E8EEF4")
+    ws.cell(row=1, column=1).font = Font(bold=True)
+
+    ref = wb.create_sheet("Подсказки")
+    ref.append(["Выгрузка вида цен"])
+    ref.append([f"Вид цен: {name}"])
+    ref.append(["Файл можно снова загрузить через «Загрузка из Excel»."])
+    ref.append(["Пустая цена при загрузке не меняет текущую цену товара."])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _read_price_type_name(sheet) -> str:
     first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
     if not first_row:

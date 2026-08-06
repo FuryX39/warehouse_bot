@@ -1442,12 +1442,19 @@
         var delBtn = pt.is_default
           ? '<span class="wh-muted wh-cat-pt-default">по умолчанию</span>'
           : '<button type="button" class="wh-btn wh-btn-sm wh-cat-pt-remove" data-id="' + esc(pt.id) + '">Удалить</button>';
+        var exportBtn = pt.id
+          ? '<button type="button" class="wh-btn wh-btn-sm wh-cat-pt-export" data-id="' +
+            esc(pt.id) +
+            '" data-name="' +
+            esc(pt.name) +
+            '">Выгрузить</button>'
+          : "";
         return (
           '<tr class="wh-cat-pt-row" data-id="' + esc(pt.id) + '">' +
           '<td class="wh-cat-pt-name-cell">' +
           '<input type="text" class="wh-cat-pt-name" value="' + esc(pt.name) + '" data-id="' + esc(pt.id) + '" />' +
           "</td>" +
-          '<td class="wh-cat-pt-actions">' + delBtn + "</td></tr>"
+          '<td class="wh-cat-pt-actions">' + exportBtn + " " + delBtn + "</td></tr>"
         );
       })
       .join("");
@@ -1472,6 +1479,18 @@
         if (pt) openPriceTypeProductsModal(pt);
       });
     });
+    root.querySelectorAll(".wh-cat-pt-export").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var id = btn.getAttribute("data-id");
+        var name = btn.getAttribute("data-name") || "prices";
+        if (!id) {
+          alert("Сначала сохраните названия видов цен.");
+          return;
+        }
+        exportPriceType(id, name, btn);
+      });
+    });
     root.querySelectorAll(".wh-cat-pt-remove").forEach(function (btn) {
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
@@ -1482,6 +1501,48 @@
         renderPriceTypeList(root);
       });
     });
+  }
+
+  function exportPriceType(priceTypeId, priceTypeName, btn) {
+    var prevText = btn ? btn.textContent : "";
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Выгрузка…";
+    }
+    var safeName = String(priceTypeName || "prices")
+      .replace(/[^\w\-а-яА-ЯёЁ]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "prices";
+    fetch("/api/warehouse/catalog/price-types/" + encodeURIComponent(priceTypeId) + "/export", {
+      credentials: "include",
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          return response.text().then(function (text) {
+            var message = "Не удалось выгрузить вид цен";
+            try {
+              var data = text ? JSON.parse(text) : null;
+              if (data && data.detail) message = data.detail;
+            } catch (e) {
+              if (text) message = text;
+            }
+            throw new Error(message);
+          });
+        }
+        return response.blob();
+      })
+      .then(function (blob) {
+        downloadBlob(blob, "price_type_" + safeName + ".xlsx");
+      })
+      .catch(function (err) {
+        alert(err.message || "Ошибка выгрузки");
+      })
+      .finally(function () {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prevText || "Выгрузить";
+        }
+      });
   }
 
   function savePriceTypeNames(root) {
@@ -1521,6 +1582,7 @@
       '<div id="whPtModalList"><p class="wh-msg">Загрузка…</p></div>' +
       '<p class="wh-msg" id="whPtModalMsg"></p></div>' +
       '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn" id="whPtModalExport">Выгрузить Excel</button>' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whPtModalSave">Сохранить</button>' +
       '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
     document.body.appendChild(backdrop);
@@ -1533,6 +1595,9 @@
     backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
     backdrop.addEventListener("click", function (e) {
       if (e.target === backdrop) close();
+    });
+    backdrop.querySelector("#whPtModalExport").addEventListener("click", function () {
+      exportPriceType(priceType.id, priceType.name, backdrop.querySelector("#whPtModalExport"));
     });
 
     function renderModalTable(products) {

@@ -16,6 +16,7 @@ from app.catalog_bulk_import import (
 )
 from app.catalog_barcode_import import build_barcode_import_template, import_barcodes_from_xlsx
 from app.catalog_price_type_import import (
+    build_price_type_prices_export,
     build_price_type_prices_template,
     import_price_type_prices_from_xlsx,
 )
@@ -105,6 +106,44 @@ def register_warehouse_catalog_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"updated": updated}
+
+    @app.get("/api/warehouse/catalog/price-types/{price_type_id}/export")
+    async def api_catalog_price_type_export(
+        price_type_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        if crm_repo is None:
+            raise HTTPException(status_code=500, detail="CRM не подключён")
+        price_types = crm_repo.get_meta().get("price_types") or []
+        price_type = next(
+            (pt for pt in price_types if int(pt.get("id") or 0) == int(price_type_id)),
+            None,
+        )
+        if price_type is None:
+            raise HTTPException(status_code=404, detail="Вид цены не найден")
+        name = str(price_type.get("name") or "").strip() or f"price_type_{price_type_id}"
+        try:
+            content = await asyncio.to_thread(
+                build_price_type_prices_export,
+                catalog_repo,
+                price_type_id=int(price_type_id),
+                price_type_name=name,
+            )
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)[:60] or "prices"
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="price_type_{safe_name}.xlsx"',
+            },
+        )
 
     @app.get("/api/warehouse/catalog/price-types/import/template")
     async def api_catalog_price_type_import_template(
