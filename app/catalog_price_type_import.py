@@ -100,6 +100,12 @@ def build_price_type_prices_template(catalog_repo: CatalogRepository) -> bytes:
     return buf.getvalue()
 
 
+def _excel_safe_text(value: object) -> str:
+    """Убирает символы, из‑за которых openpyxl падает при сохранении."""
+    text = str(value or "")
+    return "".join(ch for ch in text if ord(ch) >= 32 or ch in "\t\n\r")
+
+
 def build_price_type_prices_export(
     catalog_repo: CatalogRepository,
     *,
@@ -117,7 +123,7 @@ def build_price_type_prices_export(
     wb = Workbook()
     ws = wb.active
     ws.title = "Цены"
-    ws.append([_PRICE_TYPE_LABEL + "*", name[:128]])
+    ws.append([_PRICE_TYPE_LABEL + "*", _excel_safe_text(name[:128])])
     ws.append(list(_TEMPLATE_HEADERS))
 
     if products:
@@ -137,11 +143,11 @@ def build_price_type_prices_export(
                 price_val = prices.get(str(pt_id))
             ws.append(
                 [
-                    product.get("sku") or "",
-                    product.get("code") or "",
-                    first_barcode,
-                    product.get("name") or "",
-                    "" if price_val is None else str(price_val),
+                    _excel_safe_text(product.get("sku") or ""),
+                    _excel_safe_text(product.get("code") or ""),
+                    _excel_safe_text(first_barcode),
+                    _excel_safe_text(product.get("name") or ""),
+                    "" if price_val is None else _excel_safe_text(price_val),
                 ]
             )
     else:

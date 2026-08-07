@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 from openpyxl import load_workbook
+from starlette.responses import Response
 
 from app.catalog_price_type_import import build_price_type_prices_export
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
+from app.web.warehouse_catalog_routes import _attachment_disposition
+
+
+def test_attachment_disposition_allows_cyrillic_filename() -> None:
+    header = _attachment_disposition("price_type_Розничная.xlsx")
+    response = Response(content=b"x", headers={"Content-Disposition": header})
+    # uvicorn кодирует raw_headers в latin-1 — здесь и был 500
+    assert response.raw_headers
+    assert "filename*=UTF-8''" in header
+    assert "Розничная" not in header.split("filename*=", 1)[0]
 
 
 def test_build_price_type_prices_export_fills_prices(tmp_path) -> None:
@@ -22,7 +33,7 @@ def test_build_price_type_prices_export_fills_prices(tmp_path) -> None:
 
     product = catalog.create_product(
         {
-            "name": "Товар",
+            "name": "Товар\x00с нулём",
             "sku": "SKU-EXP-1",
             "code": "00099",
             "is_kit": False,

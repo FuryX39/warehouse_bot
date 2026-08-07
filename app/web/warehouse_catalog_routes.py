@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -27,6 +28,20 @@ from app.warehouse_stock_repository import WarehouseStockRepository
 from app.warehouse_users_repository import WarehouseUserRow
 
 _IMPORT_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _attachment_disposition(filename: str) -> str:
+    """ASCII filename + RFC 5987 — иначе UnicodeEncodeError (latin-1) → 500."""
+    raw = (filename or "download.bin").strip() or "download.bin"
+    ascii_name = "".join(
+        ch if ord(ch) < 128 and (ch.isalnum() or ch in "._-") else "_" for ch in raw
+    )
+    ascii_name = ascii_name.strip("._") or "download.bin"
+    if "." not in ascii_name and "." in raw:
+        ext = raw.rsplit(".", 1)[-1]
+        if ext.isascii() and ext.isalnum():
+            ascii_name = f"{ascii_name}.{ext}"
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(raw)}'
 
 
 def register_warehouse_catalog_routes(
@@ -136,13 +151,11 @@ def register_warehouse_catalog_routes(
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)[:60] or "prices"
+        download_name = f"price_type_{name[:60]}.xlsx"
         return Response(
             content=content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": f'attachment; filename="price_type_{safe_name}.xlsx"',
-            },
+            headers={"Content-Disposition": _attachment_disposition(download_name)},
         )
 
     @app.get("/api/warehouse/catalog/price-types/import/template")
