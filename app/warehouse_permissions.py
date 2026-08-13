@@ -51,6 +51,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "items": [
             {"id": "commissioner-report", "title": "Отчет комиссионера"},
             {"id": "sales-analysis", "title": "Анализ продаж"},
+            {"id": "wb-acquiring", "title": "Издержки на приём платежей WB"},
             {"id": "stock-by-warehouse", "title": "Остатки товаров на складах"},
             {"id": "stock-movement", "title": "Движение товаров"},
             {"id": "demand", "title": "Потребность товаров"},

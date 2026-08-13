@@ -76,6 +76,7 @@ warehouse_packing_app/
 data/ozon_fbo_labels/
 tables_examples/
 dealer_examples/
+*.xlsx
 
 *.db
 *.db-journal

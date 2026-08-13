@@ -544,7 +544,12 @@ def create_dashboard_app(
     register_warehouse_route_sheets_routes(app, require_warehouse_user)
     register_warehouse_repricer_routes(app, catalog_repo, crm_repo, require_warehouse_user)
     register_warehouse_reports_routes(
-        app, inventory_repo, catalog_repo, crm_repo, require_warehouse_user
+        app,
+        inventory_repo,
+        catalog_repo,
+        crm_repo,
+        require_warehouse_user,
+        wb_api_token=settings.wb_api_token,
     )
     register_warehouse_tools_routes(
         app,

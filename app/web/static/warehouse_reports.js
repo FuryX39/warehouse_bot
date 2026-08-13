@@ -179,9 +179,180 @@
       });
   }
 
+  function previousMonthValue() {
+    var now = new Date();
+    var d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    var m = String(d.getMonth() + 1);
+    if (m.length < 2) m = "0" + m;
+    return d.getFullYear() + "-" + m;
+  }
+
+  function bindWbAcquiring(root) {
+    var form = root.querySelector("#whWbAcqForm");
+    var msg = root.querySelector("#whWbAcqMsg");
+    var submitBtn = root.querySelector("#whWbAcqSubmit");
+    if (!form) return;
+    var pollTimer = null;
+
+    function stopPoll() {
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function setBusy(busy, text) {
+      submitBtn.disabled = !!busy;
+      form.querySelector("#whWbAcqMonth").disabled = !!busy;
+      msg.className = busy ? "wh-msg" : msg.className;
+      if (text) msg.textContent = text;
+    }
+
+    function pollJob(jobId) {
+      shell()
+        .fetchJson("/api/warehouse/reports/wb-acquiring/jobs/" + encodeURIComponent(jobId))
+        .then(function (job) {
+          if (job.status === "running") {
+            setBusy(true, job.message || "Формируем отчёт…");
+            pollTimer = setTimeout(function () {
+              pollJob(jobId);
+            }, 2000);
+            return;
+          }
+          if (job.status === "error") {
+            stopPoll();
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent = job.error || job.message || "Не удалось сформировать отчёт";
+            setBusy(false);
+            submitBtn.disabled = false;
+            form.querySelector("#whWbAcqMonth").disabled = false;
+            return;
+          }
+          return fetch(
+            "/api/warehouse/reports/wb-acquiring/jobs/" + encodeURIComponent(jobId) + "/download",
+            { credentials: "include" }
+          ).then(function (r) {
+            if (!r.ok) {
+              return r.text().then(function (text) {
+                throw new Error(text || "Не удалось скачать файл");
+              });
+            }
+            return r.blob().then(function (blob) {
+              downloadBlob(blob, job.filename || "wb_acquiring.xlsx");
+              var stats = job.stats || {};
+              stopPoll();
+              msg.className = "wh-msg wh-msg-ok";
+              msg.textContent =
+                "Готово. Строк: " +
+                (stats.rows || 0) +
+                ", издержки (нетто): " +
+                formatMoney(stats.net_fee) +
+                ", НДС (нетто): " +
+                formatMoney(stats.net_vat) +
+                ". Файл скачан.";
+              submitBtn.disabled = false;
+              form.querySelector("#whWbAcqMonth").disabled = false;
+            });
+          });
+        })
+        .catch(function (err) {
+          stopPoll();
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+          submitBtn.disabled = false;
+          form.querySelector("#whWbAcqMonth").disabled = false;
+        });
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      stopPoll();
+      msg.className = "wh-msg";
+      var month = root.querySelector("#whWbAcqMonth").value;
+      if (!month) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите месяц.";
+        return;
+      }
+      setBusy(true, "Запускаем выгрузку. У WB лимит 1 запрос в минуту — может занять несколько минут.");
+      fetch("/api/warehouse/reports/wb-acquiring/generate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: month }),
+      })
+        .then(function (r) {
+          return r.text().then(function (text) {
+            var json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (e2) {
+              json = null;
+            }
+            if (!r.ok) {
+              var detail = (json && json.detail) || text || "HTTP " + r.status;
+              throw new Error(typeof detail === "string" ? detail : "Не удалось запустить выгрузку");
+            }
+            return json;
+          });
+        })
+        .then(function (data) {
+          if (!data || !data.job_id) throw new Error("Нет идентификатора задания");
+          pollJob(data.job_id);
+        })
+        .catch(function (err) {
+          stopPoll();
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+          submitBtn.disabled = false;
+          form.querySelector("#whWbAcqMonth").disabled = false;
+        });
+    });
+  }
+
+  function renderWbAcquiring(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML = '<p class="wh-placeholder">Загрузка...</p>';
+    shell()
+      .fetchJson("/api/warehouse/reports/wb-acquiring/meta")
+      .then(function (data) {
+        if (!data || !data.configured) {
+          root.innerHTML =
+            '<div class="wh-route-card">' +
+            '<p class="wh-msg wh-msg-error">Не задан WB_API_TOKEN. Для этого отчёта нужен токен WB с категорией «Финансы».</p>' +
+            "</div>";
+          return;
+        }
+        root.innerHTML =
+          '<div class="wh-route-card">' +
+          '<p class="wh-muted">Выгрузка отчёта Wildberries «Издержки на приём платежей» за календарный месяц. ' +
+          "В Excel — сводка (нетто, продажи минус возвраты) и полная детализация, как в кабинете WB. " +
+          "Запрос к WB ограничен: 1 раз в минуту, поэтому выгрузка может идти несколько минут.</p>" +
+          '<form id="whWbAcqForm" class="wh-reports-form">' +
+          '<label><span>Месяц</span><input type="month" id="whWbAcqMonth" required value="' +
+          esc(previousMonthValue()) +
+          '" /></label>' +
+          '<div class="wh-tools-actions">' +
+          '<button type="submit" class="wh-btn wh-btn-primary" id="whWbAcqSubmit">Сформировать Excel</button>' +
+          "</div>" +
+          "</form>" +
+          '<p class="wh-msg" id="whWbAcqMsg"></p>' +
+          "</div>";
+        bindWbAcquiring(root);
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
   function render(tab, item) {
     if (item.id === "sales-analysis") {
       renderSalesAnalysis(tab, item);
+      return;
+    }
+    if (item.id === "wb-acquiring") {
+      renderWbAcquiring(tab, item);
       return;
     }
     shell().contentTitleEl.textContent = item.title;
