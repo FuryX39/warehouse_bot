@@ -264,6 +264,10 @@
       window.WhRepricer.render(tab, item);
       return;
     }
+    if (tab.id === "reports" && window.WhReports) {
+      window.WhReports.render(tab, item);
+      return;
+    }
     if (tab.id === "tools" && window.WhTools) {
       window.WhTools.render(tab, item);
       return;

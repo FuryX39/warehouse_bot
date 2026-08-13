@@ -694,6 +694,31 @@ class InventoryRepository:
                 for a, b, c, d, e, f, g in rows
             ]
 
+    def aggregate_order_quantities_by_sku(self, source: str) -> list[tuple[str, int]]:
+        """Сумма quantity по артикулу для маркетплейса. Отменённые заказы не входят."""
+        src = str(source or "").strip()
+        if not src:
+            return []
+        sku_key = func.lower(OrderItem.sku)
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(func.min(OrderItem.sku), func.coalesce(func.sum(OrderItem.quantity), 0))
+                .where(
+                    OrderItem.source == src,
+                    OrderItem.state != "cancelled",
+                )
+                .group_by(sku_key)
+                .order_by(func.min(OrderItem.sku))
+            ).all()
+            out: list[tuple[str, int]] = []
+            for sku, qty in rows:
+                sku_s = str(sku or "").strip()
+                qty_n = int(qty or 0)
+                if not sku_s or qty_n <= 0:
+                    continue
+                out.append((sku_s, qty_n))
+            return out
+
     def reconcile_active_reserves(self, source: str, desired: list[ReservationAction]) -> tuple[int, int]:
         """
         Привести активные резервы для `source` к снимку `desired`: удалить лишние, обновить qty/sku при изменении.

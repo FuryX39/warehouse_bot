@@ -604,14 +604,16 @@ body.wh-body {
   }
 }
 
-.wh-repricer-form {
+.wh-repricer-form,
+.wh-reports-form {
   display: grid;
   gap: 0.85rem;
   max-width: 520px;
   margin: 1rem 0;
 }
 
-.wh-repricer-form label {
+.wh-repricer-form label,
+.wh-reports-form label {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -619,7 +621,8 @@ body.wh-body {
   color: var(--wh-muted);
 }
 
-.wh-repricer-form select {
+.wh-repricer-form select,
+.wh-reports-form select {
   width: 100%;
   border: 1px solid var(--wh-border);
   border-radius: 6px;
