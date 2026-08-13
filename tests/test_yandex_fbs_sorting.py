@@ -1,6 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
+import io
+from pypdf import PdfReader
+from reportlab.pdfgen import canvas
+
 from app.adapters.yandex_market import (
     YandexFbsItem,
     YandexFbsOrder,
@@ -10,6 +14,7 @@ from app.fbs_assembly_order import (
     apply_assembly_order_to_yandex_rows,
     parse_assembly_sheet_values,
 )
+from app.fbs_labels_common import merge_label_pdfs
 from app.google_sheet_write import yandex_order_highlight_range
 from app.yandex_fbs_labels import (
     YandexFbsListRow,
@@ -19,6 +24,23 @@ from app.yandex_fbs_labels import (
     fetch_awaiting_assembly_labels,
     normalize_yandex_fbs_substatus,
 )
+
+
+def _pdf_with_text(text: str) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(200, 200))
+    y = 180
+    for line in text.split("\n"):
+        c.drawString(20, y, line)
+        y -= 14
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def _page_texts(pdf_bytes: bytes) -> list[str]:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    return [(page.extract_text() or "").replace("\n", " ") for page in reader.pages]
 
 
 def _order(*, quantity: int = 1) -> YandexFbsOrder:
@@ -286,15 +308,54 @@ def test_ready_to_ship_uses_existing_labels_without_recreating_boxes() -> None:
 
         def fetch_order_label_pdf_parts(self, order_ids, *, label_format):
             assert order_ids == ["2001"]
-            return [("ready.pdf", b"%PDF-ready")], []
+            return [("ready.pdf", _pdf_with_text("Номер заказа\n20010001"))], []
 
         def set_order_unit_boxes(self, order):
             raise AssertionError("READY_TO_SHIP boxes must not be changed")
 
-    with patch("app.yandex_fbs_labels.merge_label_pdfs", return_value=b"%PDF-merged"):
-        bundle = fetch_awaiting_assembly_labels(
-            FakeAdapter(), substatus="READY_TO_SHIP"
-        )
+    bundle = fetch_awaiting_assembly_labels(FakeAdapter(), substatus="READY_TO_SHIP")
 
     assert bundle.orders == [ready_order]
-    assert bundle.label_files[0][1] == b"%PDF-merged"
+    assert bundle.label_files
+    assert bundle.label_files[0][0].startswith("yandex_labels_sorted_")
+    assert any("20010001" in text for text in _page_texts(bundle.label_files[0][1]))
+
+
+def test_ready_to_ship_sorts_stickers_by_place_fraction() -> None:
+    """Яндекс отдаёт 1/2 затем 2/2; лист assembly может требовать 2/2 первым."""
+    ready_order = YandexFbsOrder(
+        order_id="10000101",
+        status="PROCESSING",
+        substatus="READY_TO_SHIP",
+        lines=(("SKU-A", 1), ("SKU-B", 1)),
+        items=(
+            YandexFbsItem(item_id=501, sku="SKU-B", quantity=1),
+            YandexFbsItem(item_id=502, sku="SKU-A", quantity=1),
+        ),
+    )
+    yandex_order = merge_label_pdfs(
+        [
+            _pdf_with_text("1/2\n10000101-1\nНомер заказа\n10000101"),
+            _pdf_with_text("2/2\n10000101-2\nНомер заказа\n10000101"),
+        ]
+    )
+    assert yandex_order is not None
+
+    class FakeAdapter:
+        def list_awaiting_assembly_orders(self, *, substatus):
+            assert substatus == "READY_TO_SHIP"
+            return [ready_order]
+
+        def fetch_order_label_pdf_parts(self, order_ids, *, label_format):
+            assert order_ids == ["10000101"]
+            return [("order.pdf", yandex_order)], []
+
+        def set_order_unit_boxes(self, order):
+            raise AssertionError("READY_TO_SHIP boxes must not be changed")
+
+    bundle = fetch_awaiting_assembly_labels(FakeAdapter(), substatus="READY_TO_SHIP")
+    assert [row.sku for row in bundle.list_rows] == ["SKU-A", "SKU-B"]
+    texts = _page_texts(bundle.label_files[0][1])
+    assert len(texts) == 2
+    assert "2/2" in texts[0]
+    assert "1/2" in texts[1]

@@ -16,6 +16,7 @@ from app.fbs_assembly_order import apply_assembly_order_to_yandex_rows
 from app.fbs_labels_common import merge_label_pdfs
 from app.google_sheet_write import fbs_list_sheet_title, write_fbs_list_from_template
 from app.ozon_label_pdf import normalize_ozon_package_label_pdf
+from app.yandex_label_sorter import LabelKey, parse_sheet_label_key, sort_yandex_label_pdf
 
 if TYPE_CHECKING:
     from app.services import StockCoordinator
@@ -145,9 +146,39 @@ def _fetch_labels_in_order(
     return label_files, warnings
 
 
+def _place_keys_from_list(
+    list_rows: list[YandexFbsListRow],
+    orders: list[YandexFbsOrder],
+) -> list[LabelKey]:
+    """Ключи мест из листа сборки: «123456», «123456 2/2»."""
+    keys = []
+    for number in build_order_box_labels(list_rows, orders):
+        key = parse_sheet_label_key(number)
+        if key is not None:
+            keys.append(key)
+    return keys
+
+
+def _sort_labels_by_assembly_places(
+    pdf_bytes: bytes,
+    list_rows: list[YandexFbsListRow],
+    orders: list[YandexFbsOrder],
+) -> tuple[bytes, list[str]]:
+    """Переставить страницы PDF по 1/2, 2/2 в порядке строк assembly."""
+    keys = _place_keys_from_list(list_rows, orders)
+    if not keys:
+        return pdf_bytes, []
+    try:
+        result = sort_yandex_label_pdf(pdf_bytes, keys)
+    except ValueError as exc:
+        return pdf_bytes, [f"Не удалось отсортировать наклейки по местам 1/2: {exc}"]
+    return result.pdf_bytes, list(result.warnings)
+
+
 def _fetch_existing_order_labels(
     adapter: YandexMarketAdapter,
     list_rows: list[YandexFbsListRow],
+    orders: list[YandexFbsOrder],
     *,
     label_format: str = "A9_HORIZONTALLY",
     label_rotate_degrees: int = 0,
@@ -157,23 +188,27 @@ def _fetch_existing_order_labels(
     label_files, warnings = adapter.fetch_order_label_pdf_parts(
         order_ids, label_format=label_format
     )
-    normalized_files: list[tuple[str, bytes]] = []
-    for filename, pdf in label_files:
-        if label_rotate_degrees:
-            pdf = normalize_ozon_package_label_pdf(
-                pdf, rotate_degrees=label_rotate_degrees
+    pdfs = [data for _, data in label_files]
+    if not pdfs:
+        return [], warnings
+
+    merged = merge_label_pdfs(pdfs) if len(pdfs) > 1 else pdfs[0]
+    if merged is None:
+        if len(label_files) > 1:
+            warnings.append(
+                "Не удалось объединить PDF в один файл (установите pypdf). "
+                "Файлы в ZIP идут в порядке заказов из списка."
             )
-        normalized_files.append((filename, pdf))
-    merged = merge_label_pdfs([data for _, data in normalized_files])
-    if merged is not None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return [(f"yandex_labels_sorted_{ts}.pdf", merged)], warnings
-    if len(normalized_files) > 1:
-        warnings.append(
-            "Не удалось объединить PDF в один файл (установите pypdf). "
-            "Файлы в ZIP идут в порядке заказов из списка."
+        return label_files, warnings
+
+    merged, sort_warnings = _sort_labels_by_assembly_places(merged, list_rows, orders)
+    warnings.extend(sort_warnings)
+    if label_rotate_degrees:
+        merged = normalize_ozon_package_label_pdf(
+            merged, rotate_degrees=label_rotate_degrees
         )
-    return normalized_files, warnings
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return [(f"yandex_labels_sorted_{ts}.pdf", merged)], warnings
 
 
 def _export_list_to_google_sheet(
@@ -278,6 +313,7 @@ def fetch_awaiting_assembly_labels(
         label_files, warnings = _fetch_existing_order_labels(
             adapter,
             list_rows,
+            selected_orders,
             label_format=yandex_label_format,
             label_rotate_degrees=yandex_label_rotate_degrees,
         )
