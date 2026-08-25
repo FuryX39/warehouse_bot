@@ -333,6 +333,8 @@
     var list = root.querySelector("#whMarkingScanList");
     var count = root.querySelector("#whMarkingScanCount");
     if (count) count.textContent = String(scanItems.length);
+    var clearBtn = root.querySelector("#whMarkingScanClear");
+    if (clearBtn) clearBtn.disabled = !scanItems.length;
     if (!scanItems.length) {
       list.innerHTML = '<p class="wh-muted">Пока пусто — отсканируйте код и нажмите Enter.</p>';
       return;
@@ -470,6 +472,7 @@
       '<div class="wh-tools-actions">' +
       '<button type="button" class="wh-btn" id="whMarkingScanStop">Остановиться</button>' +
       '<button type="button" class="wh-btn" id="whMarkingScanResume" hidden>Продолжить</button>' +
+      '<button type="button" class="wh-btn" id="whMarkingScanClear" disabled>Очистить список</button>' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whMarkingScanFinish">Завершить сканирование</button>' +
       "</div>" +
       '<p class="wh-msg" id="whMarkingScanMsg"></p>' +
@@ -498,6 +501,17 @@
     });
     root.querySelector("#whMarkingScanResume").addEventListener("click", function () {
       setScanning(root, true);
+    });
+    root.querySelector("#whMarkingScanClear").addEventListener("click", function () {
+      scanItems = [];
+      var msg = root.querySelector("#whMarkingScanMsg");
+      msg.className = "wh-msg";
+      msg.textContent = "";
+      renderScanList(root);
+      if (scanning) {
+        var scanInput = root.querySelector("#whMarkingScanInput");
+        if (scanInput) scanInput.focus();
+      }
     });
     root.querySelector("#whMarkingScanFinish").addEventListener("click", function () {
       finishScan(root);
