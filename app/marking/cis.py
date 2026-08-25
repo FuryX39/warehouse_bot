@@ -168,3 +168,11 @@ def parse_cis_list(lines: list[str] | str) -> list[CisRecord]:
     if isinstance(lines, str):
         lines = split_cis_input(lines)
     return [parse_cis(item) for item in lines]
+
+
+def cis_identity_key(raw: str) -> str:
+    """Ключ для проверки «такой код уже есть» в списке сканирования."""
+    rec = parse_cis(raw)
+    if rec.ok and rec.cis:
+        return rec.cis
+    return (raw or "").strip()

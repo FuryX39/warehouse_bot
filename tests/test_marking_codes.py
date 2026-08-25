@@ -181,21 +181,65 @@ def test_gtin_unique_across_products(tmp_path) -> None:
         raise AssertionError("ожидали ошибку уникальности GTIN")
 
 
-def test_marking_http_parse_and_export(tmp_path) -> None:
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+def test_add_and_remove_gtin(tmp_path) -> None:
+    repo = _repo(tmp_path, "addgtin.db")
+    product = repo.create_product(
+        {
+            "name": "Болт",
+            "sku": "BOLT-1",
+            "code": "00001",
+            "is_kit": False,
+            "components": [],
+        }
+    )
+    assert repo.add_product_gtin(int(product.id), GTIN13) == "created"
+    assert repo.add_product_gtin(int(product.id), GTIN14) == "exists"
+    rows = repo.list_product_gtin_rows()
+    assert rows[0]["gtins"] == [GTIN14]
+    assert repo.remove_product_gtin(int(product.id), GTIN14) is True
+    assert repo.list_product_gtin_rows()[0]["gtins"] == []
 
-    from app.web.warehouse_marking_routes import register_warehouse_marking_routes
-    from app.warehouse_users_repository import WarehouseUserRow
 
-    repo = _repo(tmp_path, "http.db")
+def test_gtin_excel_import(tmp_path) -> None:
+    from app.marking.gtin_import import build_gtin_import_template, import_gtins_from_xlsx
+
+    repo = _repo(tmp_path, "imp.db")
     repo.create_product(
         {
             "name": "Болт",
             "sku": "BOLT-1",
             "code": "00001",
             "is_kit": False,
-            "gtins": [GTIN14],
+            "components": [],
+        }
+    )
+    raw = build_gtin_import_template(repo)
+    wb = load_workbook(BytesIO(raw))
+    ws = wb.active
+    assert ws.cell(1, 4).value == "GTIN*"
+    ws.cell(2, 4).value = GTIN13
+    buf = BytesIO()
+    wb.save(buf)
+    result = import_gtins_from_xlsx(repo, buf.getvalue())
+    assert result.created == 1
+    assert result.failed == 0
+    assert repo.list_product_gtin_rows()[0]["gtins"] == [GTIN14]
+
+
+def test_marking_http_gtin_and_scan_export(tmp_path) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.web.warehouse_marking_routes import register_warehouse_marking_routes
+    from app.warehouse_users_repository import WarehouseUserRow
+
+    repo = _repo(tmp_path, "http2.db")
+    product = repo.create_product(
+        {
+            "name": "Болт",
+            "sku": "BOLT-1",
+            "code": "00001",
+            "is_kit": False,
             "components": [],
         }
     )
@@ -219,16 +263,20 @@ def test_marking_http_parse_and_export(tmp_path) -> None:
 
     register_warehouse_marking_routes(app, repo, require_warehouse_user)
     client = TestClient(app)
-    payload = {"text": f"{_cis(GTIN14, 'AAA111')}\n{_cis(GTIN14, 'BBB222')}\n"}
-    parsed = client.post("/api/warehouse/marking/codes/parse", json=payload)
-    assert parsed.status_code == 200, parsed.text
-    body = parsed.json()
-    assert body["stats"]["matched_codes"] == 2
-    assert body["groups"][0]["sku"] == "BOLT-1"
+    added = client.post(
+        "/api/warehouse/marking/gtins",
+        json={"product_id": product.id, "gtin": GTIN13},
+    )
+    assert added.status_code == 200, added.text
+    listed = client.get("/api/warehouse/marking/gtins")
+    assert listed.status_code == 200
+    assert listed.json()["products"][0]["gtins"] == [GTIN14]
 
-    exported = client.post("/api/warehouse/marking/codes/export", json=payload)
+    exported = client.post(
+        "/api/warehouse/marking/codes/export",
+        json={"codes": [_cis(GTIN14, "AAA111"), _cis(GTIN14, "BBB222")]},
+    )
     assert exported.status_code == 200, exported.text
-    assert "spreadsheetml" in exported.headers["content-type"]
     wb = load_workbook(BytesIO(exported.content))
     assert wb["Коды"].cell(2, 1).value == "BOLT-1"
     assert wb["Коды"].max_row == 3

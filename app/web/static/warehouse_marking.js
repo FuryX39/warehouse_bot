@@ -1,4 +1,10 @@
 (function (global) {
+  var gtinQuery = "";
+  var gtinTimer = null;
+  var scanItems = [];
+  var scanning = false;
+  var scanRefocusTimer = null;
+
   function esc(s) {
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;")
@@ -24,6 +30,10 @@
     if (card) card.classList.add("wh-content-card--wide");
   }
 
+  function fetchJson(url, options) {
+    return shell().fetchJson(url, options);
+  }
+
   function downloadBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -37,232 +47,467 @@
     }, 500);
   }
 
-  function codesTable(headers, rowsHtml) {
-    if (!rowsHtml) return "";
+  function backLink() {
+    return '<button type="button" class="wh-btn" id="whMarkingBack">&larr; К разделам</button>';
+  }
+
+  function renderHome(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML =
+      '<div class="wh-marking-home">' +
+      '<p class="wh-muted">Сначала привяжите GTIN к товарам, затем сканируйте Data Matrix — из кода берётся GTIN и подставляется артикул.</p>' +
+      '<div class="wh-marking-actions">' +
+      '<button type="button" class="wh-marking-action" id="whMarkingOpenGtin">' +
+      "<strong>Внести GTIN</strong>" +
+      "<span>Вручную по товарам или загрузкой Excel</span></button>" +
+      '<button type="button" class="wh-marking-action" id="whMarkingOpenScan">' +
+      "<strong>Сканирование</strong>" +
+      "<span>Сканер или ввод, Enter — следующий код, затем Excel</span></button>" +
+      "</div></div>";
+    root.querySelector("#whMarkingOpenGtin").addEventListener("click", function () {
+      renderGtin(tab, item);
+    });
+    root.querySelector("#whMarkingOpenScan").addEventListener("click", function () {
+      renderScan(tab, item);
+    });
+  }
+
+  function gtinChips(product) {
+    return (product.gtins || [])
+      .map(function (gtin) {
+        return (
+          '<span class="wh-marking-chip">' +
+          esc(gtin) +
+          '<button type="button" class="wh-marking-chip-x" data-product-id="' +
+          esc(product.id) +
+          '" data-gtin="' +
+          esc(gtin) +
+          '" title="Удалить">&times;</button></span>'
+        );
+      })
+      .join("");
+  }
+
+  function renderGtinTable(products) {
+    if (!products.length) {
+      return '<p class="wh-msg">Товары не найдены.</p>';
+    }
     return (
       '<div class="wh-table-wrap"><table class="wh-table"><thead><tr>' +
-      headers.map(function (h) { return "<th>" + esc(h) + "</th>"; }).join("") +
+      "<th>Артикул</th><th>Название</th><th>GTIN</th><th></th>" +
       "</tr></thead><tbody>" +
-      rowsHtml +
+      products
+        .map(function (p) {
+          return (
+            '<tr data-product-id="' +
+            esc(p.id) +
+            '"><td>' +
+            esc(p.sku) +
+            "</td><td>" +
+            esc(p.name) +
+            '</td><td><div class="wh-marking-chips">' +
+            gtinChips(p) +
+            "</div></td><td>" +
+            '<div class="wh-marking-add-gtin">' +
+            '<input type="text" class="wh-marking-gtin-input" placeholder="GTIN" inputmode="numeric" />' +
+            '<button type="button" class="wh-btn wh-btn-sm wh-marking-gtin-add">Добавить</button>' +
+            "</div></td></tr>"
+          );
+        })
+        .join("") +
       "</tbody></table></div>"
     );
   }
 
-  function sampleCell(sample, count) {
-    var shown = (sample || []).map(esc).join("<br>");
-    var extra = count > (sample || []).length ? "<br>… ещё " + (count - sample.length) : "";
-    return shown + extra;
-  }
-
-  function renderPreview(root, data) {
-    var box = root.querySelector("#whMarkingPreview");
-    if (!box) return;
-    var stats = (data && data.stats) || {};
-    var groups = data.groups || [];
-    var unmatched = data.unmatched || [];
-    var conflicts = data.conflicts || [];
-    var invalid = data.invalid || [];
-    var summary =
-      '<p class="wh-msg">Строк: ' +
-      esc(stats.total_lines) +
-      ", уникальных: " +
-      esc(stats.unique_codes) +
-      ", сопоставлено: " +
-      esc(stats.matched_codes) +
-      ", товаров: " +
-      esc(stats.product_count) +
-      (stats.duplicate_count ? ", дубликатов пропущено: " + esc(stats.duplicate_count) : "") +
-      "</p>";
-
-    var groupRows = groups
-      .map(function (g) {
-        return (
-          "<tr><td>" +
-          esc(g.sku) +
-          "</td><td>" +
-          esc(g.gtin) +
-          "</td><td>" +
-          esc(g.count) +
-          '</td><td class="wh-marking-sample">' +
-          sampleCell(g.sample, g.count) +
-          "</td></tr>"
-        );
+  function loadGtinRows(root) {
+    var wrap = root.querySelector("#whMarkingGtinList");
+    var msg = root.querySelector("#whMarkingGtinMsg");
+    wrap.innerHTML = '<p class="wh-msg">Загрузка…</p>';
+    fetchJson("/api/warehouse/marking/gtins?q=" + encodeURIComponent(gtinQuery))
+      .then(function (data) {
+        wrap.innerHTML = renderGtinTable(data.products || []);
+        bindGtinTable(root);
       })
-      .join("");
-
-    var unmatchedRows = unmatched
-      .map(function (u) {
-        return (
-          "<tr><td>" +
-          esc(u.gtin) +
-          "</td><td>" +
-          esc(u.count) +
-          '</td><td class="wh-marking-sample">' +
-          sampleCell(u.sample, u.count) +
-          "</td></tr>"
-        );
-      })
-      .join("");
-
-    var conflictRows = conflicts
-      .map(function (c) {
-        return (
-          "<tr><td>" +
-          esc(c.gtin) +
-          "</td><td>" +
-          esc((c.skus || []).join(", ")) +
-          "</td><td>" +
-          esc(c.count) +
-          "</td></tr>"
-        );
-      })
-      .join("");
-
-    var invalidRows = invalid
-      .map(function (row) {
-        return "<tr><td>" + esc(row.raw) + "</td><td>" + esc(row.error) + "</td></tr>";
-      })
-      .join("");
-
-    box.innerHTML =
-      summary +
-      (groups.length
-        ? "<h4 class=\"wh-crm-section-title\">Сопоставлено</h4>" +
-          codesTable(["Артикул", "GTIN", "Кодов", "Примеры DataMatrix"], groupRows)
-        : "") +
-      (unmatched.length
-        ? "<h4 class=\"wh-crm-section-title\">GTIN нет в каталоге</h4>" +
-          "<p class=\"wh-muted\">Добавьте GTIN в карточке товара (Товары и услуги → Маркировка) или укажите EAN-13/GTIN-14 в штрихкодах.</p>" +
-          codesTable(["GTIN", "Кодов", "Примеры"], unmatchedRows)
-        : "") +
-      (conflicts.length
-        ? "<h4 class=\"wh-crm-section-title\">Один GTIN у нескольких товаров</h4>" +
-          codesTable(["GTIN", "Артикулы", "Кодов"], conflictRows)
-        : "") +
-      (invalid.length
-        ? "<h4 class=\"wh-crm-section-title\">Не разобраны</h4>" +
-          codesTable(["Строка", "Причина"], invalidRows)
-        : "");
-  }
-
-  function currentText(root) {
-    var area = root.querySelector("#whMarkingCodes");
-    return area ? area.value : "";
-  }
-
-  function setBusy(root, busy) {
-    root.querySelectorAll("#whMarkingParse, #whMarkingExport").forEach(function (btn) {
-      btn.disabled = !!busy;
-    });
-  }
-
-  function bind(root) {
-    var msg = root.querySelector("#whMarkingMsg");
-    var file = root.querySelector("#whMarkingFile");
-
-    file.addEventListener("change", function () {
-      var picked = file.files && file.files[0];
-      if (!picked) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        root.querySelector("#whMarkingCodes").value = String(reader.result || "");
-      };
-      reader.readAsText(picked);
-    });
-
-    root.querySelector("#whMarkingParse").addEventListener("click", function () {
-      var text = currentText(root);
-      msg.className = "wh-msg";
-      msg.textContent = "";
-      if (!text.trim()) {
+      .catch(function (err) {
+        wrap.innerHTML = "";
         msg.className = "wh-msg wh-msg-error";
-        msg.textContent = "Вставьте коды Data Matrix.";
-        return;
-      }
-      setBusy(root, true);
-      msg.textContent = "Разбираем…";
-      shell()
-        .fetchJson("/api/warehouse/marking/codes/parse", {
+        msg.textContent = err.message || "Не удалось загрузить товары";
+      });
+  }
+
+  function bindGtinTable(root) {
+    var msg = root.querySelector("#whMarkingGtinMsg");
+    root.querySelectorAll(".wh-marking-gtin-add").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var row = btn.closest("tr");
+        var input = row.querySelector(".wh-marking-gtin-input");
+        var productId = parseInt(row.getAttribute("data-product-id"), 10);
+        var gtin = input.value.trim();
+        msg.className = "wh-msg";
+        msg.textContent = "";
+        if (!gtin) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = "Введите GTIN.";
+          input.focus();
+          return;
+        }
+        btn.disabled = true;
+        fetchJson("/api/warehouse/marking/gtins", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text }),
+          body: JSON.stringify({ product_id: productId, gtin: gtin }),
         })
-        .then(function (data) {
-          renderPreview(root, data);
-          msg.className = "wh-msg wh-msg-ok";
-          msg.textContent = "Готово. Можно скачать Excel.";
-        })
-        .catch(function (err) {
-          msg.className = "wh-msg wh-msg-error";
-          msg.textContent = err.message || "Не удалось разобрать коды";
-        })
-        .then(function () {
-          setBusy(root, false);
-        });
+          .then(function (data) {
+            if (data.action === "exists") {
+              msg.className = "wh-msg";
+              msg.textContent = "Этот GTIN у товара уже есть.";
+            } else {
+              msg.className = "wh-msg wh-msg-ok";
+              msg.textContent = "GTIN сохранён.";
+              input.value = "";
+            }
+            loadGtinRows(root);
+          })
+          .catch(function (err) {
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent = err.message || "Не удалось сохранить GTIN";
+          })
+          .then(function () {
+            btn.disabled = false;
+          });
+      });
     });
-
-    root.querySelector("#whMarkingExport").addEventListener("click", function () {
-      var text = currentText(root);
-      msg.className = "wh-msg";
-      msg.textContent = "";
-      if (!text.trim()) {
-        msg.className = "wh-msg wh-msg-error";
-        msg.textContent = "Вставьте коды Data Matrix.";
-        return;
-      }
-      setBusy(root, true);
-      msg.textContent = "Формируем Excel…";
-      fetch("/api/warehouse/marking/codes/export", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text }),
-      })
-        .then(function (r) {
-          if (!r.ok) {
-            return r.text().then(function (body) {
-              var detail = body || "HTTP " + r.status;
-              try {
-                var json = JSON.parse(body);
-                if (json && json.detail) detail = json.detail;
-              } catch (e) {}
-              throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать файл");
-            });
-          }
-          return r.blob();
+    root.querySelectorAll(".wh-marking-gtin-input").forEach(function (input) {
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          var btn = input.parentNode.querySelector(".wh-marking-gtin-add");
+          if (btn) btn.click();
+        }
+      });
+    });
+    root.querySelectorAll(".wh-marking-chip-x").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var productId = parseInt(btn.getAttribute("data-product-id"), 10);
+        var gtin = btn.getAttribute("data-gtin") || "";
+        fetchJson("/api/warehouse/marking/gtins/remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ product_id: productId, gtin: gtin }),
         })
-        .then(function (blob) {
-          downloadBlob(blob, "marking_codes.xlsx");
-          msg.className = "wh-msg wh-msg-ok";
-          msg.textContent = "Файл скачан.";
-        })
-        .catch(function (err) {
-          msg.className = "wh-msg wh-msg-error";
-          msg.textContent = err.message || "Не удалось сформировать файл";
-        })
-        .then(function () {
-          setBusy(root, false);
-        });
+          .then(function () {
+            loadGtinRows(root);
+          })
+          .catch(function (err) {
+            msg.className = "wh-msg wh-msg-error";
+            msg.textContent = err.message || "Не удалось удалить GTIN";
+          });
+      });
     });
   }
 
-  function render(tab, item) {
+  function importGtinExcel(root) {
+    var fileInput = root.querySelector("#whMarkingGtinFile");
+    var msg = root.querySelector("#whMarkingGtinMsg");
+    if (!fileInput.files || !fileInput.files.length) {
+      msg.className = "wh-msg wh-msg-error";
+      msg.textContent = "Выберите файл Excel (.xlsx).";
+      return;
+    }
+    var formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    msg.className = "wh-msg";
+    msg.textContent = "Загрузка Excel…";
+    fetch("/api/warehouse/marking/gtins/import", {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    })
+      .then(function (r) {
+        var type = r.headers.get("content-type") || "";
+        if (type.indexOf("spreadsheetml") >= 0) {
+          return r.blob().then(function (blob) {
+            downloadBlob(blob, "marking_gtin_import_errors.xlsx");
+            var created = r.headers.get("X-Import-Created") || "0";
+            var skipped = r.headers.get("X-Import-Skipped") || "0";
+            var failed = r.headers.get("X-Import-Failed") || "0";
+            throw new Error(
+              "Часть строк не загрузилась. Добавлено: " +
+                created +
+                ", уже было: " +
+                skipped +
+                ", ошибок: " +
+                failed +
+                ". Скачан файл с ошибками."
+            );
+          });
+        }
+        if (!r.ok) {
+          return r.text().then(function (text) {
+            var detail = text;
+            try {
+              var json = JSON.parse(text);
+              if (json && json.detail) detail = json.detail;
+            } catch (e) {}
+            throw new Error(typeof detail === "string" ? detail : "Не удалось загрузить Excel");
+          });
+        }
+        return r.json();
+      })
+      .then(function (data) {
+        msg.className = "wh-msg wh-msg-ok";
+        msg.textContent =
+          "Загружено GTIN: " +
+          (data.created || 0) +
+          (data.skipped ? ", уже было: " + data.skipped : "") +
+          ".";
+        fileInput.value = "";
+        loadGtinRows(root);
+      })
+      .catch(function (err) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = err.message || "Не удалось загрузить Excel";
+        loadGtinRows(root);
+      });
+  }
+
+  function renderGtin(tab, item) {
     preparePanel(tab, item);
     var root = panelEl();
     root.innerHTML =
       '<div class="wh-route-card">' +
-      "<p class=\"wh-muted\">Вставьте коды Data Matrix Честного знака (по одному на строку). " +
-      "Из каждого кода берётся GTIN и сопоставляется с товаром: сначала поле GTIN в карточке, иначе EAN-13/GTIN-14 в штрихкодах.</p>" +
-      '<label class="wh-marking-file-label">Загрузить текстовый файл <input type="file" id="whMarkingFile" accept=".txt,.csv,.tsv,text/plain" /></label>' +
-      '<textarea id="whMarkingCodes" class="wh-marking-codes" placeholder="01046…21…&#10;01046…21…"></textarea>' +
-      '<div class="wh-tools-actions">' +
-      '<button type="button" class="wh-btn" id="whMarkingParse">Разобрать</button>' +
-      '<button type="button" class="wh-btn wh-btn-primary" id="whMarkingExport">Скачать Excel</button>' +
+      '<div class="wh-crm-toolbar">' +
+      backLink() +
+      '<input type="search" id="whMarkingGtinSearch" class="wh-crm-search" placeholder="Поиск по названию, артикулу, коду…" value="' +
+      esc(gtinQuery) +
+      '" />' +
+      '<button type="button" class="wh-btn" id="whMarkingGtinTemplate">Скачать шаблон Excel</button>' +
+      '<label class="wh-btn wh-marking-file-btn">Загрузить Excel<input type="file" id="whMarkingGtinFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
       "</div>" +
-      '<p class="wh-msg" id="whMarkingMsg"></p>' +
-      '<div id="whMarkingPreview"></div>' +
-      "</div>";
-    bind(root);
+      '<p class="wh-muted">GTIN из Data Matrix будет сопоставлен с этими значениями и даст артикул.</p>' +
+      '<p class="wh-msg" id="whMarkingGtinMsg"></p>' +
+      '<div id="whMarkingGtinList"></div></div>';
+    root.querySelector("#whMarkingBack").addEventListener("click", function () {
+      renderHome(tab, item);
+    });
+    root.querySelector("#whMarkingGtinSearch").addEventListener("input", function (e) {
+      gtinQuery = e.target.value.trim();
+      clearTimeout(gtinTimer);
+      gtinTimer = setTimeout(function () {
+        loadGtinRows(root);
+      }, 250);
+    });
+    root.querySelector("#whMarkingGtinTemplate").addEventListener("click", function () {
+      fetch("/api/warehouse/marking/gtins/template", { credentials: "include" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("Не удалось скачать шаблон");
+          return r.blob();
+        })
+        .then(function (blob) {
+          downloadBlob(blob, "marking_gtin_template.xlsx");
+        })
+        .catch(function (err) {
+          var msg = root.querySelector("#whMarkingGtinMsg");
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Ошибка шаблона";
+        });
+    });
+    root.querySelector("#whMarkingGtinFile").addEventListener("change", function () {
+      importGtinExcel(root);
+    });
+    loadGtinRows(root);
+  }
+
+  function scanKey(raw) {
+    return String(raw || "")
+      .trim()
+      .replace(/\u001d/g, "<GS>");
+  }
+
+  function showScanCode(raw) {
+    return scanKey(raw);
+  }
+
+  function renderScanList(root) {
+    var list = root.querySelector("#whMarkingScanList");
+    var count = root.querySelector("#whMarkingScanCount");
+    if (count) count.textContent = String(scanItems.length);
+    if (!scanItems.length) {
+      list.innerHTML = '<p class="wh-muted">Пока пусто — отсканируйте код и нажмите Enter.</p>';
+      return;
+    }
+    list.innerHTML =
+      '<ul class="wh-marking-scan-list">' +
+      scanItems
+        .map(function (item, idx) {
+          return (
+            '<li class="wh-marking-scan-item">' +
+            '<span class="wh-marking-scan-idx">' +
+            (idx + 1) +
+            ".</span>" +
+            '<span class="wh-marking-scan-code">' +
+            esc(showScanCode(item.raw)) +
+            "</span>" +
+            '<button type="button" class="wh-btn wh-btn-sm wh-marking-scan-x" data-idx="' +
+            idx +
+            '" title="Удалить">&times;</button></li>'
+          );
+        })
+        .join("") +
+      "</ul>";
+    list.querySelectorAll(".wh-marking-scan-x").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-idx"), 10);
+        if (idx >= 0 && idx < scanItems.length) {
+          scanItems.splice(idx, 1);
+          renderScanList(root);
+        }
+      });
+    });
+  }
+
+  function setScanning(root, on) {
+    scanning = !!on;
+    var input = root.querySelector("#whMarkingScanInput");
+    var stopBtn = root.querySelector("#whMarkingScanStop");
+    var resumeBtn = root.querySelector("#whMarkingScanResume");
+    var status = root.querySelector("#whMarkingScanStatus");
+    input.disabled = !scanning;
+    stopBtn.hidden = !scanning;
+    resumeBtn.hidden = scanning;
+    status.textContent = scanning
+      ? "Сканирование включено: ввод → Enter → следующий код."
+      : "Сканирование остановлено.";
+    if (scanning) {
+      setTimeout(function () {
+        input.focus();
+      }, 0);
+    } else {
+      input.blur();
+    }
+  }
+
+  function addScannedCode(root, raw) {
+    var msg = root.querySelector("#whMarkingScanMsg");
+    var value = String(raw || "").trim();
+    msg.className = "wh-msg";
+    msg.textContent = "";
+    if (!value) return;
+    var key = scanKey(value);
+    for (var i = 0; i < scanItems.length; i++) {
+      if (scanItems[i].key === key) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Этот штрихкод уже внесён.";
+        return;
+      }
+    }
+    scanItems.push({ raw: value, key: key });
+    renderScanList(root);
+  }
+
+  function finishScan(root) {
+    var msg = root.querySelector("#whMarkingScanMsg");
+    var btn = root.querySelector("#whMarkingScanFinish");
+    msg.className = "wh-msg";
+    msg.textContent = "";
+    if (!scanItems.length) {
+      msg.className = "wh-msg wh-msg-error";
+      msg.textContent = "Список пуст — сначала отсканируйте коды.";
+      return;
+    }
+    btn.disabled = true;
+    msg.textContent = "Формируем Excel…";
+    fetch("/api/warehouse/marking/codes/export", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        codes: scanItems.map(function (item) {
+          return item.raw;
+        }),
+      }),
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.text().then(function (text) {
+            var detail = text;
+            try {
+              var json = JSON.parse(text);
+              if (json && json.detail) detail = json.detail;
+            } catch (e) {}
+            throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать файл");
+          });
+        }
+        return r.blob();
+      })
+      .then(function (blob) {
+        downloadBlob(blob, "marking_codes.xlsx");
+        msg.className = "wh-msg wh-msg-ok";
+        msg.textContent = "Файл скачан: артикул, GTIN, Data Matrix.";
+      })
+      .catch(function (err) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = err.message || "Не удалось сформировать файл";
+      })
+      .then(function () {
+        btn.disabled = false;
+      });
+  }
+
+  function renderScan(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML =
+      '<div class="wh-route-card">' +
+      '<div class="wh-crm-toolbar">' +
+      backLink() +
+      '<span class="wh-muted" id="whMarkingScanStatus"></span>' +
+      "</div>" +
+      '<label class="wh-marking-scan-label">Data Matrix' +
+      '<input type="text" id="whMarkingScanInput" class="wh-marking-scan-input" autocomplete="off" spellcheck="false" placeholder="Отсканируйте или введите код и нажмите Enter" />' +
+      "</label>" +
+      '<div class="wh-tools-actions">' +
+      '<button type="button" class="wh-btn" id="whMarkingScanStop">Остановиться</button>' +
+      '<button type="button" class="wh-btn" id="whMarkingScanResume" hidden>Продолжить</button>' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whMarkingScanFinish">Завершить сканирование</button>' +
+      "</div>" +
+      '<p class="wh-msg" id="whMarkingScanMsg"></p>' +
+      '<h4 class="wh-crm-section-title">Отсканировано: <span id="whMarkingScanCount">0</span></h4>' +
+      '<div id="whMarkingScanList"></div></div>';
+    root.querySelector("#whMarkingBack").addEventListener("click", function () {
+      scanning = false;
+      renderHome(tab, item);
+    });
+    var input = root.querySelector("#whMarkingScanInput");
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      addScannedCode(root, input.value);
+      input.value = "";
+    });
+    input.addEventListener("blur", function () {
+      if (!scanning) return;
+      clearTimeout(scanRefocusTimer);
+      scanRefocusTimer = setTimeout(function () {
+        if (scanning) input.focus();
+      }, 50);
+    });
+    root.querySelector("#whMarkingScanStop").addEventListener("click", function () {
+      setScanning(root, false);
+    });
+    root.querySelector("#whMarkingScanResume").addEventListener("click", function () {
+      setScanning(root, true);
+    });
+    root.querySelector("#whMarkingScanFinish").addEventListener("click", function () {
+      finishScan(root);
+    });
+    renderScanList(root);
+    setScanning(root, true);
+  }
+
+  function render(tab, item) {
+    renderHome(tab, item);
   }
 
   global.WhMarking = { render: render };

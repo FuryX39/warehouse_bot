@@ -1,0 +1,19 @@
+---
+description: Коммит и пуш только в origin/main, если пользователь явно не сказал иное
+alwaysApply: true
+---
+
+# Git: origin/main по умолчанию
+
+Когда пользователь просит коммит и/или пуш:
+
+- Коммитить в текущую ветку **main**.
+- Пушить только в **origin main** (`git push origin main`).
+- Не создавать feature-ветки, не пушить в другие remote/ветки, не открывать PR.
+
+Исключение — только если пользователь **явно** назвал другую ветку, remote или попросил PR / отдельное ответвление.
+
+```text
+❌ BAD: git checkout -b marking-gtin && git push -u origin marking-gtin
+✅ GOOD: git commit … && git push origin main
+```

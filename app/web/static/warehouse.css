@@ -1501,6 +1501,141 @@ body.wh-body {
   font-size: 0.9rem;
 }
 
+.wh-marking-home {
+  max-width: 44rem;
+}
+
+.wh-marking-actions {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.wh-marking-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  text-align: left;
+  border: 1px solid var(--wh-border);
+  background: var(--wh-surface);
+  color: var(--wh-text);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.wh-marking-action:hover {
+  border-color: var(--wh-tab-active);
+  background: var(--wh-subnav-active);
+}
+
+.wh-marking-action strong {
+  font-size: 1rem;
+}
+
+.wh-marking-action span {
+  color: var(--wh-muted);
+  font-size: 0.85rem;
+}
+
+.wh-marking-file-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.wh-marking-file-btn input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.wh-marking-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.wh-marking-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: #eef3fa;
+  border-radius: 999px;
+  padding: 0.15rem 0.35rem 0.15rem 0.55rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.wh-marking-chip-x {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--wh-muted);
+}
+
+.wh-marking-add-gtin {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.wh-marking-gtin-input {
+  width: 10.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.wh-marking-scan-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.75rem 0;
+  font-size: 0.88rem;
+  color: var(--wh-muted);
+}
+
+.wh-marking-scan-input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+
+.wh-marking-scan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wh-marking-scan-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--wh-border);
+}
+
+.wh-marking-scan-idx {
+  color: var(--wh-muted);
+  min-width: 2rem;
+}
+
+.wh-marking-scan-code {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
 .wh-marking-codes {
   width: 100%;
   min-height: 16rem;

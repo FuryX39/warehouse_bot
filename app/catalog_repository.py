@@ -1546,6 +1546,92 @@ class CatalogRepository:
             ]
         return {"products": products, "gtins": gtins, "barcodes": barcodes}
 
+    def list_product_gtin_rows(self, q: str = "") -> list[dict[str, Any]]:
+        with Session(self.engine) as session:
+            stmt = select(CatalogProduct).order_by(CatalogProduct.name, CatalogProduct.sku)
+            pat = _like(q)
+            if pat:
+                stmt = stmt.where(
+                    or_(
+                        CatalogProduct.name.ilike(pat),
+                        CatalogProduct.sku.ilike(pat),
+                        CatalogProduct.code.ilike(pat),
+                    )
+                )
+            products = session.scalars(stmt).all()
+            ids = [int(row.id) for row in products]
+            by_id: dict[int, list[str]] = {pid: [] for pid in ids}
+            for start in range(0, len(ids), 900):
+                batch = ids[start : start + 900]
+                for row in session.scalars(
+                    select(CatalogProductGtin)
+                    .where(CatalogProductGtin.product_id.in_(batch))
+                    .order_by(CatalogProductGtin.product_id, CatalogProductGtin.sort_order)
+                ).all():
+                    by_id.setdefault(int(row.product_id), []).append(str(row.gtin))
+            return [
+                {
+                    "id": int(row.id),
+                    "sku": row.sku,
+                    "code": row.code,
+                    "name": row.name,
+                    "gtins": by_id.get(int(row.id), []),
+                }
+                for row in products
+            ]
+
+    def add_product_gtin(self, product_id: int, gtin: str) -> str:
+        from app.marking.gtin import normalize_gtin14
+
+        value = normalize_gtin14(gtin)
+        if not value:
+            raise ValueError("Укажите GTIN")
+        with Session(self.engine) as session:
+            if session.get(CatalogProduct, int(product_id)) is None:
+                raise ValueError("Товар не найден")
+            on_same = session.scalar(
+                select(CatalogProductGtin.id).where(
+                    CatalogProductGtin.product_id == int(product_id),
+                    CatalogProductGtin.gtin == value,
+                )
+            )
+            if on_same is not None:
+                return "exists"
+            self._validate_gtins_unique(session, [value], exclude_product_id=int(product_id))
+            max_order = session.scalar(
+                select(func.max(CatalogProductGtin.sort_order)).where(
+                    CatalogProductGtin.product_id == int(product_id)
+                )
+            )
+            session.add(
+                CatalogProductGtin(
+                    product_id=int(product_id),
+                    gtin=value,
+                    sort_order=int(max_order or -1) + 1,
+                )
+            )
+            session.commit()
+            return "created"
+
+    def remove_product_gtin(self, product_id: int, gtin: str) -> bool:
+        from app.marking.gtin import normalize_gtin14
+
+        value = normalize_gtin14(gtin)
+        if not value:
+            raise ValueError("Укажите GTIN")
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(CatalogProductGtin).where(
+                    CatalogProductGtin.product_id == int(product_id),
+                    CatalogProductGtin.gtin == value,
+                )
+            )
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
     def merge_product_barcode(
         self,
         *,
