@@ -1073,6 +1073,16 @@
     );
   }
 
+  function gtinRow(gtin) {
+    return (
+      '<div class="wh-crm-gtin-row">' +
+      '<input type="text" class="wh-crm-gtin-input" value="' +
+      esc(gtin || "") +
+      '" placeholder="GTIN (8, 12, 13 или 14 цифр)" inputmode="numeric" />' +
+      '<button type="button" class="wh-btn wh-btn-sm wh-crm-gtin-remove" title="Удалить">&times;</button></div>'
+    );
+  }
+
   function componentRow(c) {
     c = c || {};
     var label = (c.component_name || c.name || "") + " (" + (c.component_sku || c.sku || "") + ")";
@@ -1111,6 +1121,7 @@
           volume_manual: false,
           marking_type_id: defaultMarkingId(),
           barcodes: [],
+          gtins: [],
           components: [],
         });
     load
@@ -1120,6 +1131,11 @@
         var barcodesHtml = (p.barcodes || [])
           .map(function (bc) {
             return barcodeRow(bc, productId, p.sku, p.name);
+          })
+          .join("");
+        var gtinsHtml = (p.gtins || [])
+          .map(function (gtin) {
+            return gtinRow(gtin);
           })
           .join("");
         var componentsHtml = kitComponents.map(componentRow).join("");
@@ -1171,7 +1187,11 @@
           '" inputmode="decimal" /></div>' +
           "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">2. Маркировка</h4>' +
-          '<div class="wh-form-row"><div><label>Тип маркировки</label><select id="whPrMarking" data-prev="' + esc(p.marking_type_id || "") + '">' + buildSelectOptions(meta.marking_types, p.marking_type_id) + "</select></div></div></section>" +
+          '<div class="wh-form-row"><div><label>Тип маркировки</label><select id="whPrMarking" data-prev="' + esc(p.marking_type_id || "") + '">' + buildSelectOptions(meta.marking_types, p.marking_type_id) + "</select></div></div>" +
+          '<div class="wh-crm-section-head"><h4 class="wh-crm-section-title">GTIN</h4>' +
+          '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddGtin" title="Добавить">+</button></div>' +
+          '<p class="wh-muted">Нужен для Честного знака: из Data Matrix берётся GTIN и сопоставляется с карточкой. Можно несколько, 8/12/13/14 цифр.</p>' +
+          '<div id="whPrGtins">' + gtinsHtml + "</div></section>" +
           '<section class="wh-crm-section"><div class="wh-crm-section-head"><h4 class="wh-crm-section-title">3. Штрихкоды (Code128)</h4>' +
           '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddBarcode" title="Добавить">+</button></div>' +
           '<div id="whPrBarcodes">' + barcodesHtml + "</div></section>" +
@@ -1227,6 +1247,14 @@
         root.querySelector("#whPrBarcodes").addEventListener("click", function (e) {
           if (e.target.classList.contains("wh-crm-barcode-remove")) {
             e.target.closest(".wh-crm-barcode-row").remove();
+          }
+        });
+        root.querySelector("#whPrAddGtin").addEventListener("click", function () {
+          root.querySelector("#whPrGtins").insertAdjacentHTML("beforeend", gtinRow(""));
+        });
+        root.querySelector("#whPrGtins").addEventListener("click", function (e) {
+          if (e.target.classList.contains("wh-crm-gtin-remove")) {
+            e.target.closest(".wh-crm-gtin-row").remove();
           }
         });
         if (formIsKit) {
@@ -1345,6 +1373,11 @@
       var group = row.querySelector(".wh-crm-barcode-group-input").value.trim();
       barcodes.push({ barcode: code, label: label, group: group });
     });
+    var gtins = [];
+    root.querySelectorAll(".wh-crm-gtin-input").forEach(function (inp) {
+      var gtin = inp.value.trim();
+      if (gtin) gtins.push(gtin);
+    });
     var components = [];
     if (formIsKit) {
       root.querySelectorAll(".wh-crm-component-row").forEach(function (row) {
@@ -1371,6 +1404,7 @@
       volume: root.querySelector("#whPrVolume").value.trim(),
       marking_type_id: root.querySelector("#whPrMarking").value || null,
       barcodes: barcodes,
+      gtins: gtins,
       components: components,
       prices: (meta.price_types || []).map(function (pt) {
         var inp = root.querySelector('[data-price-type-id="' + pt.id + '"]');

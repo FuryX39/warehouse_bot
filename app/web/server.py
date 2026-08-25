@@ -117,6 +117,7 @@ from app.web.warehouse_admin_routes import register_warehouse_admin_routes
 from app.web.warehouse_route_sheets_routes import register_warehouse_route_sheets_routes
 from app.web.warehouse_repricer_routes import register_warehouse_repricer_routes
 from app.web.warehouse_reports_routes import register_warehouse_reports_routes
+from app.web.warehouse_marking_routes import register_warehouse_marking_routes
 from app.web.warehouse_tools_routes import register_warehouse_tools_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
@@ -529,6 +530,7 @@ def create_dashboard_app(
     register_warehouse_storage_routes(app, storage_repo, require_warehouse_user)
     register_warehouse_barcode_print_routes(app, require_warehouse_user)
     register_warehouse_catalog_routes(app, catalog_repo, require_warehouse_user, stock_repo, crm_repo)
+    register_warehouse_marking_routes(app, catalog_repo, require_warehouse_user)
     register_warehouse_stock_routes(app, stock_repo, require_warehouse_user)
     register_warehouse_stock_sync_routes(
         app,

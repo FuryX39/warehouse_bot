@@ -124,6 +124,20 @@ class CatalogProductBarcode(_Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class CatalogProductGtin(_Base):
+    """GTIN товара для Честного знака. Хранится канонически как GTIN-14."""
+
+    __tablename__ = "catalog_product_gtins"
+    __table_args__ = (UniqueConstraint("gtin", name="uq_catalog_gtin"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
+    )
+    gtin: Mapped[str] = mapped_column(String(14), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class CatalogKitComponent(_Base):
     __tablename__ = "catalog_kit_components"
     __table_args__ = (
@@ -194,6 +208,7 @@ class CatalogProductRow:
     marking_type_name: str
     volume_manual: bool = False
     barcodes: list[dict[str, str]] = field(default_factory=list)
+    gtins: list[str] = field(default_factory=list)
     components: list[KitComponentRow] = field(default_factory=list)
     prices: list[ProductPriceRow] = field(default_factory=list)
     barcode_count: int = 0
@@ -363,6 +378,13 @@ class CatalogRepository:
                     text(
                         "DELETE FROM catalog_kit_components WHERE kit_product_id NOT IN "
                         "(SELECT id FROM catalog_products) OR component_product_id NOT IN "
+                        "(SELECT id FROM catalog_products)"
+                    )
+                )
+            if "catalog_product_gtins" in tables:
+                session.execute(
+                    text(
+                        "DELETE FROM catalog_product_gtins WHERE product_id NOT IN "
                         "(SELECT id FROM catalog_products)"
                     )
                 )
@@ -1213,6 +1235,9 @@ class CatalogRepository:
                 delete(CatalogProductBarcode).where(CatalogProductBarcode.product_id == pid)
             )
             session.execute(
+                delete(CatalogProductGtin).where(CatalogProductGtin.product_id == pid)
+            )
+            session.execute(
                 delete(CatalogProductPrice).where(CatalogProductPrice.product_id == pid)
             )
             session.execute(
@@ -1306,6 +1331,11 @@ class CatalogRepository:
         if update_barcodes and not isinstance(barcodes_raw, list):
             raise ValueError("barcodes должен быть массивом")
         barcodes = self._normalize_barcodes(barcodes_raw) if update_barcodes else []
+        update_gtins = "gtins" in data
+        gtins_raw = data.get("gtins") if update_gtins else []
+        if update_gtins and not isinstance(gtins_raw, list):
+            raise ValueError("gtins должен быть массивом")
+        gtins = self._normalize_gtins(gtins_raw) if update_gtins else []
         components_raw = data.get("components") or []
         if not isinstance(components_raw, list):
             raise ValueError("components должен быть массивом")
@@ -1352,6 +1382,19 @@ class CatalogRepository:
                             barcode=bc["barcode"],
                             label=bc.get("label", ""),
                             barcode_group=bc.get("group", ""),
+                            sort_order=i,
+                        )
+                    )
+            if update_gtins:
+                self._validate_gtins_unique(session, gtins, exclude_product_id=int(row.id))
+                session.execute(
+                    delete(CatalogProductGtin).where(CatalogProductGtin.product_id == row.id)
+                )
+                for i, gtin in enumerate(gtins):
+                    session.add(
+                        CatalogProductGtin(
+                            product_id=int(row.id),
+                            gtin=gtin,
                             sort_order=i,
                         )
                     )
@@ -1445,6 +1488,63 @@ class CatalogRepository:
                 )
                 continue
             raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+
+    def _normalize_gtins(self, raw: list) -> list[str]:
+        from app.marking.gtin import normalize_gtin14
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            value = item.get("gtin") if isinstance(item, dict) else item
+            gtin = normalize_gtin14(str(value or ""))
+            if not gtin:
+                continue
+            if gtin in seen:
+                raise ValueError(f"Дублирующийся GTIN в карточке: «{gtin}»")
+            seen.add(gtin)
+            out.append(gtin)
+        return out
+
+    def _validate_gtins_unique(
+        self, session: Session, gtins: list[str], *, exclude_product_id: int
+    ) -> None:
+        for gtin in gtins:
+            other = session.scalar(
+                select(CatalogProductGtin.product_id).where(
+                    CatalogProductGtin.gtin == gtin,
+                    CatalogProductGtin.product_id != exclude_product_id,
+                )
+            )
+            if other is None:
+                continue
+            if session.get(CatalogProduct, int(other)) is None:
+                session.execute(
+                    delete(CatalogProductGtin).where(
+                        CatalogProductGtin.gtin == gtin,
+                        CatalogProductGtin.product_id == int(other),
+                    )
+                )
+                continue
+            raise ValueError(f"GTIN «{gtin}» уже используется другим товаром")
+
+    def load_gtin_match_sources(self) -> dict[str, Any]:
+        """Продукты, явные GTIN и штрихкоды — для сопоставления кодов маркировки."""
+        with Session(self.engine) as session:
+            products = [
+                {"id": int(row.id), "sku": row.sku, "name": row.name}
+                for row in session.scalars(
+                    select(CatalogProduct).order_by(CatalogProduct.sku, CatalogProduct.id)
+                ).all()
+            ]
+            gtins = [
+                (int(row.product_id), str(row.gtin))
+                for row in session.scalars(select(CatalogProductGtin)).all()
+            ]
+            barcodes = [
+                (int(row.product_id), str(row.barcode))
+                for row in session.scalars(select(CatalogProductBarcode)).all()
+            ]
+        return {"products": products, "gtins": gtins, "barcodes": barcodes}
 
     def merge_product_barcode(
         self,
@@ -1579,6 +1679,7 @@ class CatalogRepository:
             if m:
                 marking_name = m.name
         barcodes: list[dict[str, str]] = []
+        gtins: list[str] = []
         components: list[KitComponentRow] = []
         barcode_count = int(
             session.scalar(
@@ -1598,6 +1699,12 @@ class CatalogRepository:
                 {"barcode": b.barcode, "label": b.label or "", "group": b.barcode_group or ""}
                 for b in bc_rows
             ]
+            gtin_rows = session.scalars(
+                select(CatalogProductGtin)
+                .where(CatalogProductGtin.product_id == row.id)
+                .order_by(CatalogProductGtin.sort_order)
+            ).all()
+            gtins = [str(item.gtin) for item in gtin_rows]
             if row.is_kit:
                 comp_rows = session.scalars(
                     select(CatalogKitComponent).where(CatalogKitComponent.kit_product_id == row.id)
@@ -1641,6 +1748,7 @@ class CatalogRepository:
             marking_type_id=row.marking_type_id,
             marking_type_name=marking_name,
             barcodes=barcodes,
+            gtins=gtins,
             components=components,
             prices=prices,
             barcode_count=barcode_count,
@@ -1677,6 +1785,7 @@ class CatalogRepository:
         }
         if include_details:
             d["barcodes"] = row.barcodes
+            d["gtins"] = list(row.gtins)
             d["components"] = [
                 {
                     "component_product_id": c.component_product_id,

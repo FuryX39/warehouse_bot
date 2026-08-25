@@ -1484,6 +1484,49 @@ body.wh-body {
   margin-bottom: 0.5rem;
 }
 
+.wh-crm-gtin-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  max-width: 28rem;
+}
+
+.wh-crm-gtin-input {
+  flex: 1;
+  min-width: 10rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.wh-marking-codes {
+  width: 100%;
+  min-height: 16rem;
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.wh-marking-file-label {
+  display: block;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--wh-muted);
+}
+
+.wh-marking-sample {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
 .wh-crm-barcode-input {
   flex: 1;
   min-width: 8rem;

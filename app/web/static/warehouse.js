@@ -276,6 +276,10 @@
       window.WhProducts.renderCatalog(tab, item);
       return;
     }
+    if (tab.id === "products" && item.id === "marking-codes" && window.WhMarking) {
+      window.WhMarking.render(tab, item);
+      return;
+    }
     showPlaceholder(tab, item);
   }
 
