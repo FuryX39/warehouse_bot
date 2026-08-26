@@ -472,3 +472,59 @@ def test_packer_scan_pick_remaining_close_cancel(tmp_path) -> None:
     state["actor"] = TasksApiActor(user=None, via_api_token=True)
     token_only = client.get("/api/v1/fbs-packing/my")
     assert token_only.status_code == 400
+
+
+def test_packer_batch_allocate_prints_all_sku_then_scan_labels(tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+
+    batch = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000016", "batch": True})
+    assert batch.status_code == 200, batch.text
+    payload = batch.json()
+    assert len(payload["lines"]) == 2
+    assert [line["id"] for line in payload["lines"]] == [job.lines[0].id, job.lines[1].id]
+    assert len(payload["pdfs_base64"]) == 2
+    assert all(base64.b64decode(item).startswith(b"%PDF") for item in payload["pdfs_base64"])
+    assert [(item["sku"], item["quantity"]) for item in payload["job"]["remaining_groups"]] == [
+        ("SKU-B", 1),
+    ]
+    assert len(payload["job"]["active_lines"]) == 2
+
+    blocked = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000023", "batch": True})
+    assert blocked.status_code == 400
+
+    first_label = client.post(f"{prefix}/scan-label", json={"barcode": "100001 2/2"})
+    assert first_label.status_code == 200, first_label.text
+    assert first_label.json()["line"]["id"] == job.lines[1].id
+    assert first_label.json()["line"]["status"] == LINE_DONE
+    assert len(first_label.json()["job"]["active_lines"]) == 1
+
+    second_label = client.post(f"{prefix}/scan-label", json={"barcode": "100001 1/2"})
+    assert second_label.status_code == 200, second_label.text
+    assert second_label.json()["line"]["id"] == job.lines[0].id
+    assert second_label.json()["job"]["active_lines"] == []
+
+    again = client.post(
+        f"{prefix}/pick-sku",
+        json={"sku": "SKU-B", "product_id": product_b.id, "batch": True},
+    )
+    assert again.status_code == 200, again.text
+    assert len(again.json()["lines"]) == 1
+    assert again.json()["line"]["sku"] == "SKU-B"
+
+
+def test_packer_batch_cancel_resets_all_printed(tmp_path) -> None:
+    client, packing, job, *_rest = _packing_client(tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+
+    batch = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000016", "batch": 1})
+    assert batch.status_code == 200, batch.text
+    line_id = batch.json()["lines"][0]["id"]
+
+    cancelled = client.post(f"{prefix}/lines/{line_id}/cancel-print")
+    assert cancelled.status_code == 200, cancelled.text
+    assert packing.get_line(job_id, job.lines[0].id).status == LINE_PENDING
+    assert packing.get_line(job_id, job.lines[1].id).status == LINE_PENDING
+    assert packing.get_line(job_id, job.lines[2].id).status == LINE_PENDING

@@ -286,19 +286,43 @@ def _register_packer_prefix(
             raise _http_value_error(exc) from exc
         return {"job": job}
 
-    def _allocate_response(job_id: int, user_id: int, sku: str, product_id: int | None) -> dict:
-        line = packing_repo.allocate_line(job_id, user_id, sku=sku, product_id=product_id)
-        pdf = packing_repo.read_line_pdf(job_id, line.id)
+    def _allocate_response(
+        job_id: int,
+        user_id: int,
+        sku: str,
+        product_id: int | None,
+        *,
+        batch: bool = False,
+    ) -> dict:
+        lines = packing_repo.allocate_lines(
+            job_id,
+            user_id,
+            sku=sku,
+            product_id=product_id,
+            batch=batch,
+        )
+        pdfs_b64: list[str] = []
+        for line in lines:
+            pdf = packing_repo.read_line_pdf(job_id, line.id)
+            pdfs_b64.append(base64.b64encode(pdf).decode("ascii"))
         job = packer_job_payload(job_id)
         return {
-            "line": packing_repo.line_to_dict(line),
+            "line": packing_repo.line_to_dict(lines[0]),
+            "lines": [packing_repo.line_to_dict(line) for line in lines],
             "job": job,
-            "pdf_base64": base64.b64encode(pdf).decode("ascii"),
+            "pdf_base64": pdfs_b64[0],
+            "pdfs_base64": pdfs_b64,
         }
 
-    def _scan_product_sync(job_id: int, user_id: int, barcode: str) -> dict:
+    def _scan_product_sync(job_id: int, user_id: int, barcode: str, *, batch: bool) -> dict:
         sku, product_id = lookup_scan_product(catalog_repo, barcode)
-        return _allocate_response(job_id, user_id, sku, product_id)
+        return _allocate_response(job_id, user_id, sku, product_id, batch=batch)
+
+    def _batch_flag(body: dict | None) -> bool:
+        raw = (body or {}).get("batch")
+        if isinstance(raw, bool):
+            return raw
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
     @app.post(f"{prefix}/jobs/{{job_id}}/scan-product", name=f"fbs_packing_scan_product_{tag}")
     async def api_fbs_packing_scan_product(
@@ -308,8 +332,9 @@ def _register_packer_prefix(
     ) -> dict:
         user_id = require_packer(actor, job_id)
         barcode = str((body or {}).get("barcode") or (body or {}).get("code") or "")
+        batch = _batch_flag(body if isinstance(body, dict) else {})
         try:
-            return await asyncio.to_thread(_scan_product_sync, job_id, user_id, barcode)
+            return await asyncio.to_thread(_scan_product_sync, job_id, user_id, barcode, batch=batch)
         except ValueError as exc:
             raise _http_value_error(exc) from exc
 
@@ -320,16 +345,25 @@ def _register_packer_prefix(
         actor: TasksApiActor = Depends(_actor),
     ) -> dict:
         user_id = require_packer(actor, job_id)
-        sku = str((body or {}).get("sku") or "")
-        raw_pid = (body or {}).get("product_id")
+        payload = body if isinstance(body, dict) else {}
+        sku = str(payload.get("sku") or "")
+        raw_pid = payload.get("product_id")
         product_id = None
         if raw_pid not in (None, ""):
             try:
                 product_id = int(raw_pid)
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="Некорректный товар") from exc
+        batch = _batch_flag(payload)
         try:
-            return await asyncio.to_thread(_allocate_response, job_id, user_id, sku, product_id)
+            return await asyncio.to_thread(
+                _allocate_response,
+                job_id,
+                user_id,
+                sku,
+                product_id,
+                batch=batch,
+            )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
 

@@ -420,13 +420,21 @@ class FbsPackingRepository:
             raise ValueError("Задание уже выполнено")
         return job
 
-    def _printed_line(self, session: Session, job_id: int) -> FbsPackingLine | None:
-        return session.scalar(
-            select(FbsPackingLine).where(
-                FbsPackingLine.job_id == int(job_id),
-                FbsPackingLine.status == LINE_PRINTED,
-            )
+    def _printed_lines(self, session: Session, job_id: int) -> list[FbsPackingLine]:
+        return list(
+            session.scalars(
+                select(FbsPackingLine)
+                .where(
+                    FbsPackingLine.job_id == int(job_id),
+                    FbsPackingLine.status == LINE_PRINTED,
+                )
+                .order_by(FbsPackingLine.seq, FbsPackingLine.id)
+            ).all()
         )
+
+    def _printed_line(self, session: Session, job_id: int) -> FbsPackingLine | None:
+        rows = self._printed_lines(session, job_id)
+        return rows[0] if rows else None
 
     def _sku_matches(self, line: FbsPackingLine, *, sku: str, product_id: int | None) -> bool:
         if product_id and line.product_id and int(line.product_id) == int(product_id):
@@ -443,19 +451,68 @@ class FbsPackingRepository:
         *,
         sku: str = "",
         product_id: int | None = None,
+        batch: bool = False,
     ) -> FbsPackingLineRow:
+        lines = self.allocate_lines(
+            job_id,
+            user_id,
+            sku=sku,
+            product_id=product_id,
+            batch=batch,
+        )
+        return lines[0]
+
+    def allocate_lines(
+        self,
+        job_id: int,
+        user_id: int,
+        *,
+        sku: str = "",
+        product_id: int | None = None,
+        batch: bool = False,
+    ) -> list[FbsPackingLineRow]:
         if not str(sku or "").strip() and not product_id:
             raise ValueError("Нет артикула для выделения")
         now = int(time.time())
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
-            printed = self._printed_line(session, job_id)
-            if printed is not None:
-                if self._sku_matches(printed, sku=sku, product_id=product_id):
-                    return self._line_row(printed)
+            printed_rows = self._printed_lines(session, job_id)
+            foreign = [
+                row
+                for row in printed_rows
+                if not self._sku_matches(row, sku=sku, product_id=product_id)
+            ]
+            if foreign:
                 raise ValueError(
                     "Сначала наклейте ярлык активного товара, закройте строку вручную или отмените печать"
                 )
+
+            if not batch:
+                if printed_rows:
+                    return [self._line_row(printed_rows[0])]
+                pending = session.scalars(
+                    select(FbsPackingLine)
+                    .where(
+                        FbsPackingLine.job_id == int(job_id),
+                        FbsPackingLine.status == LINE_PENDING,
+                    )
+                    .order_by(FbsPackingLine.seq, FbsPackingLine.id)
+                ).all()
+                match = next(
+                    (row for row in pending if self._sku_matches(row, sku=sku, product_id=product_id)),
+                    None,
+                )
+                if match is None:
+                    raise ValueError("Этого товара нет среди оставшихся в задании")
+                match.status = LINE_PRINTED
+                match.printed_at_ts = now
+                if job.status == JOB_STATUS_OPEN:
+                    job.status = JOB_STATUS_IN_PROGRESS
+                job.updated_at_ts = now
+                session.commit()
+                session.refresh(match)
+                return [self._line_row(match)]
+
             pending = session.scalars(
                 select(FbsPackingLine)
                 .where(
@@ -464,20 +521,21 @@ class FbsPackingRepository:
                 )
                 .order_by(FbsPackingLine.seq, FbsPackingLine.id)
             ).all()
-            match = next(
-                (row for row in pending if self._sku_matches(row, sku=sku, product_id=product_id)),
-                None,
-            )
-            if match is None:
+            to_print = [
+                row for row in pending if self._sku_matches(row, sku=sku, product_id=product_id)
+            ]
+            if not printed_rows and not to_print:
                 raise ValueError("Этого товара нет среди оставшихся в задании")
-            match.status = LINE_PRINTED
-            match.printed_at_ts = now
-            if job.status == JOB_STATUS_OPEN:
-                job.status = JOB_STATUS_IN_PROGRESS
-            job.updated_at_ts = now
-            session.commit()
-            session.refresh(match)
-            return self._line_row(match)
+            for row in to_print:
+                row.status = LINE_PRINTED
+                row.printed_at_ts = now
+            if to_print:
+                if job.status == JOB_STATUS_OPEN:
+                    job.status = JOB_STATUS_IN_PROGRESS
+                job.updated_at_ts = now
+                session.commit()
+            active = self._printed_lines(session, job_id)
+            return [self._line_row(row) for row in active]
 
     def _finish_if_complete(self, session: Session, job: FbsPackingJob) -> None:
         remaining = session.scalar(
@@ -494,26 +552,32 @@ class FbsPackingRepository:
     def scan_label(self, job_id: int, user_id: int, raw: str) -> FbsPackingLineRow:
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
-            printed = self._printed_line(session, job_id)
-            if printed is None:
+            printed_rows = self._printed_lines(session, job_id)
+            if not printed_rows:
                 raise ValueError("Нет активного товара — сначала спикайте товар")
-            line = self._line_row(printed)
-            if not scan_matches_line(raw, line):
+            match = None
+            for row in printed_rows:
+                line = self._line_row(row)
+                if scan_matches_line(raw, line):
+                    match = row
+                    break
+            if match is None:
                 raise ValueError("Ярлык не совпадает с активным заказом")
-            printed.status = LINE_DONE
-            printed.done_at_ts = int(time.time())
-            printed.done_by_user_id = int(user_id)
+            match.status = LINE_DONE
+            match.done_at_ts = int(time.time())
+            match.done_by_user_id = int(user_id)
             job.updated_at_ts = int(time.time())
             self._finish_if_complete(session, job)
             session.commit()
-            session.refresh(printed)
-            return self._line_row(printed)
+            session.refresh(match)
+            return self._line_row(match)
 
     def close_line(self, job_id: int, line_id: int, user_id: int) -> FbsPackingLineRow:
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
-            printed = self._printed_line(session, job_id)
-            if printed is None or int(printed.id) != int(line_id):
+            printed_rows = self._printed_lines(session, job_id)
+            printed = next((row for row in printed_rows if int(row.id) == int(line_id)), None)
+            if printed is None:
                 raise ValueError("Закрыть можно только активную напечатанную строку")
             printed.status = LINE_DONE
             printed.done_at_ts = int(time.time())
@@ -527,15 +591,18 @@ class FbsPackingRepository:
     def cancel_print(self, job_id: int, line_id: int) -> FbsPackingLineRow:
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
-            printed = self._printed_line(session, job_id)
-            if printed is None or int(printed.id) != int(line_id):
+            printed_rows = self._printed_lines(session, job_id)
+            if not printed_rows or not any(int(row.id) == int(line_id) for row in printed_rows):
                 raise ValueError("Отменить можно только активную напечатанную строку")
-            printed.status = LINE_PENDING
-            printed.printed_at_ts = None
+            target = next(row for row in printed_rows if int(row.id) == int(line_id))
+            # Отмена снимает всю пачку printed (один SKU), не только одну строку.
+            for row in printed_rows:
+                row.status = LINE_PENDING
+                row.printed_at_ts = None
             job.updated_at_ts = int(time.time())
             session.commit()
-            session.refresh(printed)
-            return self._line_row(printed)
+            session.refresh(target)
+            return self._line_row(target)
 
     def get_line(self, job_id: int, line_id: int) -> FbsPackingLineRow | None:
         with Session(self.engine) as session:
@@ -588,10 +655,11 @@ class FbsPackingRepository:
         }
         if include_lines:
             payload["lines"] = [self.line_to_dict(line) for line in job.lines]
-            payload["active_line"] = next(
-                (self.line_to_dict(line) for line in job.lines if line.status == LINE_PRINTED),
-                None,
-            )
+            active_lines = [
+                self.line_to_dict(line) for line in job.lines if line.status == LINE_PRINTED
+            ]
+            payload["active_lines"] = active_lines
+            payload["active_line"] = active_lines[0] if active_lines else None
         return payload
 
     def line_to_dict(self, line: FbsPackingLineRow) -> dict[str, Any]:
