@@ -1099,6 +1099,31 @@ class CatalogRepository:
                 by_barcode[str(bc.barcode or "").strip().casefold()] = product
         return by_sku, by_code, by_barcode
 
+    def first_barcode_by_product_ids(self, product_ids: list[int]) -> dict[int, str]:
+        """Первый штрихкод карточки (sort_order, id) для каждого product_id."""
+        ids = [int(x) for x in product_ids if int(x) > 0]
+        if not ids:
+            return {}
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(CatalogProductBarcode)
+                .where(CatalogProductBarcode.product_id.in_(ids))
+                .order_by(
+                    CatalogProductBarcode.product_id,
+                    CatalogProductBarcode.sort_order,
+                    CatalogProductBarcode.id,
+                )
+            ).all()
+            out: dict[int, str] = {}
+            for row in rows:
+                pid = int(row.product_id)
+                if pid in out:
+                    continue
+                code = str(row.barcode or "").strip()
+                if code:
+                    out[pid] = code
+            return out
+
     def get_prices_for_products(
         self, product_ids: list[int], price_type_id: int
     ) -> dict[int, str]:

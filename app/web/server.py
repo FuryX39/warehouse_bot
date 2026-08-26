@@ -107,6 +107,7 @@ from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.web.warehouse_tasks_routes import register_warehouse_tasks_routes
 from app.web.warehouse_tasks_api_auth import make_require_tasks_access
 from app.warehouse_tasks_repository import WarehouseTasksRepository
+from app.fbs_packing_repository import FbsPackingRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.web.warehouse_stock_routes import register_warehouse_stock_routes
 from app.web.warehouse_stock_sync_routes import register_warehouse_stock_sync_routes
@@ -118,6 +119,7 @@ from app.web.warehouse_route_sheets_routes import register_warehouse_route_sheet
 from app.web.warehouse_repricer_routes import register_warehouse_repricer_routes
 from app.web.warehouse_reports_routes import register_warehouse_reports_routes
 from app.web.warehouse_marking_routes import register_warehouse_marking_routes
+from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_tools_routes import register_warehouse_tools_routes
 
 _WEB_ROOT = Path(__file__).resolve().parent
@@ -130,6 +132,16 @@ _FBS_SHIP_CODE_TTL_SECONDS = 300
 
 class Utf8JSONResponse(JSONResponse):
     media_type = "application/json; charset=utf-8"
+
+
+class NoStoreStaticFiles(StaticFiles):
+    """JS/CSS панели не кэшировать: иначе после выкладки остаётся старый warehouse_fbs.js."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        return response
 
 
 def _session_signing_key(dashboard_secret: str) -> str:
@@ -267,6 +279,10 @@ def create_dashboard_app(
     )
     tasks_repo.init_schema()
 
+    packing_files_dir = Path(settings.warehouse_task_files_data_dir) / "fbs_packing"
+    packing_repo = FbsPackingRepository(settings.db_url, files_data_dir=packing_files_dir)
+    packing_repo.init_schema()
+
     ozon_fbo_repo = OzonFboSupplyRepository(settings.db_url, catalog_repo, warehouse_users_repo)
     ozon_fbo_repo.init_schema()
 
@@ -389,16 +405,17 @@ def create_dashboard_app(
             raise HTTPException(status_code=401, detail="Требуется вход в новую панель")
         return user
 
-    async def require_fbs_access(request: Request) -> None:
+    async def require_fbs_access(request: Request) -> WarehouseUserRow | None:
         """Разрешить FBS API из старой или новой авторизованной панели."""
         if request.session.get("authenticated"):
-            return
+            return _warehouse_user_from_session(request)
         user = _warehouse_user_from_session(request)
         if user is None:
             raise HTTPException(status_code=401, detail="Требуется вход")
         is_admin, permissions = _resolve_user_access(user)
         if not is_admin and "fbs" not in permissions.get("marketplaces", []):
             raise HTTPException(status_code=403, detail="Нет доступа к разделу FBS")
+        return user
 
     async def require_warehouse_admin(
         user: WarehouseUserRow = Depends(require_warehouse_user),
@@ -595,7 +612,34 @@ def create_dashboard_app(
         warehouse_schedule_repo,
         warehouse_task_summary_repo,
         require_tasks_access,
+        prefixes=("/api/warehouse/tasks",),
     )
+    register_warehouse_fbs_packing_routes(
+        app,
+        packing_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        settings,
+        coordinator,
+        require_fbs_access,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=True,
+        packer_prefixes=(),
+    )
+
+    @app.api_route(
+        "/api/v1/{full_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
+    async def api_v1_moved_to_desktop_process(full_path: str) -> dict:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Внешний API программ вынесен в отдельный процесс (python run_api.py). "
+                f"Базовый URL: http://{settings.api_host}:{settings.api_port}/api/v1/"
+            ),
+        )
 
     @app.get("/fbs")
     async def fbs_page(request: Request):
@@ -1831,6 +1875,6 @@ def create_dashboard_app(
 
     static_dir = _WEB_ROOT / "static"
     if static_dir.is_dir():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        app.mount("/static", NoStoreStaticFiles(directory=str(static_dir)), name="static")
 
     return app

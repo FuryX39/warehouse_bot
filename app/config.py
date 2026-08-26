@@ -39,6 +39,15 @@ def _web_port() -> int:
     return max(1, min(65535, n))
 
 
+def _api_port() -> int:
+    raw = os.getenv("API_PORT", "8766").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 8766
+    return max(1, min(65535, n))
+
+
 def _web_dashboard_secret_from_env() -> str:
     """Пароль панели из .env: убираем пробелы и невидимый BOM (частая причина «верный» пароль не подходит)."""
     raw = os.getenv("WEB_DASHBOARD_SECRET", "") or ""
@@ -83,6 +92,9 @@ class Settings:
     web_dashboard_secret: str = ""
     web_host: str = "127.0.0.1"
     web_port: int = 8765
+    # Отдельный процесс run_api.py: /api/v1 для десктопа упаковщиков.
+    api_host: str = "127.0.0.1"
+    api_port: int = 8766
     # Новая панель /warehouse: первый администратор создаётся при пустой таблице пользователей.
     warehouse_admin_login: str = ""
     warehouse_admin_password: str = ""
@@ -168,6 +180,8 @@ def load_settings() -> Settings:
         web_dashboard_secret=_web_dashboard_secret_from_env(),
         web_host=(os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"),
         web_port=_web_port(),
+        api_host=(os.getenv("API_HOST", "127.0.0.1").strip() or "127.0.0.1"),
+        api_port=_api_port(),
         warehouse_admin_login=os.getenv("WAREHOUSE_ADMIN_LOGIN", "").strip(),
         warehouse_admin_password=os.getenv("WAREHOUSE_ADMIN_PASSWORD", "").strip(),
         warehouse_admin_display_name=(

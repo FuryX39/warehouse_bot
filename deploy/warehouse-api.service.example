@@ -1,0 +1,26 @@
+# Пример unit для desktop API (run_api.py) — программы упаковщиков.
+# Скопируйте на сервер, поправьте пути и пользователя, затем:
+#   sudo cp warehouse-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now warehouse-api.service
+#
+# Рядом с ботом и вебом: тот же каталог проекта и тот же .env (общий DB_URL).
+# Программа упаковщиков указывает базовый URL на этот процесс, не на WEB_PORT.
+
+[Unit]
+Description=Warehouse desktop API (uvicorn / run_api.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_ME
+Group=REPLACE_ME
+WorkingDirectory=/opt/warehouse_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/warehouse_bot/.venv/bin/python /opt/warehouse_bot/run_api.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

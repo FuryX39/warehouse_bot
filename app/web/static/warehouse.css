@@ -289,6 +289,32 @@ body.wh-body {
   margin-top: 0.25rem;
 }
 
+.wh-fbs-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.92rem;
+}
+
+.wh-fbs-check input {
+  width: auto;
+}
+
+.wh-fbs-packers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.wh-fbs-packer-option {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
 @media (max-width: 760px) {
   .wh-route-form {
     grid-template-columns: 1fr;

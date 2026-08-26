@@ -4,6 +4,7 @@
 Зачем отдельный файл, а не main.py:
   - main.py запускает Telegram long polling — это другой процесс и другой цикл asyncio.
   - Веб и бот можно поднять параллельно на одной БД: два процесса, один DB_URL в .env.
+  - Программы упаковщиков ходят в третий процесс: python run_api.py (порт API_PORT).
 
 Как запускать:
   pip install -r requirements.txt

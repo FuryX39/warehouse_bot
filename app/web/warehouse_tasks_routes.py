@@ -35,9 +35,8 @@ def register_warehouse_tasks_routes(
     schedule_repo: WarehouseScheduleRepository,
     summary_repo: WarehouseTaskSummaryRepository,
     require_tasks_access,
+    prefixes: tuple[str, ...] = ("/api/warehouse/tasks", "/api/v1/tasks"),
 ) -> None:
-    prefixes = ("/api/warehouse/tasks", "/api/v1/tasks")
-
     for prefix in prefixes:
         _register_on_prefix(
             app,
@@ -48,6 +47,7 @@ def register_warehouse_tasks_routes(
             schedule_repo,
             summary_repo,
             require_tasks_access,
+            prefixes=prefixes,
         )
 
 
@@ -60,11 +60,12 @@ def _register_on_prefix(
     schedule_repo: WarehouseScheduleRepository,
     summary_repo: WarehouseTaskSummaryRepository,
     require_tasks_access,
+    prefixes: tuple[str, ...],
 ) -> None:
     @app.get(f"{prefix}/schema")
     async def api_tasks_schema(_: TasksApiActor = Depends(require_tasks_access)) -> dict:
         schema = tasks_repo.api_schema()
-        schema["base_paths"] = ["/api/warehouse/tasks", "/api/v1/tasks"]
+        schema["base_paths"] = list(prefixes)
         schema["endpoints"] = _api_endpoints_catalog()
         return schema
 
