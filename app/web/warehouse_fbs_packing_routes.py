@@ -12,12 +12,15 @@ from fastapi.responses import Response
 
 from app.catalog_repository import CatalogRepository
 from app.config import Settings
-from app.fbs_packing_repository import FbsPackingRepository
+from app.fbs_packing_repository import FbsPackingRepository, MARKETPLACE_WB
 from app.fbs_packing_service import (
     _bool,
+    build_packing_marking_xlsx,
+    create_wb_packing_job,
     create_yandex_packing_job,
     list_rows_payload,
-    lookup_scan_product,
+    product_has_marking_gtin,
+    resolve_packing_scan,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_tasks_api_auth import TasksApiActor
@@ -25,6 +28,12 @@ from app.yandex_fbs_labels import (
     get_configured_yandex_adapter,
     load_yandex_fbs_list_rows,
     normalize_yandex_fbs_substatus,
+)
+from app.wb_fbs_labels import (
+    get_configured_wb_adapter,
+    list_rows_payload as wb_list_rows_payload,
+    load_wb_fbs_list_rows,
+    normalize_wb_fbs_substatus,
 )
 
 
@@ -68,8 +77,47 @@ def register_warehouse_fbs_packing_routes(
             item_limit: int | None = None,
             order_substatus: str = "STARTED",
             build_list: str = "1",
+            marketplace: str = "yandex",
+            supply_id: str = "",
             _: WarehouseUserRow | None = Depends(require_fbs_access),
         ) -> dict:
+            mp = str(marketplace or "yandex").strip().lower()
+            if mp == MARKETPLACE_WB:
+                try:
+                    order_substatus = normalize_wb_fbs_substatus(order_substatus)
+                except ValueError as exc:
+                    raise _http_value_error(exc) from exc
+                adapter = get_configured_wb_adapter(coordinator)
+                if adapter is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Wildberries API не настроен (WB_API_TOKEN)",
+                    )
+
+                def _run_wb():
+                    return load_wb_fbs_list_rows(
+                        adapter,
+                        substatus=order_substatus,
+                        supply_id=supply_id,
+                        max_units=item_limit,
+                    )
+
+                try:
+                    list_rows, orders, warnings, available = await asyncio.to_thread(_run_wb)
+                except ValueError as exc:
+                    raise _http_value_error(exc) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=502, detail=f"Wildberries API: {exc}") from exc
+                return {
+                    "marketplace": mp,
+                    "count": len(list_rows),
+                    "available_count": available,
+                    "orders_count": len(orders),
+                    "substatus": order_substatus,
+                    "warnings": warnings,
+                    "list_rows": wb_list_rows_payload(list_rows),
+                }
+
             try:
                 order_substatus = normalize_yandex_fbs_substatus(order_substatus)
             except ValueError as exc:
@@ -100,6 +148,7 @@ def register_warehouse_fbs_packing_routes(
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=f"Yandex API: {exc}") from exc
             return {
+                "marketplace": mp,
                 "count": len(list_rows),
                 "available_count": available,
                 "orders_count": len(orders),
@@ -108,15 +157,46 @@ def register_warehouse_fbs_packing_routes(
                 "list_rows": list_rows_payload(list_rows, orders),
             }
 
+        @app.get("/api/warehouse/fbs-packing/wb/supplies")
+        async def api_fbs_packing_wb_supplies(
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            adapter = get_configured_wb_adapter(coordinator)
+            if adapter is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Wildberries API не настроен (WB_API_TOKEN)",
+                )
+
+            def _run():
+                return adapter.list_open_supplies()
+
+            try:
+                supplies = await asyncio.to_thread(_run)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail=f"Wildberries API: {exc}") from exc
+            items = [
+                {
+                    "id": str(item.get("id") or ""),
+                    "name": str(item.get("name") or ""),
+                    "done": bool(item.get("done")),
+                }
+                for item in supplies
+                if str(item.get("id") or "").strip()
+            ]
+            return {"supplies": items}
+
         @app.get("/api/warehouse/fbs-packing/jobs")
         async def api_fbs_packing_jobs_list(
+            marketplace: str | None = None,
             _: WarehouseUserRow | None = Depends(require_fbs_access),
         ) -> dict:
             names = {
                 int(item["id"]): str(item["display_name"])
                 for item in users_repo.list_assignee_picker()
             }
-            jobs = packing_repo.list_jobs(packer_names=names)
+            mp = str(marketplace or "").strip().lower() or None
+            jobs = packing_repo.list_jobs(packer_names=names, marketplace=mp)
             return {"jobs": [packing_repo.job_to_dict(job) for job in jobs]}
 
         @app.post("/api/warehouse/fbs-packing/jobs")
@@ -124,17 +204,8 @@ def register_warehouse_fbs_packing_routes(
             body: dict,
             user: WarehouseUserRow | None = Depends(require_fbs_access),
         ) -> dict:
-            adapter = get_configured_yandex_adapter(coordinator)
-            if adapter is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Yandex Market API не настроен (YANDEX_CAMPAIGN_ID / YANDEX_API_KEY)",
-                )
             payload = body if isinstance(body, dict) else {}
-            try:
-                substatus = normalize_yandex_fbs_substatus(payload.get("order_substatus"))
-            except ValueError as exc:
-                raise _http_value_error(exc) from exc
+            mp = str(payload.get("marketplace") or "yandex").strip().lower()
             raw_ids = payload.get("packer_user_ids") or []
             if not isinstance(raw_ids, list) or not raw_ids:
                 raise HTTPException(status_code=400, detail="Назначьте хотя бы одного упаковщика")
@@ -144,6 +215,51 @@ def register_warehouse_fbs_packing_routes(
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="Некорректный лимит товаров") from exc
 
+            if mp == MARKETPLACE_WB:
+                adapter = get_configured_wb_adapter(coordinator)
+                if adapter is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Wildberries API не настроен (WB_API_TOKEN)",
+                    )
+                try:
+                    substatus = normalize_wb_fbs_substatus(payload.get("order_substatus"))
+                except ValueError as exc:
+                    raise _http_value_error(exc) from exc
+                supply_id = str(payload.get("supply_id") or "").strip()
+
+                def _run_wb():
+                    return create_wb_packing_job(
+                        adapter=adapter,
+                        catalog=catalog_repo,
+                        packing_repo=packing_repo,
+                        order_substatus=substatus,
+                        require_cis=_bool(payload.get("require_cis"), False),
+                        item_limit=limit,
+                        packer_user_ids=raw_ids,
+                        created_by_user_id=int(user.id) if user else None,
+                        supply_id=supply_id,
+                    )
+
+                try:
+                    job = await asyncio.to_thread(_run_wb)
+                except ValueError as exc:
+                    raise _http_value_error(exc) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                return {"job": packing_repo.job_to_dict(job, include_lines=True)}
+
+            adapter = get_configured_yandex_adapter(coordinator)
+            if adapter is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Yandex Market API не настроен (YANDEX_CAMPAIGN_ID / YANDEX_API_KEY)",
+                )
+            try:
+                substatus = normalize_yandex_fbs_substatus(payload.get("order_substatus"))
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+
             def _run():
                 return create_yandex_packing_job(
                     adapter=adapter,
@@ -152,6 +268,7 @@ def register_warehouse_fbs_packing_routes(
                     settings=settings,
                     order_substatus=substatus,
                     build_list=_bool(payload.get("build_list"), True),
+                    require_cis=_bool(payload.get("require_cis"), False),
                     item_limit=limit,
                     packer_user_ids=raw_ids,
                     created_by_user_id=int(user.id) if user else None,
@@ -201,6 +318,29 @@ def register_warehouse_fbs_packing_routes(
                 content=pdf,
                 media_type="application/pdf",
                 headers={"Content-Disposition": _attachment_disposition("yandex_fbs_labels.pdf")},
+            )
+
+        @app.get("/api/warehouse/fbs-packing/jobs/{job_id}/marking.xlsx")
+        async def api_fbs_packing_job_marking_xlsx(
+            job_id: int,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> Response:
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Задание не найдено")
+            try:
+                content = await asyncio.to_thread(build_packing_marking_xlsx, job)
+            except ImportError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Не установлен openpyxl: pip install openpyxl",
+                ) from exc
+            return Response(
+                content=content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": _attachment_disposition(f"fbs_marking_{job_id}.xlsx")
+                },
             )
 
     def _require_packer(actor: TasksApiActor, job_id: int) -> int:
@@ -293,6 +433,9 @@ def _register_packer_prefix(
         product_id: int | None,
         *,
         batch: bool = False,
+        cis_raw: str = "",
+        cis_key: str = "",
+        cis_gtin: str = "",
     ) -> dict:
         lines = packing_repo.allocate_lines(
             job_id,
@@ -300,6 +443,9 @@ def _register_packer_prefix(
             sku=sku,
             product_id=product_id,
             batch=batch,
+            cis_raw=cis_raw,
+            cis_key=cis_key,
+            cis_gtin=cis_gtin,
         )
         pdfs_b64: list[str] = []
         for line in lines:
@@ -315,8 +461,27 @@ def _register_packer_prefix(
         }
 
     def _scan_product_sync(job_id: int, user_id: int, barcode: str, *, batch: bool) -> dict:
-        sku, product_id = lookup_scan_product(catalog_repo, barcode)
-        return _allocate_response(job_id, user_id, sku, product_id, batch=batch)
+        job = packing_repo.get_job(job_id)
+        if job is None:
+            raise ValueError("Задание не найдено")
+        resolved = resolve_packing_scan(catalog_repo, barcode)
+        if (
+            job.require_cis
+            and not resolved.is_cis
+            and product_has_marking_gtin(catalog_repo, resolved.product_id)
+        ):
+            raise ValueError("Нужен КИЗ (Data Matrix), обычный штрихкод не принимается")
+        use_batch = bool(batch) and not resolved.is_cis
+        return _allocate_response(
+            job_id,
+            user_id,
+            resolved.sku,
+            resolved.product_id,
+            batch=use_batch,
+            cis_raw=resolved.cis_raw,
+            cis_key=resolved.cis_key,
+            cis_gtin=resolved.cis_gtin,
+        )
 
     def _batch_flag(body: dict | None) -> bool:
         raw = (body or {}).get("batch")
@@ -356,6 +521,11 @@ def _register_packer_prefix(
                 raise HTTPException(status_code=400, detail="Некорректный товар") from exc
         batch = _batch_flag(payload)
         try:
+            job = packing_repo.get_job(job_id)
+            if job is None:
+                raise ValueError("Задание не найдено")
+            if job.require_cis and product_has_marking_gtin(catalog_repo, product_id):
+                raise ValueError("Для маркируемого товара нужен пик КИЗ, не ручной выбор")
             return await asyncio.to_thread(
                 _allocate_response,
                 job_id,

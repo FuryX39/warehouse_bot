@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from app.catalog_repository import CatalogRepository
 from app.config import Settings
 from app.fbs_labels_common import merge_label_pdfs
-from app.fbs_packing_repository import FbsPackingJobRow, FbsPackingRepository, MARKETPLACE_YANDEX
+from app.fbs_packing_repository import (
+    FbsPackingJobRow,
+    FbsPackingRepository,
+    MARKETPLACE_WB,
+    MARKETPLACE_YANDEX,
+)
 from app.google_sheet_write import fbs_list_sheet_title
+from app.marking.cis import parse_cis
+from app.marking.match import build_gtin_index
 from app.yandex_fbs_labels import (
     YandexFbsListRow,
     _export_list_to_google_sheet,
@@ -17,7 +25,13 @@ from app.yandex_fbs_labels import (
     load_yandex_fbs_list_rows,
     normalize_yandex_fbs_substatus,
 )
+from app.wb_fbs_labels import (
+    collect_wb_unit_labels,
+    load_wb_fbs_list_rows,
+    normalize_wb_fbs_substatus,
+)
 from app.adapters.yandex_market import YandexMarketAdapter
+from app.adapters.wildberries import WildberriesAdapter
 
 
 def _bool(value: object, default: bool = True) -> bool:
@@ -67,6 +81,57 @@ def lookup_scan_product(
     return str(product.get("sku") or ""), int(product["id"]) if product.get("id") else None
 
 
+@dataclass(frozen=True)
+class PackingScanResolve:
+    sku: str
+    product_id: int | None
+    cis_raw: str = ""
+    cis_key: str = ""
+    cis_gtin: str = ""
+
+    @property
+    def is_cis(self) -> bool:
+        return bool(self.cis_key)
+
+
+def product_has_marking_gtin(catalog: CatalogRepository, product_id: int | None) -> bool:
+    """Товар маркируемый, если есть в GTIN-индексе (явный GTIN или валидный EAN как GTIN-14)."""
+    if not product_id:
+        return False
+    index, _conflicts = build_gtin_index(catalog)
+    want = int(product_id)
+    return any(ref.product_id == want for ref in index.values())
+
+
+def resolve_packing_scan(catalog: CatalogRepository, raw: str) -> PackingScanResolve:
+    """
+    КИЗ → товар по GTIN (или EAN как GTIN-14).
+    Обычный EAN/SKU никогда не считается КИЗом и не пишет маркировку.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("Пустой штрихкод")
+    record = parse_cis(text)
+    if record.ok:
+        index, conflicts = build_gtin_index(catalog)
+        gtin = record.gtin
+        if gtin in conflicts:
+            skus = ", ".join(conflicts[gtin])
+            raise ValueError(f"GTIN {gtin} конфликт в каталоге ({skus})")
+        product = index.get(gtin)
+        if product is None:
+            raise ValueError(f"GTIN {gtin} не найден в каталоге")
+        return PackingScanResolve(
+            sku=product.sku,
+            product_id=product.product_id,
+            cis_raw=record.raw or text,
+            cis_key=record.cis or text,
+            cis_gtin=gtin,
+        )
+    sku, product_id = lookup_scan_product(catalog, text)
+    return PackingScanResolve(sku=sku, product_id=product_id)
+
+
 def create_yandex_packing_job(
     *,
     adapter: YandexMarketAdapter,
@@ -78,6 +143,7 @@ def create_yandex_packing_job(
     item_limit: int | None,
     packer_user_ids: list[int],
     created_by_user_id: int | None,
+    require_cis: bool = False,
 ) -> FbsPackingJobRow:
     substatus = normalize_yandex_fbs_substatus(order_substatus)
     list_rows, selected_orders, warnings, _available = load_yandex_fbs_list_rows(
@@ -176,6 +242,7 @@ def create_yandex_packing_job(
         marketplace=MARKETPLACE_YANDEX,
         order_substatus=substatus,
         build_list=bool(build_list),
+        require_cis=bool(require_cis),
         created_by_user_id=created_by_user_id,
         packer_user_ids=packer_user_ids,
         sheet_url=sheet_url,
@@ -184,6 +251,122 @@ def create_yandex_packing_job(
         merged_pdf=merged_pdf,
         lines=line_payloads,
     )
+
+
+def create_wb_packing_job(
+    *,
+    adapter: WildberriesAdapter,
+    catalog: CatalogRepository,
+    packing_repo: FbsPackingRepository,
+    order_substatus: str,
+    item_limit: int | None,
+    packer_user_ids: list[int],
+    created_by_user_id: int | None,
+    require_cis: bool = False,
+    supply_id: str = "",
+) -> FbsPackingJobRow:
+    substatus = normalize_wb_fbs_substatus(order_substatus)
+    list_rows, selected_orders, warnings, _available = load_wb_fbs_list_rows(
+        adapter,
+        substatus=substatus,
+        supply_id=supply_id,
+        max_units=item_limit,
+    )
+    if not list_rows:
+        raise ValueError("Нет заказов для задания")
+
+    units, label_warnings, effective_supply = collect_wb_unit_labels(
+        adapter,
+        selected_orders,
+        substatus=substatus,
+        supply_id=supply_id if substatus == "READY_TO_SHIP" else "",
+    )
+    warnings.extend(label_warnings)
+    units_with_pdf = [unit for unit in units if unit.pdf]
+    if not units_with_pdf:
+        detail = "; ".join(warnings[:5]) if warnings else "нет PDF"
+        raise ValueError(f"Не удалось получить стикеры WB: {detail}")
+
+    catalog_by_sku, missing = resolve_catalog_products(
+        catalog, [unit.sku for unit in units_with_pdf]
+    )
+    for sku in missing:
+        warnings.append(f"Артикул «{sku}» не найден в каталоге — строка всё равно в задании")
+
+    pdfs = [unit.pdf for unit in units_with_pdf if unit.pdf]
+    merged_pdf = merge_label_pdfs(pdfs)
+    if merged_pdf is None and len(pdfs) == 1:
+        merged_pdf = pdfs[0]
+
+    line_payloads = []
+    for seq, unit in enumerate(units_with_pdf, start=1):
+        product = catalog_by_sku.get(unit.sku.casefold())
+        line_payloads.append(
+            {
+                "seq": seq,
+                "sku": unit.sku,
+                "product_id": int(product["id"]) if product else None,
+                "product_name": str(product["name"]) if product else "",
+                "order_id": unit.order_id,
+                "box_id": None,
+                "place_index": 1,
+                "place_total": 1,
+                "scan_keys": unit.scan_keys(),
+                "pdf": unit.pdf,
+            }
+        )
+    return packing_repo.create_job(
+        marketplace=MARKETPLACE_WB,
+        order_substatus=substatus,
+        build_list=False,
+        require_cis=bool(require_cis),
+        supply_id=effective_supply,
+        created_by_user_id=created_by_user_id,
+        packer_user_ids=packer_user_ids,
+        warnings=warnings,
+        merged_pdf=merged_pdf,
+        lines=line_payloads,
+    )
+
+
+def build_packing_marking_xlsx(job: FbsPackingJobRow) -> bytes:
+    """Excel на лету: полный список строк и только строки с КИЗ."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    from app.marking.cis import replace_gs_for_excel
+
+    wb = Workbook()
+    headers = ("Заказ", "SKU", "КИЗ")
+    header_font = Font(bold=True)
+    header_fill = PatternFill("solid", fgColor="E8EEF4")
+
+    def write_sheet(ws, lines: list) -> None:
+        ws.append(list(headers))
+        for col in range(1, 4):
+            cell = ws.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+        for line in lines:
+            cis = replace_gs_for_excel(line.cis_raw or line.cis_key or "")
+            ws.append([line.order_display, line.sku, cis])
+        ws.column_dimensions["A"].width = 22
+        ws.column_dimensions["B"].width = 20
+        ws.column_dimensions["C"].width = 48
+
+    full = wb.active
+    full.title = "Все строки"
+    ordered = sorted(job.lines, key=lambda item: (item.seq, item.id))
+    write_sheet(full, ordered)
+
+    with_cis = wb.create_sheet("С КИЗ")
+    write_sheet(with_cis, [line for line in ordered if line.cis_key])
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def list_rows_payload(list_rows: list[YandexFbsListRow], orders) -> list[dict[str, Any]]:

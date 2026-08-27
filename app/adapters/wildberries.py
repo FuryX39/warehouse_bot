@@ -572,3 +572,178 @@ class WildberriesAdapter(MarketplaceAdapter):
             raise RuntimeError(
                 "Wildberries stock sync failed for warehouse(s): " + "; ".join(errors)
             )
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": self.api_token}
+
+    def fetch_orders_by_ids(self, order_ids: list[int]) -> list[dict]:
+        want = {int(x) for x in order_ids if int(x) > 0}
+        if not want:
+            return []
+        found: dict[int, dict] = {}
+        for order in self.fetch_new_assembly_orders():
+            try:
+                oid = int(order.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if oid in want:
+                found[oid] = order
+        remaining = want - set(found.keys())
+        if remaining:
+            headers = self._auth_headers()
+            for order in self._fetch_all_assembly_orders(headers):
+                try:
+                    oid = int(order.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if oid in remaining:
+                    found[oid] = order
+                    remaining.discard(oid)
+                if not remaining:
+                    break
+        return [found[oid] for oid in order_ids if oid in found]
+
+    def fetch_new_assembly_orders(self) -> list[dict]:
+        if not self.is_configured():
+            return []
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/v3/orders/new",
+            headers=self._auth_headers(),
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_http_error(response)
+        data = response.json() or {}
+        return [item for item in data.get("orders") or [] if isinstance(item, dict)]
+
+    def list_supplies(self, *, limit: int = 100, next_cursor: int = 0) -> tuple[list[dict], int]:
+        if not self.is_configured():
+            return [], 0
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/v3/supplies",
+            headers=self._auth_headers(),
+            params={"limit": max(1, min(int(limit), 1000)), "next": int(next_cursor or 0)},
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_http_error(response)
+        data = response.json() or {}
+        supplies = [item for item in data.get("supplies") or [] if isinstance(item, dict)]
+        try:
+            nxt = int(data.get("next") or 0)
+        except (TypeError, ValueError):
+            nxt = 0
+        return supplies, nxt
+
+    def list_open_supplies(self, *, max_items: int = 200) -> list[dict]:
+        """Активные поставки (не закрытые) для выбора при «готово к отгрузке»."""
+        out: list[dict] = []
+        nxt = 0
+        while len(out) < max_items:
+            batch, nxt = self.list_supplies(limit=min(100, max_items - len(out)), next_cursor=nxt)
+            if not batch:
+                break
+            for item in batch:
+                if item.get("done"):
+                    continue
+                out.append(item)
+                if len(out) >= max_items:
+                    break
+            if not nxt or nxt == 0:
+                break
+        return out
+
+    def create_supply(self, name: str) -> str:
+        text = str(name or "").strip()
+        if not text:
+            raise ValueError("Укажите название поставки WB")
+        response = _wb_request(
+            "POST",
+            f"{self.base_url}/api/v3/supplies",
+            headers={**self._auth_headers(), "Content-Type": "application/json"},
+            json={"name": text[:128]},
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_http_error(response)
+        data = response.json() or {}
+        supply_id = str(data.get("id") or "").strip()
+        if not supply_id:
+            raise ValueError("WB не вернул ID поставки")
+        return supply_id
+
+    def fetch_supply_order_ids(self, supply_id: str) -> list[int]:
+        sid = str(supply_id or "").strip()
+        if not sid:
+            raise ValueError("Укажите поставку WB")
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/marketplace/v3/supplies/{sid}/order-ids",
+            headers=self._auth_headers(),
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_http_error(response)
+        data = response.json() or {}
+        out: list[int] = []
+        for raw in data.get("orderIds") or []:
+            try:
+                out.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def add_orders_to_supply(self, supply_id: str, order_ids: list[int]) -> None:
+        sid = str(supply_id or "").strip()
+        ids = [int(x) for x in order_ids if int(x) > 0]
+        if not sid or not ids:
+            return
+        for i in range(0, len(ids), 100):
+            chunk = ids[i : i + 100]
+            response = _wb_request(
+                "PATCH",
+                f"{self.base_url}/api/marketplace/v3/supplies/{sid}/orders",
+                headers={**self._auth_headers(), "Content-Type": "application/json"},
+                json={"orders": chunk},
+                timeout=90,
+            )
+            if not response.ok:
+                raise _wb_http_error(response)
+
+    def fetch_order_stickers_png(self, order_ids: list[int]) -> dict[int, dict[str, str]]:
+        """orderId -> {barcode, partA, partB, png_b64}."""
+        ids = [int(x) for x in order_ids if int(x) > 0]
+        if not ids:
+            return {}
+        result: dict[int, dict[str, str]] = {}
+        for i in range(0, len(ids), 100):
+            chunk = ids[i : i + 100]
+            response = _wb_request(
+                "POST",
+                f"{self.base_url}/api/v3/orders/stickers",
+                headers={**self._auth_headers(), "Content-Type": "application/json"},
+                params={"type": "png", "width": 58, "height": 40},
+                json={"orders": chunk},
+                timeout=120,
+            )
+            if not response.ok:
+                raise _wb_http_error(response)
+            for row in (response.json() or {}).get("stickers") or []:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    oid = int(row.get("orderId"))
+                except (TypeError, ValueError):
+                    continue
+                file_b64 = str(row.get("file") or "")
+                if not file_b64:
+                    continue
+                result[oid] = {
+                    "barcode": str(row.get("barcode") or ""),
+                    "partA": str(row.get("partA") or ""),
+                    "partB": str(row.get("partB") or ""),
+                    "png_b64": file_b64,
+                }
+        return result

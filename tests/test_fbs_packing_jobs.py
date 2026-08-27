@@ -528,3 +528,271 @@ def test_packer_batch_cancel_resets_all_printed(tmp_path) -> None:
     assert packing.get_line(job_id, job.lines[0].id).status == LINE_PENDING
     assert packing.get_line(job_id, job.lines[1].id).status == LINE_PENDING
     assert packing.get_line(job_id, job.lines[2].id).status == LINE_PENDING
+
+
+GTIN13 = "4600605012345"
+GTIN14 = "04600605012345"
+
+
+def _cis(gtin14: str, serial: str = "Ab12Xy", *, with_gs: bool = True) -> str:
+    from app.marking.cis import GS
+
+    body = f"01{gtin14}21{serial}"
+    crypto = "91FFD092abcdef0123456789"
+    if with_gs:
+        return f"{body}{GS}91FFD0{GS}92abcdef0123456789"
+    return body + crypto
+
+
+def _seed_cis_job(packing: FbsPackingRepository, catalog: CatalogRepository, packer_id: int, *, require_cis: bool):
+    product = catalog.create_product(
+        {
+            "name": "Маркируемый",
+            "sku": "SKU-CIS",
+            "code": "00099",
+            "is_kit": False,
+            "barcodes": [{"barcode": "2000000000092", "label": "", "group": ""}],
+            "gtins": [GTIN13],
+            "components": [],
+        }
+    )
+    plain = catalog.create_product(
+        {
+            "name": "Без маркировки",
+            "sku": "SKU-PLAIN",
+            "code": "00098",
+            "is_kit": False,
+            "barcodes": [{"barcode": "PLAIN-NO-GTIN", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    job = packing.create_job(
+        marketplace="yandex",
+        order_substatus="STARTED",
+        build_list=False,
+        require_cis=require_cis,
+        created_by_user_id=1,
+        packer_user_ids=[packer_id],
+        lines=[
+            {
+                "seq": 1,
+                "sku": "SKU-CIS",
+                "product_id": product.id,
+                "product_name": "Маркируемый",
+                "order_id": "200001",
+                "box_id": 8001,
+                "place_index": 1,
+                "place_total": 2,
+                "scan_keys": ["200001", "200001 1/2", "8001"],
+                "pdf": _pdf("C1"),
+            },
+            {
+                "seq": 2,
+                "sku": "SKU-CIS",
+                "product_id": product.id,
+                "product_name": "Маркируемый",
+                "order_id": "200001",
+                "box_id": 8002,
+                "place_index": 2,
+                "place_total": 2,
+                "scan_keys": ["200001", "200001 2/2", "8002"],
+                "pdf": _pdf("C2"),
+            },
+            {
+                "seq": 3,
+                "sku": "SKU-PLAIN",
+                "product_id": plain.id,
+                "product_name": "Без маркировки",
+                "order_id": "200002",
+                "box_id": 8003,
+                "place_index": 1,
+                "place_total": 1,
+                "scan_keys": ["200002", "8003"],
+                "pdf": _pdf("P1"),
+            },
+        ],
+    )
+    return job, product, plain
+
+
+def _cis_client(tmp_path, *, require_cis: bool = False):
+    catalog, db_url = _catalog(tmp_path, "cis.db")
+    packing = _packing_repo(tmp_path, db_url)
+    packer = _user(7, "packer")
+    job, product, plain = _seed_cis_job(packing, catalog, packer.id, require_cis=require_cis)
+
+    app = FastAPI()
+
+    def require_fbs_access():
+        return packer
+
+    def require_warehouse_user():
+        return packer
+
+    def require_tasks_access():
+        return TasksApiActor(user=packer, via_api_token=False)
+
+    register_warehouse_fbs_packing_routes(
+        app,
+        packing,
+        catalog,
+        SimpleNamespace(list_assignee_picker=lambda: []),
+        _settings(),
+        SimpleNamespace(adapters=[]),
+        require_fbs_access,
+        require_warehouse_user,
+        require_tasks_access,
+    )
+    return TestClient(app), packing, job, product, plain
+
+
+def test_cis_scan_allocates_one_line_even_with_batch(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    cis = _cis(GTIN14, serial="Ser001")
+
+    resp = client.post(f"{prefix}/scan-product", json={"barcode": cis, "batch": True})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert len(payload["lines"]) == 1
+    assert len(payload["pdfs_base64"]) == 1
+    assert payload["line"]["sku"] == "SKU-CIS"
+    assert payload["line"]["has_cis"] is True
+    line = packing.get_line(job.id, payload["line"]["id"])
+    assert line is not None
+    assert line.cis_gtin == GTIN14
+    assert line.cis_key
+    assert packing.get_line(job.id, job.lines[1].id).status == LINE_PENDING
+
+
+def test_require_cis_rejects_plain_barcode_for_gtin_product(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=True)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    rejected = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
+    assert rejected.status_code == 400
+    assert "КИЗ" in rejected.json()["detail"]
+
+    ok = client.post(f"{prefix}/scan-product", json={"barcode": _cis(GTIN14, serial="SerOk1")})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["line"]["has_cis"] is True
+
+
+def test_require_cis_off_allows_barcode_or_cis(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    by_barcode = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
+    assert by_barcode.status_code == 200, by_barcode.text
+    assert by_barcode.json()["line"]["has_cis"] is False
+    line_id = by_barcode.json()["line"]["id"]
+    client.post(f"{prefix}/lines/{line_id}/cancel-print")
+
+    by_cis = client.post(f"{prefix}/scan-product", json={"barcode": _cis(GTIN14, serial="SerAlt")})
+    assert by_cis.status_code == 200, by_cis.text
+    assert by_cis.json()["line"]["has_cis"] is True
+
+
+def test_duplicate_cis_rejected(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    cis = _cis(GTIN14, serial="DupSer")
+
+    first = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert first.status_code == 200, first.text
+    line_id = first.json()["line"]["id"]
+    labeled = client.post(f"{prefix}/scan-label", json={"barcode": "200001 1/2"})
+    assert labeled.status_code == 200, labeled.text
+    assert packing.get_line(job.id, line_id).status == LINE_DONE
+
+    again = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert again.status_code == 400
+    assert "уже использован" in again.json()["detail"]
+
+
+def test_cancel_print_clears_cis(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    cis = _cis(GTIN14, serial="CancelMe")
+
+    printed = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert printed.status_code == 200, printed.text
+    line_id = printed.json()["line"]["id"]
+    assert packing.get_line(job.id, line_id).cis_key
+
+    cancelled = client.post(f"{prefix}/lines/{line_id}/cancel-print")
+    assert cancelled.status_code == 200, cancelled.text
+    line = packing.get_line(job.id, line_id)
+    assert line is not None
+    assert line.status == LINE_PENDING
+    assert line.cis_key == ""
+    assert line.cis_raw == ""
+    assert line.cis_gtin == ""
+
+    again = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert again.status_code == 200, again.text
+
+
+def test_plain_ean_does_not_write_cis_fields(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    resp = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
+    assert resp.status_code == 200, resp.text
+    line = packing.get_line(job.id, resp.json()["line"]["id"])
+    assert line is not None
+    assert line.cis_key == ""
+    assert line.cis_gtin == ""
+    assert resp.json()["line"]["has_cis"] is False
+
+
+def test_marking_xlsx_two_sheets(tmp_path) -> None:
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    cis = _cis(GTIN14, serial="Xlsx01")
+    printed = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert printed.status_code == 200, printed.text
+    line_id = printed.json()["line"]["id"]
+    done = client.post(f"{prefix}/scan-label", json={"barcode": "200001 1/2"})
+    assert done.status_code == 200, done.text
+
+    xlsx = client.get(f"/api/warehouse/fbs-packing/jobs/{job.id}/marking.xlsx")
+    assert xlsx.status_code == 200, xlsx.text
+    wb = load_workbook(BytesIO(xlsx.content))
+    assert wb.sheetnames == ["Все строки", "С КИЗ"]
+    full = wb["Все строки"]
+    only = wb["С КИЗ"]
+    assert full.max_row == 4  # header + 3 lines
+    assert only.max_row == 2  # header + 1 with CIS
+    assert full.cell(1, 1).value == "Заказ"
+    assert full.cell(1, 2).value == "SKU"
+    assert full.cell(1, 3).value == "КИЗ"
+    # first data row is seq 1 with CIS
+    assert full.cell(2, 2).value == "SKU-CIS"
+    assert full.cell(2, 3).value
+    assert "<GS>" in str(full.cell(2, 3).value) or str(full.cell(2, 3).value).startswith("01")
+    assert only.cell(2, 2).value == "SKU-CIS"
+    assert packing.get_line(job.id, line_id).status == LINE_DONE
+
+
+def test_require_cis_blocks_pick_sku_for_markable(tmp_path) -> None:
+    client, packing, job, product, plain = _cis_client(tmp_path, require_cis=True)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    blocked = client.post(
+        f"{prefix}/pick-sku",
+        json={"sku": "SKU-CIS", "product_id": product.id},
+    )
+    assert blocked.status_code == 400
+
+    allowed = client.post(
+        f"{prefix}/pick-sku",
+        json={"sku": "SKU-PLAIN", "product_id": plain.id},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["line"]["sku"] == "SKU-PLAIN"

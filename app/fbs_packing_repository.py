@@ -25,6 +25,7 @@ LINE_PRINTED = "printed"
 LINE_DONE = "done"
 
 MARKETPLACE_YANDEX = "yandex"
+MARKETPLACE_WB = "wildberries"
 
 
 class _Base(DeclarativeBase):
@@ -38,6 +39,8 @@ class FbsPackingJob(_Base):
     marketplace: Mapped[str] = mapped_column(String(32), nullable=False, default=MARKETPLACE_YANDEX)
     order_substatus: Mapped[str] = mapped_column(String(32), nullable=False, default="STARTED")
     build_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    require_cis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supply_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_STATUS_OPEN)
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sheet_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
@@ -78,6 +81,9 @@ class FbsPackingLine(_Base):
     printed_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     done_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     done_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cis_raw: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cis_key: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    cis_gtin: Mapped[str] = mapped_column(String(32), nullable=False, default="")
 
 
 @dataclass
@@ -98,6 +104,9 @@ class FbsPackingLineRow:
     printed_at_ts: int | None
     done_at_ts: int | None
     done_by_user_id: int | None
+    cis_raw: str = ""
+    cis_key: str = ""
+    cis_gtin: str = ""
 
     @property
     def order_display(self) -> str:
@@ -126,6 +135,8 @@ class FbsPackingJobRow:
     line_done: int
     line_pending: int
     line_printed: int
+    require_cis: bool = False
+    supply_id: str = ""
     lines: list[FbsPackingLineRow] = field(default_factory=list)
 
 
@@ -169,6 +180,41 @@ class FbsPackingRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_cis_columns()
+
+    def _migrate_cis_columns(self) -> None:
+        from sqlalchemy import inspect, text
+
+        tables = set(inspect(self.engine).get_table_names())
+        with Session(self.engine) as session:
+            if "fbs_packing_jobs" in tables:
+                job_cols = {c["name"] for c in inspect(self.engine).get_columns("fbs_packing_jobs")}
+                if "require_cis" not in job_cols:
+                    session.execute(
+                        text(
+                            "ALTER TABLE fbs_packing_jobs "
+                            "ADD COLUMN require_cis BOOLEAN NOT NULL DEFAULT 0"
+                        )
+                    )
+                if "supply_id" not in job_cols:
+                    session.execute(
+                        text(
+                            "ALTER TABLE fbs_packing_jobs "
+                            "ADD COLUMN supply_id VARCHAR(64) NOT NULL DEFAULT ''"
+                        )
+                    )
+            if "fbs_packing_lines" in tables:
+                line_cols = {c["name"] for c in inspect(self.engine).get_columns("fbs_packing_lines")}
+                alters = []
+                if "cis_raw" not in line_cols:
+                    alters.append("ADD COLUMN cis_raw TEXT NOT NULL DEFAULT ''")
+                if "cis_key" not in line_cols:
+                    alters.append("ADD COLUMN cis_key VARCHAR(512) NOT NULL DEFAULT ''")
+                if "cis_gtin" not in line_cols:
+                    alters.append("ADD COLUMN cis_gtin VARCHAR(32) NOT NULL DEFAULT ''")
+                for clause in alters:
+                    session.execute(text(f"ALTER TABLE fbs_packing_lines {clause}"))
+            session.commit()
 
     def _line_row(self, row: FbsPackingLine) -> FbsPackingLineRow:
         return FbsPackingLineRow(
@@ -188,6 +234,9 @@ class FbsPackingRepository:
             printed_at_ts=int(row.printed_at_ts) if row.printed_at_ts else None,
             done_at_ts=int(row.done_at_ts) if row.done_at_ts else None,
             done_by_user_id=int(row.done_by_user_id) if row.done_by_user_id else None,
+            cis_raw=str(getattr(row, "cis_raw", None) or ""),
+            cis_key=str(getattr(row, "cis_key", None) or ""),
+            cis_gtin=str(getattr(row, "cis_gtin", None) or ""),
         )
 
     def _counts(self, session: Session, job_id: int) -> tuple[int, int, int, int]:
@@ -227,6 +276,8 @@ class FbsPackingRepository:
             marketplace=str(job.marketplace or MARKETPLACE_YANDEX),
             order_substatus=str(job.order_substatus or "STARTED"),
             build_list=bool(job.build_list),
+            require_cis=bool(getattr(job, "require_cis", False)),
+            supply_id=str(getattr(job, "supply_id", None) or ""),
             status=str(job.status or JOB_STATUS_OPEN),
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
             sheet_url=str(job.sheet_url or ""),
@@ -257,6 +308,8 @@ class FbsPackingRepository:
         warnings: list[str] | None = None,
         merged_pdf: bytes | None = None,
         lines: list[dict[str, Any]],
+        require_cis: bool = False,
+        supply_id: str = "",
     ) -> FbsPackingJobRow:
         if not lines:
             raise ValueError("Нет строк с ярлыками для задания")
@@ -288,6 +341,8 @@ class FbsPackingRepository:
                 marketplace=str(marketplace or MARKETPLACE_YANDEX),
                 order_substatus=str(order_substatus or "STARTED"),
                 build_list=bool(build_list),
+                require_cis=bool(require_cis),
+                supply_id=str(supply_id or ""),
                 status=JOB_STATUS_OPEN,
                 created_by_user_id=int(created_by_user_id) if created_by_user_id else None,
                 sheet_url=str(sheet_url or ""),
@@ -333,14 +388,17 @@ class FbsPackingRepository:
             return self._job_row(session, job, include_lines=True)
 
     def list_jobs(
-        self, *, limit: int = 50, packer_names: dict[int, str] | None = None
+        self,
+        *,
+        limit: int = 50,
+        packer_names: dict[int, str] | None = None,
+        marketplace: str | None = None,
     ) -> list[FbsPackingJobRow]:
         with Session(self.engine) as session:
-            rows = session.scalars(
-                select(FbsPackingJob)
-                .order_by(FbsPackingJob.id.desc())
-                .limit(max(1, min(int(limit), 200)))
-            ).all()
+            query = select(FbsPackingJob).order_by(FbsPackingJob.id.desc()).limit(max(1, min(int(limit), 200)))
+            if marketplace:
+                query = query.where(FbsPackingJob.marketplace == str(marketplace))
+            rows = session.scalars(query).all()
             return [self._job_row(session, row, packer_names=packer_names) for row in rows]
 
     def list_my_jobs(self, user_id: int) -> list[FbsPackingJobRow]:
@@ -452,6 +510,9 @@ class FbsPackingRepository:
         sku: str = "",
         product_id: int | None = None,
         batch: bool = False,
+        cis_raw: str = "",
+        cis_key: str = "",
+        cis_gtin: str = "",
     ) -> FbsPackingLineRow:
         lines = self.allocate_lines(
             job_id,
@@ -459,6 +520,9 @@ class FbsPackingRepository:
             sku=sku,
             product_id=product_id,
             batch=batch,
+            cis_raw=cis_raw,
+            cis_key=cis_key,
+            cis_gtin=cis_gtin,
         )
         return lines[0]
 
@@ -470,9 +534,17 @@ class FbsPackingRepository:
         sku: str = "",
         product_id: int | None = None,
         batch: bool = False,
+        cis_raw: str = "",
+        cis_key: str = "",
+        cis_gtin: str = "",
     ) -> list[FbsPackingLineRow]:
         if not str(sku or "").strip() and not product_id:
             raise ValueError("Нет артикула для выделения")
+        cis_key_n = str(cis_key or "").strip()
+        cis_raw_n = str(cis_raw or "").strip()
+        cis_gtin_n = str(cis_gtin or "").strip()
+        if cis_key_n:
+            batch = False
         now = int(time.time())
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
@@ -484,8 +556,26 @@ class FbsPackingRepository:
             ]
             if foreign:
                 raise ValueError(
-                    "Сначала наклейте ярлык активного товара, закройте строку вручную или отмените печать"
+                    "Сначала наклейте ярлык активного товара или отмените печать"
                 )
+
+            if cis_key_n:
+                existing_with_key = list(
+                    session.scalars(
+                        select(FbsPackingLine).where(
+                            FbsPackingLine.job_id == int(job_id),
+                            FbsPackingLine.cis_key == cis_key_n,
+                        )
+                    ).all()
+                )
+                if existing_with_key:
+                    same_printed = (
+                        printed_rows
+                        and len(existing_with_key) == 1
+                        and int(existing_with_key[0].id) == int(printed_rows[0].id)
+                    )
+                    if not same_printed:
+                        raise ValueError("Этот КИЗ уже использован в задании")
 
             if not batch:
                 if printed_rows:
@@ -504,6 +594,10 @@ class FbsPackingRepository:
                 )
                 if match is None:
                     raise ValueError("Этого товара нет среди оставшихся в задании")
+                if cis_key_n:
+                    match.cis_raw = cis_raw_n
+                    match.cis_key = cis_key_n
+                    match.cis_gtin = cis_gtin_n
                 match.status = LINE_PRINTED
                 match.printed_at_ts = now
                 if job.status == JOB_STATUS_OPEN:
@@ -599,6 +693,9 @@ class FbsPackingRepository:
             for row in printed_rows:
                 row.status = LINE_PENDING
                 row.printed_at_ts = None
+                row.cis_raw = ""
+                row.cis_key = ""
+                row.cis_gtin = ""
             job.updated_at_ts = int(time.time())
             session.commit()
             session.refresh(target)
@@ -637,6 +734,8 @@ class FbsPackingRepository:
             "marketplace": job.marketplace,
             "order_substatus": job.order_substatus,
             "build_list": job.build_list,
+            "require_cis": bool(job.require_cis),
+            "supply_id": job.supply_id,
             "status": job.status,
             "created_by_user_id": job.created_by_user_id,
             "sheet_url": job.sheet_url,
@@ -677,4 +776,7 @@ class FbsPackingRepository:
             "place_total": line.place_total,
             "quantity": 1,
             "status": line.status,
+            "cis_key": line.cis_key,
+            "cis_gtin": line.cis_gtin,
+            "has_cis": bool(line.cis_key),
         }
