@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from app.storage_warehouse_repository import StorageWarehouseRepository
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Integer,
     String,
@@ -99,7 +100,7 @@ class SyncState(Base):
     __tablename__ = "sync_state"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value_int: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    value_int: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
 class AdapterStockState(Base):
@@ -217,6 +218,7 @@ class InventoryRepository:
         self._ensure_product_stocks_is_top_column()
         self._ensure_nomenclature_image_url_column()
         self._ensure_nomenclature_barcodes_column()
+        self._ensure_sync_state_value_int_bigint()
 
     def _ensure_product_stocks_is_top_column(self) -> None:
         insp = inspect(self.engine)
@@ -271,6 +273,22 @@ class InventoryRepository:
             return
         with self.engine.begin() as conn:
             conn.execute(stmt)
+
+    def _ensure_sync_state_value_int_bigint(self) -> None:
+        """SQLite INTEGER is 64-bit; Postgres INTEGER is 32-bit and cannot store stock hashes."""
+        if self.engine.dialect.name != "postgresql":
+            return
+        insp = inspect(self.engine)
+        if "sync_state" not in insp.get_table_names():
+            return
+        col = next((c for c in insp.get_columns("sync_state") if c["name"] == "value_int"), None)
+        if col is None:
+            return
+        col_type = str(col.get("type") or "").upper()
+        if "BIGINT" in col_type:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE sync_state ALTER COLUMN value_int TYPE BIGINT"))
 
     def upsert_nomenclature_items(self, items: dict[str, tuple[str, str, list[str]]]) -> int:
         """Массовая запись номенклатуры: sku -> (name, image_url, barcodes). Пустые SKU пропускаются."""

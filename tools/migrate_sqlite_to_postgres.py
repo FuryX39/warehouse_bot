@@ -17,13 +17,15 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from sqlalchemy import Boolean, MetaData, String, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql.schema import Table
 
 from app.db import coerce_sql_bool, create_db_engine
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _as_url(raw: str) -> str:
