@@ -12,6 +12,7 @@ from fastapi.responses import Response
 
 from app.catalog_repository import CatalogRepository
 from app.config import Settings
+from app.fbs_labels_common import build_labels_zip
 from app.fbs_packing_repository import FbsPackingRepository, MARKETPLACE_WB
 from app.fbs_packing_service import (
     _bool,
@@ -436,6 +437,7 @@ def _register_packer_prefix(
         cis_raw: str = "",
         cis_key: str = "",
         cis_gtin: str = "",
+        include_pdf: bool = True,
     ) -> dict:
         lines = packing_repo.allocate_lines(
             job_id,
@@ -448,19 +450,27 @@ def _register_packer_prefix(
             cis_gtin=cis_gtin,
         )
         pdfs_b64: list[str] = []
-        for line in lines:
-            pdf = packing_repo.read_line_pdf(job_id, line.id)
-            pdfs_b64.append(base64.b64encode(pdf).decode("ascii"))
+        if include_pdf:
+            for line in lines:
+                pdf = packing_repo.read_line_pdf(job_id, line.id)
+                pdfs_b64.append(base64.b64encode(pdf).decode("ascii"))
         job = packer_job_payload(job_id)
         return {
             "line": packing_repo.line_to_dict(lines[0]),
             "lines": [packing_repo.line_to_dict(line) for line in lines],
             "job": job,
-            "pdf_base64": pdfs_b64[0],
+            "pdf_base64": pdfs_b64[0] if pdfs_b64 else "",
             "pdfs_base64": pdfs_b64,
         }
 
-    def _scan_product_sync(job_id: int, user_id: int, barcode: str, *, batch: bool) -> dict:
+    def _scan_product_sync(
+        job_id: int,
+        user_id: int,
+        barcode: str,
+        *,
+        batch: bool,
+        include_pdf: bool = True,
+    ) -> dict:
         job = packing_repo.get_job(job_id)
         if job is None:
             raise ValueError("Задание не найдено")
@@ -481,6 +491,7 @@ def _register_packer_prefix(
             cis_raw=resolved.cis_raw,
             cis_key=resolved.cis_key,
             cis_gtin=resolved.cis_gtin,
+            include_pdf=include_pdf,
         )
 
     def _batch_flag(body: dict | None) -> bool:
@@ -488,6 +499,14 @@ def _register_packer_prefix(
         if isinstance(raw, bool):
             return raw
         return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _include_pdf_flag(body: dict | None) -> bool:
+        if not isinstance(body, dict) or "include_pdf" not in body:
+            return True
+        raw = body.get("include_pdf")
+        if isinstance(raw, bool):
+            return raw
+        return str(raw or "").strip().lower() not in {"0", "false", "no", "off"}
 
     @app.post(f"{prefix}/jobs/{{job_id}}/scan-product", name=f"fbs_packing_scan_product_{tag}")
     async def api_fbs_packing_scan_product(
@@ -497,9 +516,18 @@ def _register_packer_prefix(
     ) -> dict:
         user_id = require_packer(actor, job_id)
         barcode = str((body or {}).get("barcode") or (body or {}).get("code") or "")
-        batch = _batch_flag(body if isinstance(body, dict) else {})
+        payload = body if isinstance(body, dict) else {}
+        batch = _batch_flag(payload)
+        include_pdf = _include_pdf_flag(payload)
         try:
-            return await asyncio.to_thread(_scan_product_sync, job_id, user_id, barcode, batch=batch)
+            return await asyncio.to_thread(
+                _scan_product_sync,
+                job_id,
+                user_id,
+                barcode,
+                batch=batch,
+                include_pdf=include_pdf,
+            )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
 
@@ -520,6 +548,7 @@ def _register_packer_prefix(
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="Некорректный товар") from exc
         batch = _batch_flag(payload)
+        include_pdf = _include_pdf_flag(payload)
         try:
             job = packing_repo.get_job(job_id)
             if job is None:
@@ -533,6 +562,7 @@ def _register_packer_prefix(
                 sku,
                 product_id,
                 batch=batch,
+                include_pdf=include_pdf,
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
@@ -552,6 +582,32 @@ def _register_packer_prefix(
             content=pdf,
             media_type="application/pdf",
             headers={"Content-Disposition": _attachment_disposition(f"fbs_line_{line_id}.pdf")},
+        )
+
+    @app.get(f"{prefix}/jobs/{{job_id}}/line-labels.zip", name=f"fbs_packing_line_labels_zip_{tag}")
+    async def api_fbs_packing_line_labels_zip(
+        job_id: int,
+        actor: TasksApiActor = Depends(_actor),
+    ) -> Response:
+        require_packer(actor, job_id)
+
+        def _run() -> bytes:
+            files = [
+                (f"{line_id}.pdf", pdf)
+                for line_id, pdf in packing_repo.list_line_pdfs(job_id)
+            ]
+            if not files:
+                raise ValueError("Нет ярлыков в задании")
+            return build_labels_zip(files)
+
+        try:
+            content = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=content,
+            media_type="application/zip",
+            headers={"Content-Disposition": _attachment_disposition(f"fbs_job_{job_id}_labels.zip")},
         )
 
     @app.post(f"{prefix}/jobs/{{job_id}}/scan-label", name=f"fbs_packing_scan_label_{tag}")

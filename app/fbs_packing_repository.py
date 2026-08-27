@@ -717,6 +717,12 @@ class FbsPackingRepository:
             raise ValueError("PDF ярлыка не найден")
         return path.read_bytes()
 
+    def list_line_pdfs(self, job_id: int) -> list[tuple[int, bytes]]:
+        job = self.get_job(job_id, include_lines=True)
+        if job is None:
+            raise ValueError("Задание не найдено")
+        return [(int(line.id), self.read_line_pdf(job_id, int(line.id))) for line in job.lines]
+
     def read_merged_pdf(self, job_id: int) -> bytes:
         job = self.get_job(job_id)
         if job is None:

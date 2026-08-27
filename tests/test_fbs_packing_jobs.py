@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -472,6 +473,31 @@ def test_packer_scan_pick_remaining_close_cancel(tmp_path) -> None:
     state["actor"] = TasksApiActor(user=None, via_api_token=True)
     token_only = client.get("/api/v1/fbs-packing/my")
     assert token_only.status_code == 400
+
+
+def test_packer_downloads_all_line_labels_zip_and_can_skip_pdf(tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+
+    zipped = client.get(f"{prefix}/line-labels.zip")
+    assert zipped.status_code == 200, zipped.text
+    assert zipped.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
+        names = set(archive.namelist())
+        assert names == {f"{line.id}.pdf" for line in job.lines}
+        for line in job.lines:
+            assert archive.read(f"{line.id}.pdf").startswith(b"%PDF")
+
+    skipped = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000016", "include_pdf": False},
+    )
+    assert skipped.status_code == 200, skipped.text
+    payload = skipped.json()
+    assert payload["pdf_base64"] == ""
+    assert payload["pdfs_base64"] == []
+    assert payload["line"]["id"] == job.lines[0].id
 
 
 def test_packer_batch_allocate_prints_all_sku_then_scan_labels(tmp_path) -> None:
