@@ -54,9 +54,9 @@ def compute_summary_hours(total_task_hours: float, staff_count: int, coefficient
 
 class WarehouseTaskSummaryRepository:
     def __init__(self, db_url: str) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)

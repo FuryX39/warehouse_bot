@@ -8,12 +8,12 @@
 
 [Unit]
 Description=Warehouse web dashboard (uvicorn / run_web.py)
-After=network-online.target
+After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-# Пользователь без root; каталог проекта должен быть ему доступен на чтение/запись (БД SQLite и т.д.).
+# Пользователь без root; каталог проекта должен быть ему доступен на чтение/запись.
 User=REPLACE_ME
 Group=REPLACE_ME
 WorkingDirectory=/opt/warehouse_bot

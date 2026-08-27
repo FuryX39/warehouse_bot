@@ -285,9 +285,9 @@ class WarehouseTasksRepository:
         *,
         task_files_data_dir: str | Path = "",
     ) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
         self.users_repo = users_repo
         self.receipts_repo = receipts_repo
         self.writeoffs_repo = writeoffs_repo

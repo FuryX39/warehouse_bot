@@ -104,9 +104,9 @@ def _truncate_comment(comment: str, limit: int = 120) -> str:
 
 class WarehouseTransfersRepository:
     def __init__(self, db_url: str, storage_repo: StorageWarehouseRepository) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
         self.storage_repo = storage_repo
 
     def init_schema(self) -> None:

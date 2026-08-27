@@ -68,9 +68,9 @@ def _like(pattern: str) -> str:
 
 class WarehouseStockRepository:
     def __init__(self, db_url: str) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
         self._on_skus_changed: _AffectedSkusCallback | None = None
 
     def set_recalc_callback(self, callback: _AffectedSkusCallback | None) -> None:

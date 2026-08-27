@@ -431,9 +431,9 @@ class OzonFboSupplyRepository:
         catalog_repo: CatalogRepository,
         users_repo: WarehouseUsersRepository,
     ) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
         self.catalog_repo = catalog_repo
         self.users_repo = users_repo
 
@@ -561,11 +561,31 @@ class OzonFboSupplyRepository:
                 row.ops_supply_type_id = default_type
 
     def _ensure_columns(self) -> None:
+        from sqlalchemy import inspect
+
+        from app.db import add_boolean_column_sql
+
+        insp = inspect(self.engine)
+        table_names = set(insp.get_table_names())
+        dialect = self.engine.dialect.name
+        pg = dialect == "postgresql"
+
+        def column_names(table: str) -> set[str]:
+            if table not in table_names:
+                return set()
+            return {c["name"] for c in insp.get_columns(table)}
+
+        def add_column(conn, table: str, name: str, ddl: str, known: set[str]) -> None:
+            if table not in table_names or name in known:
+                return
+            if pg:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {ddl}"))
+            else:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+            known.add(name)
+
         with self.engine.begin() as conn:
-            cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_supplies)")).all()
-            }
+            cols = column_names("ozon_fbo_supplies")
             migrations = (
                 ("cargoes_operation_id", "VARCHAR(128) NOT NULL DEFAULT ''"),
                 ("labels_operation_id", "VARCHAR(128) NOT NULL DEFAULT ''"),
@@ -579,20 +599,22 @@ class OzonFboSupplyRepository:
                 ("timeslot_to", "VARCHAR(32) NOT NULL DEFAULT ''"),
             )
             for name, ddl in migrations:
-                if name not in cols:
-                    conn.execute(text(f"ALTER TABLE ozon_fbo_supplies ADD COLUMN {name} {ddl}"))
-            cargo_cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_cargoes)")).all()
-            }
-            if "labels_file" not in cargo_cols:
-                conn.execute(
-                    text("ALTER TABLE ozon_fbo_cargoes ADD COLUMN labels_file VARCHAR(256) NOT NULL DEFAULT ''")
-                )
-            if "labels_file" not in cols:
-                conn.execute(
-                    text("ALTER TABLE ozon_fbo_supplies ADD COLUMN labels_file VARCHAR(256) NOT NULL DEFAULT ''")
-                )
+                add_column(conn, "ozon_fbo_supplies", name, ddl, cols)
+            cargo_cols = column_names("ozon_fbo_cargoes")
+            add_column(
+                conn,
+                "ozon_fbo_cargoes",
+                "labels_file",
+                "VARCHAR(256) NOT NULL DEFAULT ''",
+                cargo_cols,
+            )
+            add_column(
+                conn,
+                "ozon_fbo_supplies",
+                "labels_file",
+                "VARCHAR(256) NOT NULL DEFAULT ''",
+                cols,
+            )
             ops_cols = {
                 "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
                 "ops_ship_date": "VARCHAR(10) NOT NULL DEFAULT ''",
@@ -613,12 +635,8 @@ class OzonFboSupplyRepository:
                 "ops_car_driver": "VARCHAR(256) NOT NULL DEFAULT ''",
             }
             for name, ddl in ops_cols.items():
-                if name not in cols:
-                    conn.execute(text(f"ALTER TABLE ozon_fbo_supplies ADD COLUMN {name} {ddl}"))
-            batch_cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_batches)")).all()
-            }
+                add_column(conn, "ozon_fbo_supplies", name, ddl, cols)
+            batch_cols = column_names("ozon_fbo_batches")
             batch_ops_cols = {
                 "ops_assembly_date": "VARCHAR(10) NOT NULL DEFAULT ''",
                 "ops_cargoes_desc": "VARCHAR(64) NOT NULL DEFAULT ''",
@@ -636,42 +654,39 @@ class OzonFboSupplyRepository:
                 "ops_car_driver": "VARCHAR(256) NOT NULL DEFAULT ''",
             }
             for name, ddl in batch_ops_cols.items():
-                if name not in batch_cols:
-                    conn.execute(text(f"ALTER TABLE ozon_fbo_batches ADD COLUMN {name} {ddl}"))
-            batch_cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_batches)")).all()
-            }
-            if "ops_cargoes_count" not in batch_cols:
-                conn.execute(
-                    text("ALTER TABLE ozon_fbo_batches ADD COLUMN ops_cargoes_count INTEGER NOT NULL DEFAULT 0")
+                add_column(conn, "ozon_fbo_batches", name, ddl, batch_cols)
+            add_column(
+                conn,
+                "ozon_fbo_batches",
+                "ops_cargoes_count",
+                "INTEGER NOT NULL DEFAULT 0",
+                batch_cols,
+            )
+            if "ozon_fbo_batches" in table_names and "ops_cargoes_count_manual" not in batch_cols:
+                sql = add_boolean_column_sql(
+                    dialect, "ozon_fbo_batches", "ops_cargoes_count_manual"
                 )
-            if "ops_cargoes_count_manual" not in batch_cols:
-                conn.execute(
-                    text(
-                        "ALTER TABLE ozon_fbo_batches ADD COLUMN ops_cargoes_count_manual "
-                        "INTEGER NOT NULL DEFAULT 0"
-                    )
-                )
-            batch_cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_batches)")).all()
-            }
-            if "ops_cargoes_suffix" not in batch_cols:
-                conn.execute(
-                    text("ALTER TABLE ozon_fbo_batches ADD COLUMN ops_cargoes_suffix VARCHAR(4) NOT NULL DEFAULT ''")
-                )
-            cargo_cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(ozon_fbo_cargoes)")).all()
-            }
-            if "cargo_type" not in cargo_cols:
-                conn.execute(
-                    text("ALTER TABLE ozon_fbo_cargoes ADD COLUMN cargo_type VARCHAR(16) NOT NULL DEFAULT ''")
-                )
+                if sql is not None:
+                    conn.execute(text(sql))
+                    batch_cols.add("ops_cargoes_count_manual")
+            add_column(
+                conn,
+                "ozon_fbo_batches",
+                "ops_cargoes_suffix",
+                "VARCHAR(4) NOT NULL DEFAULT ''",
+                batch_cols,
+            )
+            add_column(
+                conn,
+                "ozon_fbo_cargoes",
+                "cargo_type",
+                "VARCHAR(16) NOT NULL DEFAULT ''",
+                cargo_cols,
+            )
             self._backfill_batch_cargoes_counts(conn)
 
     def _backfill_batch_cargoes_counts(self, conn) -> None:
+        from app.db import coerce_sql_bool
         from app.ozon_fbo_ops_sheets import format_cargoes_desc, parse_cargoes_desc_count
 
         rows = conn.execute(
@@ -683,7 +698,7 @@ class OzonFboSupplyRepository:
         for row in rows:
             batch_id = int(row[0])
             count = int(row[1] or 0)
-            manual = bool(int(row[2] or 0))
+            manual = coerce_sql_bool(row[2])
             desc = str(row[3] or "")
             if count > 0:
                 continue
@@ -731,13 +746,14 @@ class OzonFboSupplyRepository:
                 text(
                     "UPDATE ozon_fbo_batches SET ops_cargoes_count = :cnt, ops_cargoes_suffix = :suffix, "
                     "ops_cargoes_desc = :desc "
-                    "WHERE id = :id AND ops_cargoes_count_manual = 0"
+                    "WHERE id = :id AND ops_cargoes_count_manual = :manual"
                 ),
                 {
                     "cnt": cargo_count,
                     "suffix": suffix,
                     "desc": format_cargoes_desc(cargo_count, suffix),
                     "id": batch_id,
+                    "manual": False,
                 },
             )
 

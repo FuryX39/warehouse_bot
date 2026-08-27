@@ -103,29 +103,45 @@ def _like(pattern: str) -> str:
 
 class WarehouseUsersRepository:
     def __init__(self, db_url: str) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._ensure_user_columns()
 
     def _ensure_user_columns(self) -> None:
+        from sqlalchemy import inspect
+
+        insp = inspect(self.engine)
+        if "warehouse_users" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("warehouse_users")}
+        dialect = self.engine.dialect.name
         with self.engine.begin() as conn:
-            cols = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(warehouse_users)")).all()
-            }
             if "group_id" not in cols:
-                conn.execute(text("ALTER TABLE warehouse_users ADD COLUMN group_id INTEGER"))
-            if "telegram_nick" not in cols:
-                conn.execute(
-                    text(
-                        "ALTER TABLE warehouse_users ADD COLUMN telegram_nick "
-                        "VARCHAR(128) NOT NULL DEFAULT ''"
+                if dialect == "postgresql":
+                    conn.execute(
+                        text("ALTER TABLE warehouse_users ADD COLUMN IF NOT EXISTS group_id INTEGER")
                     )
-                )
+                else:
+                    conn.execute(text("ALTER TABLE warehouse_users ADD COLUMN group_id INTEGER"))
+            if "telegram_nick" not in cols:
+                if dialect == "postgresql":
+                    conn.execute(
+                        text(
+                            "ALTER TABLE warehouse_users ADD COLUMN IF NOT EXISTS telegram_nick "
+                            "VARCHAR(128) NOT NULL DEFAULT ''"
+                        )
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE warehouse_users ADD COLUMN telegram_nick "
+                            "VARCHAR(128) NOT NULL DEFAULT ''"
+                        )
+                    )
 
     def get_employee_meta(self) -> dict[str, list[dict[str, Any]]]:
         with Session(self.engine) as session:

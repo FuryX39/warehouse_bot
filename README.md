@@ -29,7 +29,7 @@ On the server: `warehouse-sync`, `warehouse-web`, `warehouse-api` (see `deploy/`
 
 ## Env
 
-- `DB_URL` — default `sqlite:///crm_bot.db`
+- `DB_URL` — default `sqlite:///crm_bot.db`. For PostgreSQL: `postgresql+psycopg://user:pass@127.0.0.1:5432/warehouse` (same value for `MOVEMENT_DB_URL` and `DEALER_ANALYSIS_DB_URL`). Cutover: `python tools/migrate_sqlite_to_postgres.py --dest …`
 - `RESERVE_INTERVAL_SECONDS` — pause after each sync cycle (default 120)
 - `FULL_SYNC_INTERVAL_SECONDS` — full reserve reconcile per marketplace (default 3600)
 - `STOCK_SYNC_ENABLED` — `1` push stocks to MP, `0` only update reserves

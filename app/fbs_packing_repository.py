@@ -190,12 +190,13 @@ class FbsPackingRepository:
             if "fbs_packing_jobs" in tables:
                 job_cols = {c["name"] for c in inspect(self.engine).get_columns("fbs_packing_jobs")}
                 if "require_cis" not in job_cols:
-                    session.execute(
-                        text(
-                            "ALTER TABLE fbs_packing_jobs "
-                            "ADD COLUMN require_cis BOOLEAN NOT NULL DEFAULT 0"
-                        )
+                    from app.db import add_boolean_column_sql
+
+                    sql = add_boolean_column_sql(
+                        self.engine.dialect.name, "fbs_packing_jobs", "require_cis"
                     )
+                    if sql is not None:
+                        session.execute(text(sql))
                 if "supply_id" not in job_cols:
                     session.execute(
                         text(

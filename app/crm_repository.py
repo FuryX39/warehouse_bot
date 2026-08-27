@@ -156,9 +156,9 @@ def _like(pattern: str) -> str:
 
 class CrmRepository:
     def __init__(self, db_url: str) -> None:
-        from sqlalchemy import create_engine
+        from app.db import create_db_engine
 
-        self.engine = create_engine(db_url, future=True)
+        self.engine = create_db_engine(db_url)
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
@@ -172,13 +172,15 @@ class CrmRepository:
             return
         cols = {c["name"] for c in inspect(self.engine).get_columns("crm_price_types")}
         if "is_default" not in cols:
+            from app.db import add_boolean_column_sql
+
+            sql = add_boolean_column_sql(
+                self.engine.dialect.name, "crm_price_types", "is_default"
+            )
+            if sql is None:
+                return
             with Session(self.engine) as session:
-                session.execute(
-                    text(
-                        "ALTER TABLE crm_price_types "
-                        "ADD COLUMN is_default BOOLEAN NOT NULL DEFAULT 0"
-                    )
-                )
+                session.execute(text(sql))
                 session.commit()
 
     def _seed_defaults(self) -> None:

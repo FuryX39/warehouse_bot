@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, Integer, String, create_engine, inspect, select, text
+from sqlalchemy import ForeignKey, Integer, String, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 
@@ -107,7 +107,9 @@ def movement_display_title(row: StockMovement) -> tuple[str, bool]:
 
 class MovementRepository:
     def __init__(self, db_url: str) -> None:
-        self.engine = create_engine(db_url, future=True)
+        from app.db import create_db_engine
+
+        self.engine = create_db_engine(db_url)
 
     def init_schema(self) -> None:
         MovementBase.metadata.create_all(self.engine)
