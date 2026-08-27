@@ -23,5 +23,5 @@ if not exist ".venv\Scripts\python.exe" (
 
 ".venv\Scripts\python.exe" main.py
 
-echo Bot stopped.
+echo Telegram stub stopped. Stock sync is start_sync.bat.
 pause

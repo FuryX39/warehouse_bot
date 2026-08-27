@@ -34,6 +34,8 @@ from app.nomenclature_barcodes import barcodes_from_json, barcodes_to_json
 # Должен совпадать с ключом в StockCoordinator (сбрасывается при clear_stocks_only).
 AVAILABLE_STOCK_SYNC_KEY = "available_stock_push_hash"
 STOCK_SYNC_SOURCE_WAREHOUSE_KEY = "stock_sync_source_warehouse_id"
+STOCK_SYNC_LAST_OK_TS_KEY = "stock_sync_last_ok_ts"
+STOCK_SYNC_LAST_FAIL_TS_KEY = "stock_sync_last_fail_ts"
 
 
 def available_stock_map_hash(available_stock: dict[str, int]) -> int:

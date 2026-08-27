@@ -4,7 +4,7 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now warehouse-api.service
 #
-# Рядом с ботом и вебом: тот же каталог проекта и тот же .env (общий DB_URL).
+# Рядом с вебом и run_sync.py: тот же каталог проекта и тот же .env (общий DB_URL).
 # Программа упаковщиков указывает базовый URL на этот процесс, не на WEB_PORT.
 
 [Unit]

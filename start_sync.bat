@@ -1,9 +1,6 @@
 @echo off
 setlocal
 
-REM Telegram-заглушка. Складской синк: start_sync.bat
-REM Веб: start_web.bat  API: start_api.bat
-
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
@@ -32,12 +29,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [4/4] Starting Telegram stub (no stock sync)...
-if /i "%~1"=="with-web" (
-  echo       ^(also starting web panel in a separate window — close it separately^)
-  start "warehouse_web" /D "%~dp0" "%~dp0.venv\Scripts\python.exe" "%~dp0run_web.py"
-)
-".venv\Scripts\python.exe" main.py
+echo [4/4] Starting stock sync (reserves + push)...
+".venv\Scripts\python.exe" run_sync.py
 
-echo Bot stopped.
+echo Stock sync stopped.
 pause

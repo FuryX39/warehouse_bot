@@ -9,7 +9,11 @@ from fastapi import Depends, Form, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.repositories import InventoryRepository
+from app.repositories import (
+    STOCK_SYNC_LAST_FAIL_TS_KEY,
+    STOCK_SYNC_LAST_OK_TS_KEY,
+    InventoryRepository,
+)
 from app.services import StockCoordinator
 from app.sheet_import import import_stocks_from_google_sheet, import_tops_from_google_sheet
 from app.storage_warehouse_repository import StorageWarehouseRepository
@@ -75,6 +79,8 @@ def register_warehouse_stock_sync_routes(
             {"name": a.name, "configured": bool(a.is_configured())} for a in coordinator.adapters
         ]
         last_run = coordinator.last_run_at.isoformat() if coordinator.last_run_at else None
+        last_ok_ts = inventory_repo.get_sync_int(STOCK_SYNC_LAST_OK_TS_KEY)
+        last_fail_ts = inventory_repo.get_sync_int(STOCK_SYNC_LAST_FAIL_TS_KEY)
         source_id = inventory_repo.get_sync_source_warehouse_id()
         source = None
         if source_id is not None:
@@ -83,6 +89,8 @@ def register_warehouse_stock_sync_routes(
                 source = storage_repo.warehouse_to_dict(row)
         return {
             "last_run_at": last_run,
+            "last_ok_ts": last_ok_ts,
+            "last_fail_ts": last_fail_ts,
             "last_error": coordinator.last_error,
             "last_warnings": list(coordinator.last_warnings or []),
             "adapters": adapters,

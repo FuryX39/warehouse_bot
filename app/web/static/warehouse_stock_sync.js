@@ -415,9 +415,9 @@
           "<h3>Склад-источник для маркетплейсов</h3>" +
           '<p class="wh-muted">Остатки с выбранного склада уходят в Ozon / Wildberries / Яндекс Маркет. Сейчас: <b>' +
           esc(sourceName) +
-          "</b>. Автосинхронизация: " +
+          "</b>. Пуш остатков: " +
           esc(enabled) +
-          ".</p>" +
+          ". Автоцикл резервов — процесс run_sync.py.</p>" +
           '<div class="wh-stock-sync-row">' +
           '<label>Склад <select id="whStockSyncWarehouse">' +
           warehouseOptions(meta.source_warehouse_id) +
@@ -429,6 +429,7 @@
           '<div class="wh-stock-sync-grid">' +
           '<div class="wh-tools-card">' +
           "<h3>Статус синхронизации</h3>" +
+          '<p class="wh-muted">Автоцикл — процесс <code>run_sync.py</code> (резервы и пуш). Кнопки справа — ручной запуск.</p>' +
           '<pre id="whStockSyncStatus" class="wh-mono-block">—</pre>' +
           '<button type="button" class="wh-btn" id="whStockSyncRefreshStatus">Обновить статус</button>' +
           "</div>" +

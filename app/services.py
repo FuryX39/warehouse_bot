@@ -4,7 +4,13 @@ import time
 
 from app.adapters.base import MarketplaceAdapter, ReservationAction, is_value_configured
 from app.adapters.ozon import OzonAdapter
-from app.repositories import AVAILABLE_STOCK_SYNC_KEY, InventoryRepository, available_stock_map_hash
+from app.repositories import (
+    AVAILABLE_STOCK_SYNC_KEY,
+    STOCK_SYNC_LAST_FAIL_TS_KEY,
+    STOCK_SYNC_LAST_OK_TS_KEY,
+    InventoryRepository,
+    available_stock_map_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +306,7 @@ class StockCoordinator:
             self.last_run_at = datetime.now(timezone.utc)
             self.last_error = None
             self.last_warnings = adapter_errors
+            self.inventory_repo.set_sync_int(STOCK_SYNC_LAST_OK_TS_KEY, int(self.last_run_at.timestamp()))
             logger.info(
                 "sync_cycle mode=%s kinds=%s sync_start_ts=%s",
                 mode_l,
@@ -325,4 +332,5 @@ class StockCoordinator:
         except Exception as exc:  # noqa: BLE001
             self.last_error = str(exc)
             self.last_warnings = []
+            self.inventory_repo.set_sync_int(STOCK_SYNC_LAST_FAIL_TS_KEY, int(time.time()))
             return {"ok": False, "error": self.last_error}

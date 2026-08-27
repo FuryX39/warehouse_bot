@@ -4,7 +4,7 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now warehouse-web.service
 #
-# Рядом с ботом держите тот же каталог проекта и тот же .env (общий DB_URL).
+# Рядом с run_sync.py держите тот же каталог проекта и тот же .env (общий DB_URL).
 
 [Unit]
 Description=Warehouse web dashboard (uvicorn / run_web.py)

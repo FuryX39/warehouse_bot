@@ -15,7 +15,7 @@ def register_warehouse_admin_routes(app, require_warehouse_admin) -> None:
     ) -> dict:
         return {
             "fields": read_env_fields(),
-            "restart_required_note": "После сохранения перезапустите веб-сервер и бота, чтобы все настройки применились.",
+            "restart_required_note": "После сохранения перезапустите веб, API и run_sync.py, чтобы настройки применились.",
         }
 
     @app.put("/api/warehouse/admin/env")

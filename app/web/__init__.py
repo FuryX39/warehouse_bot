@@ -1,10 +1,11 @@
 """
-Пакет веб-интерфейса (HTTP), отдельно от Telegram-бота.
+Пакет веб-интерфейса (HTTP), отдельно от Telegram.
 
 Зачем отдельная папка app/web/:
-  - HTTP-слой (FastAPI) и статика (HTML/CSS/JS) лежат рядом; бот в main.py их не импортирует.
+  - HTTP-слой (FastAPI) и статика (HTML/CSS/JS) лежат рядом.
   - run_web.py только подключает create_dashboard_app() из app.web.server.
   - run_api.py подключает create_desktop_api_app() из app.web.desktop_api.
+  - run_sync.py крутит резервы и пуш, веб его не дублирует по таймеру.
 
 Содержимое:
   server.py   — маршруты панели /warehouse и /api/warehouse/*

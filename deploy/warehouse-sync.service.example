@@ -1,0 +1,26 @@
+# Пример unit для цикла резервов и пуша остатков (run_sync.py).
+# Скопируйте на сервер, поправьте пути и пользователя, затем:
+#   sudo cp warehouse-sync.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now warehouse-sync.service
+#
+# Не путать с warehouse-bot: Telegram больше не крутит синк.
+# Рядом с вебом и API: тот же каталог проекта и тот же .env (общий DB_URL).
+
+[Unit]
+Description=Warehouse marketplace stock sync (run_sync.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_ME
+Group=REPLACE_ME
+WorkingDirectory=/opt/warehouse_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/warehouse_bot/.venv/bin/python /opt/warehouse_bot/run_sync.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

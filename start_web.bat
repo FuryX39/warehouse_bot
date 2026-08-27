@@ -1,11 +1,11 @@
 @echo off
 setlocal
 
-REM Запускайте после start_bot.bat (нужен тот же .venv и установленные зависимости).
+REM Запускайте после start_sync.bat или start_bot.bat (нужен тот же .venv).
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
-  echo Сначала запустите start_bot.bat — нужен каталог .venv и pip install.
+  echo Сначала запустите start_sync.bat — нужен каталог .venv и pip install.
   pause
   exit /b 1
 )

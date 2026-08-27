@@ -118,7 +118,7 @@
       .then(function (data) {
         fields = data.fields || fields;
         msg.className = "wh-msg wh-msg-ok";
-        msg.textContent = "Сохранено. Перезапустите веб-сервер и бота, чтобы настройки применились полностью.";
+        msg.textContent = "Сохранено. Перезапустите веб, API и run_sync.py, чтобы настройки применились полностью.";
         refreshRows(root);
       })
       .catch(function (err) {
@@ -153,7 +153,7 @@
           refreshRows(root);
         });
         root.querySelector("#whAdminEnvSave").addEventListener("click", function () {
-          if (!confirm("Сохранить изменения в .env? Неверные значения могут остановить бота или веб-панель после перезапуска.")) return;
+          if (!confirm("Сохранить изменения в .env? Неверные значения могут остановить синк, веб или API после перезапуска.")) return;
           saveEnv(root);
         });
       })

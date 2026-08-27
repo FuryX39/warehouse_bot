@@ -1217,7 +1217,7 @@ def create_dashboard_app(
         scope: Annotated[str, Form()],
         code: Annotated[str, Form()],
     ) -> dict:
-        """Отгрузка после подтверждения кодом (как /ship_* в боте)."""
+        """Отгрузка после подтверждения кодом (панель FBS)."""
         try:
             scope_n = normalize_ship_scope(scope)
         except ValueError as exc:
@@ -1381,7 +1381,7 @@ def create_dashboard_app(
         url: str | None = Form(default=None),
     ) -> dict:
         """
-        Импорт остатков из Google Sheets (лист `stocks`), как команда бота /import_sheet [URL].
+        Импорт остатков из Google Sheets (лист `stocks`).
         Поле формы `url` (пусто = DEFAULT_STOCKS_SHEET_URL из .env).
         """
         raw = (url or "").strip()
@@ -1611,7 +1611,7 @@ def create_dashboard_app(
         title: str | None = Form(default=None),
         comment: str | None = Form(default=None),
     ) -> dict:
-        """Перемещение из Google Sheets (лист movement), как /movement в боте."""
+        """Перемещение из Google Sheets (лист movement)."""
         raw_dir = (direction or "").strip().lower()
         sign = 1 if raw_dir in {"+", "add", "plus", "in", "приход", "прибавить", "плюс"} else None
         if sign is None:

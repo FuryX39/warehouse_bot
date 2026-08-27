@@ -1,15 +1,11 @@
 """
-Сборка «склада» для нескольких точек входа.
+Сборка склада для нескольких точек входа.
 
-Зачем отдельный модуль:
-  main.py (Telegram) и run_web.py (HTTP) должны использовать ОДИНАКОВЫЕ
-  настройки, одну БД и один и тот же список адаптеров. Раньше эта связка
-  дублировалась в двух файлах — при изменении адаптера легко забыть
-  обновить второе место. Здесь одна функция create_inventory_stack().
-
-Куда смотреть:
-  create_inventory_stack() — единственное место, где создаются
-  InventoryRepository и StockCoordinator (то, что раньше жило в main.py).
+create_inventory_stack() — одно место, где создаются InventoryRepository
+и StockCoordinator. Используют:
+  run_sync.py — цикл резервов и пуша остатков
+  run_web.py — HTTP-панель
+  run_api.py — десктоп упаковщиков (свой стек в desktop_api)
 """
 
 from __future__ import annotations
