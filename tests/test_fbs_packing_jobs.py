@@ -18,6 +18,8 @@ from app.config import Settings
 from app.crm_repository import CrmRepository
 from app.fbs_packing_repository import (
     FbsPackingRepository,
+    JOB_STATUS_DONE,
+    JOB_STATUS_IN_PROGRESS,
     LINE_DONE,
     LINE_PENDING,
     LINE_PRINTED,
@@ -300,6 +302,7 @@ def _seed_job(packing: FbsPackingRepository, catalog: CatalogRepository, packer_
             "sku": "SKU-A",
             "code": "00001",
             "is_kit": False,
+            "image_url": "https://example.test/a.jpg",
             "barcodes": [{"barcode": "2000000000016", "label": "", "group": ""}],
             "components": [],
         }
@@ -310,6 +313,7 @@ def _seed_job(packing: FbsPackingRepository, catalog: CatalogRepository, packer_
             "sku": "SKU-B",
             "code": "00002",
             "is_kit": False,
+            "image_url": "https://example.test/b.jpg",
             "barcodes": [{"barcode": "2000000000023", "label": "", "group": ""}],
             "components": [],
         }
@@ -846,3 +850,82 @@ def test_require_cis_blocks_pick_sku_for_markable(tmp_path) -> None:
     )
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["line"]["sku"] == "SKU-PLAIN"
+
+
+def test_packer_job_payload_includes_image_url(tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+    packed = client.get(f"/api/warehouse/fbs-packing/jobs/{job.id}/pack")
+    assert packed.status_code == 200, packed.text
+    payload = packed.json()["job"]
+    remaining = {item["sku"]: item for item in payload["remaining_groups"]}
+    assert remaining["SKU-A"]["image_url"] == "https://example.test/a.jpg"
+    assert remaining["SKU-B"]["image_url"] == "https://example.test/b.jpg"
+    by_sku = {item["sku"]: item["image_url"] for item in payload["lines"]}
+    assert by_sku["SKU-A"] == "https://example.test/a.jpg"
+    assert by_sku["SKU-B"] == "https://example.test/b.jpg"
+
+
+def test_set_line_status_pending_to_done_and_back(tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+    line_id = job.lines[0].id
+
+    done = client.post(f"{prefix}/lines/{line_id}/set-status", json={"status": "done"})
+    assert done.status_code == 200, done.text
+    assert done.json()["line"]["status"] == LINE_DONE
+    assert packing.get_line(job_id, line_id).status == LINE_DONE
+
+    pending = client.post(f"{prefix}/lines/{line_id}/set-status", json={"status": "pending"})
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["line"]["status"] == LINE_PENDING
+    assert packing.get_line(job_id, line_id).status == LINE_PENDING
+
+
+def test_set_line_status_keeps_cis_and_reopens_done_job(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    cis = _cis(GTIN14, serial="KeepCis")
+
+    printed = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert printed.status_code == 200, printed.text
+    line_id = printed.json()["line"]["id"]
+    assert packing.get_line(job.id, line_id).cis_key
+
+    labeled = client.post(f"{prefix}/scan-label", json={"barcode": "200001 1/2"})
+    assert labeled.status_code == 200, labeled.text
+    assert packing.get_line(job.id, line_id).status == LINE_DONE
+
+    # close remaining lines so the job itself becomes done
+    for line in packing.get_job(job.id, include_lines=True).lines:
+        if line.status == LINE_PENDING:
+            client.post(f"{prefix}/lines/{line.id}/set-status", json={"status": "done"})
+    assert packing.get_job(job.id).status == JOB_STATUS_DONE
+
+    reopened = client.post(f"{prefix}/lines/{line_id}/set-status", json={"status": "pending"})
+    assert reopened.status_code == 200, reopened.text
+    row = packing.get_line(job.id, line_id)
+    assert row is not None
+    assert row.status == LINE_PENDING
+    assert row.cis_key
+    assert packing.get_job(job.id).status == JOB_STATUS_IN_PROGRESS
+
+
+def test_set_line_status_printed_to_pending_keeps_cis(tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    cis = _cis(GTIN14, serial="PrintKeep")
+
+    printed = client.post(f"{prefix}/scan-product", json={"barcode": cis})
+    assert printed.status_code == 200, printed.text
+    line_id = printed.json()["line"]["id"]
+    assert packing.get_line(job.id, line_id).status == LINE_PRINTED
+    cis_key = packing.get_line(job.id, line_id).cis_key
+    assert cis_key
+
+    pending = client.post(f"{prefix}/lines/{line_id}/set-status", json={"status": "pending"})
+    assert pending.status_code == 200, pending.text
+    row = packing.get_line(job.id, line_id)
+    assert row is not None
+    assert row.status == LINE_PENDING
+    assert row.cis_key == cis_key

@@ -719,6 +719,47 @@ class FbsPackingRepository:
             session.refresh(printed)
             return self._line_row(printed)
 
+    def set_line_status(
+        self, job_id: int, line_id: int, user_id: int, status: str
+    ) -> FbsPackingLineRow:
+        """ПКМ упаковщика: pending↔done и printed→pending. КИЗ не трогает."""
+        want = str(status or "").strip().casefold()
+        if want not in {LINE_PENDING, LINE_DONE}:
+            raise ValueError("Можно поставить только статус «в сборке» или «готово»")
+        with Session(self.engine) as session:
+            job = session.get(FbsPackingJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            if job.status == JOB_STATUS_CANCELLED:
+                raise ValueError("Задание отменено")
+            row = session.get(FbsPackingLine, int(line_id))
+            if row is None or int(row.job_id) != int(job_id):
+                raise ValueError("Строка не найдена")
+            current = str(row.status or LINE_PENDING)
+            now = int(time.time())
+            if want == LINE_PENDING:
+                if current not in {LINE_PRINTED, LINE_DONE}:
+                    raise ValueError("В сборку можно вернуть только напечатанную или готовую строку")
+                row.status = LINE_PENDING
+                row.printed_at_ts = None
+                row.done_at_ts = None
+                row.done_by_user_id = None
+                if job.status == JOB_STATUS_DONE:
+                    job.status = JOB_STATUS_IN_PROGRESS
+            else:
+                if current != LINE_PENDING:
+                    raise ValueError("В готово можно перевести только строку в сборке")
+                row.status = LINE_DONE
+                row.done_at_ts = now
+                row.done_by_user_id = int(user_id)
+                if job.status == JOB_STATUS_OPEN:
+                    job.status = JOB_STATUS_IN_PROGRESS
+                self._finish_if_complete(session, job)
+            job.updated_at_ts = now
+            session.commit()
+            session.refresh(row)
+            return self._line_row(row)
+
     def cancel_print(self, job_id: int, line_id: int) -> FbsPackingLineRow:
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)

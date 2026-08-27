@@ -52,6 +52,47 @@ def _http_value_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _attach_catalog_images(catalog_repo: CatalogRepository, payload: dict[str, Any]) -> None:
+    """Проставляет image_url из каталога в remaining_groups и строки задания."""
+    buckets: list[dict[str, Any]] = []
+    remaining = payload.get("remaining_groups")
+    if isinstance(remaining, list):
+        buckets.extend(item for item in remaining if isinstance(item, dict))
+    for key in ("lines", "active_lines"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            buckets.extend(item for item in rows if isinstance(item, dict))
+    active = payload.get("active_line")
+    if isinstance(active, dict):
+        buckets.append(active)
+    pids: list[int] = []
+    skus: list[str] = []
+    for item in buckets:
+        pid = item.get("product_id")
+        if pid not in (None, ""):
+            try:
+                pids.append(int(pid))
+            except (TypeError, ValueError):
+                pass
+        sku = str(item.get("sku") or "").strip()
+        if sku:
+            skus.append(sku)
+    by_id = catalog_repo.image_urls_by_product_ids(pids) if pids else {}
+    by_sku = catalog_repo.lookup_products_by_skus(skus) if skus else {}
+    for item in buckets:
+        url = ""
+        pid = item.get("product_id")
+        if pid not in (None, ""):
+            try:
+                url = by_id.get(int(pid), "") or ""
+            except (TypeError, ValueError):
+                url = ""
+        if not url:
+            sku_row = by_sku.get(str(item.get("sku") or "").strip().casefold()) or {}
+            url = str(sku_row.get("image_url") or "")
+        item["image_url"] = url
+
+
 def register_warehouse_fbs_packing_routes(
     app,
     packing_repo: FbsPackingRepository,
@@ -366,6 +407,7 @@ def register_warehouse_fbs_packing_routes(
             item["barcode"] = barcodes.get(int(pid), "") if pid else ""
         payload = packing_repo.job_to_dict(job, include_lines=True)
         payload["remaining_groups"] = remaining
+        _attach_catalog_images(catalog_repo, payload)
         return payload
 
     if packer_prefixes is None:
@@ -676,6 +718,29 @@ def _register_packer_prefix(
 
         def _run():
             line = packing_repo.cancel_print(job_id, line_id)
+            return packing_repo.line_to_dict(line), packer_job_payload(job_id)
+
+        try:
+            line, job = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        return {"line": line, "job": job}
+
+    @app.post(
+        f"{prefix}/jobs/{{job_id}}/lines/{{line_id}}/set-status",
+        name=f"fbs_packing_line_set_status_{tag}",
+    )
+    async def api_fbs_packing_line_set_status(
+        job_id: int,
+        line_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(_actor),
+    ) -> dict:
+        user_id = require_packer(actor, job_id)
+        status = str((body or {}).get("status") or "").strip()
+
+        def _run():
+            line = packing_repo.set_line_status(job_id, line_id, user_id, status)
             return packing_repo.line_to_dict(line), packer_job_payload(job_id)
 
         try:

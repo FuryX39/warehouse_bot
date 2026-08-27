@@ -1004,6 +1004,34 @@ class CatalogRepository:
                 }
         return out
 
+    def apply_image_urls_by_sku(self, sku_to_url: dict[str, str], *, only_empty: bool = False) -> int:
+        """Проставить image_url по артикулу. Возвращает число изменённых строк."""
+        if not sku_to_url:
+            return 0
+        now = int(time.time())
+        updated = 0
+        with Session(self.engine) as session:
+            rows = session.scalars(select(CatalogProduct)).all()
+            by_sku = {str(row.sku or "").strip().casefold(): row for row in rows}
+            for sku, url in sku_to_url.items():
+                key = str(sku or "").strip().casefold()
+                row = by_sku.get(key)
+                if row is None:
+                    continue
+                url_n = str(url or "").strip()[:2048]
+                if not url_n:
+                    continue
+                current = str(row.image_url or "").strip()
+                if only_empty and current:
+                    continue
+                if current == url_n:
+                    continue
+                row.image_url = url_n
+                row.updated_at_ts = now
+                updated += 1
+            session.commit()
+        return updated
+
     def lookup_products_with_metrics_by_skus(
         self, skus: list[str]
     ) -> dict[str, dict[str, Any]]:
@@ -1098,6 +1126,22 @@ class CatalogRepository:
                     continue
                 by_barcode[str(bc.barcode or "").strip().casefold()] = product
         return by_sku, by_code, by_barcode
+
+    def image_urls_by_product_ids(self, product_ids: list[int]) -> dict[int, str]:
+        """id → image_url, только непустые ссылки."""
+        ids = [int(x) for x in product_ids if int(x) > 0]
+        if not ids:
+            return {}
+        out: dict[int, str] = {}
+        with Session(self.engine) as session:
+            for start in range(0, len(ids), 900):
+                batch = ids[start : start + 900]
+                rows = session.scalars(select(CatalogProduct).where(CatalogProduct.id.in_(batch))).all()
+                for row in rows:
+                    url = str(row.image_url or "").strip()
+                    if url:
+                        out[int(row.id)] = url
+        return out
 
     def first_barcode_by_product_ids(self, product_ids: list[int]) -> dict[int, str]:
         """Первый штрихкод карточки (sort_order, id) для каждого product_id."""
