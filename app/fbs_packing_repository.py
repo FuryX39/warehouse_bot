@@ -449,9 +449,12 @@ class FbsPackingRepository:
         job = self.get_job(job_id, include_lines=True)
         if job is None:
             raise ValueError("Задание не найдено")
+        return self.remaining_groups_from_lines(job.lines)
+
+    def remaining_groups_from_lines(self, lines: list[FbsPackingLineRow]) -> list[dict[str, Any]]:
         grouped: dict[str, dict[str, Any]] = {}
         order: list[str] = []
-        for line in job.lines:
+        for line in lines:
             if line.status != LINE_PENDING:
                 continue
             key = line.sku.casefold() or f"#{line.id}"
@@ -513,6 +516,7 @@ class FbsPackingRepository:
         cis_raw: str = "",
         cis_key: str = "",
         cis_gtin: str = "",
+        auto_close: bool = False,
     ) -> FbsPackingLineRow:
         lines = self.allocate_lines(
             job_id,
@@ -523,8 +527,31 @@ class FbsPackingRepository:
             cis_raw=cis_raw,
             cis_key=cis_key,
             cis_gtin=cis_gtin,
+            auto_close=auto_close,
         )
         return lines[0]
+
+    def _apply_allocate_status(
+        self,
+        *,
+        job: FbsPackingJob,
+        rows: list[FbsPackingLine],
+        user_id: int,
+        now: int,
+        auto_close: bool,
+        session: Session,
+    ) -> None:
+        for row in rows:
+            row.status = LINE_DONE if auto_close else LINE_PRINTED
+            row.printed_at_ts = now
+            if auto_close:
+                row.done_at_ts = now
+                row.done_by_user_id = int(user_id)
+        if job.status == JOB_STATUS_OPEN:
+            job.status = JOB_STATUS_IN_PROGRESS
+        job.updated_at_ts = now
+        if auto_close:
+            self._finish_if_complete(session, job)
 
     def allocate_lines(
         self,
@@ -537,6 +564,7 @@ class FbsPackingRepository:
         cis_raw: str = "",
         cis_key: str = "",
         cis_gtin: str = "",
+        auto_close: bool = False,
     ) -> list[FbsPackingLineRow]:
         if not str(sku or "").strip() and not product_id:
             raise ValueError("Нет артикула для выделения")
@@ -598,11 +626,14 @@ class FbsPackingRepository:
                     match.cis_raw = cis_raw_n
                     match.cis_key = cis_key_n
                     match.cis_gtin = cis_gtin_n
-                match.status = LINE_PRINTED
-                match.printed_at_ts = now
-                if job.status == JOB_STATUS_OPEN:
-                    job.status = JOB_STATUS_IN_PROGRESS
-                job.updated_at_ts = now
+                self._apply_allocate_status(
+                    job=job,
+                    rows=[match],
+                    user_id=user_id,
+                    now=now,
+                    auto_close=auto_close,
+                    session=session,
+                )
                 session.commit()
                 session.refresh(match)
                 return [self._line_row(match)]
@@ -620,14 +651,20 @@ class FbsPackingRepository:
             ]
             if not printed_rows and not to_print:
                 raise ValueError("Этого товара нет среди оставшихся в задании")
-            for row in to_print:
-                row.status = LINE_PRINTED
-                row.printed_at_ts = now
             if to_print:
-                if job.status == JOB_STATUS_OPEN:
-                    job.status = JOB_STATUS_IN_PROGRESS
-                job.updated_at_ts = now
+                self._apply_allocate_status(
+                    job=job,
+                    rows=to_print,
+                    user_id=user_id,
+                    now=now,
+                    auto_close=auto_close,
+                    session=session,
+                )
                 session.commit()
+            if auto_close:
+                return [self._line_row(row) for row in to_print] or [
+                    self._line_row(row) for row in printed_rows
+                ]
             active = self._printed_lines(session, job_id)
             return [self._line_row(row) for row in active]
 

@@ -358,9 +358,9 @@ def register_warehouse_fbs_packing_routes(
         job = packing_repo.get_job(job_id, include_lines=True)
         if job is None:
             raise HTTPException(status_code=404, detail="Задание не найдено")
-        remaining = packing_repo.remaining_groups(job_id)
+        remaining = packing_repo.remaining_groups_from_lines(job.lines)
         product_ids = [int(item["product_id"]) for item in remaining if item.get("product_id")]
-        barcodes = catalog_repo.first_barcode_by_product_ids(product_ids)
+        barcodes = catalog_repo.first_barcode_by_product_ids(product_ids) if product_ids else {}
         for item in remaining:
             pid = item.get("product_id")
             item["barcode"] = barcodes.get(int(pid), "") if pid else ""
@@ -438,6 +438,7 @@ def _register_packer_prefix(
         cis_key: str = "",
         cis_gtin: str = "",
         include_pdf: bool = True,
+        auto_close: bool = False,
     ) -> dict:
         lines = packing_repo.allocate_lines(
             job_id,
@@ -448,6 +449,7 @@ def _register_packer_prefix(
             cis_raw=cis_raw,
             cis_key=cis_key,
             cis_gtin=cis_gtin,
+            auto_close=auto_close,
         )
         pdfs_b64: list[str] = []
         if include_pdf:
@@ -470,6 +472,7 @@ def _register_packer_prefix(
         *,
         batch: bool,
         include_pdf: bool = True,
+        auto_close: bool = False,
     ) -> dict:
         job = packing_repo.get_job(job_id)
         if job is None:
@@ -492,10 +495,19 @@ def _register_packer_prefix(
             cis_key=resolved.cis_key,
             cis_gtin=resolved.cis_gtin,
             include_pdf=include_pdf,
+            auto_close=auto_close,
         )
 
     def _batch_flag(body: dict | None) -> bool:
         raw = (body or {}).get("batch")
+        if isinstance(raw, bool):
+            return raw
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _auto_close_flag(body: dict | None) -> bool:
+        if not isinstance(body, dict):
+            return False
+        raw = body.get("auto_close")
         if isinstance(raw, bool):
             return raw
         return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -519,6 +531,7 @@ def _register_packer_prefix(
         payload = body if isinstance(body, dict) else {}
         batch = _batch_flag(payload)
         include_pdf = _include_pdf_flag(payload)
+        auto_close = _auto_close_flag(payload)
         try:
             return await asyncio.to_thread(
                 _scan_product_sync,
@@ -527,6 +540,7 @@ def _register_packer_prefix(
                 barcode,
                 batch=batch,
                 include_pdf=include_pdf,
+                auto_close=auto_close,
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
@@ -549,6 +563,7 @@ def _register_packer_prefix(
                 raise HTTPException(status_code=400, detail="Некорректный товар") from exc
         batch = _batch_flag(payload)
         include_pdf = _include_pdf_flag(payload)
+        auto_close = _auto_close_flag(payload)
         try:
             job = packing_repo.get_job(job_id)
             if job is None:
@@ -563,6 +578,7 @@ def _register_packer_prefix(
                 product_id,
                 batch=batch,
                 include_pdf=include_pdf,
+                auto_close=auto_close,
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc

@@ -500,6 +500,30 @@ def test_packer_downloads_all_line_labels_zip_and_can_skip_pdf(tmp_path) -> None
     assert payload["line"]["id"] == job.lines[0].id
 
 
+def test_packer_auto_close_marks_line_done_and_frees_next_sku(tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+
+    first = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000016", "include_pdf": False, "auto_close": True},
+    )
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert payload["line"]["status"] == LINE_DONE
+    assert payload["pdfs_base64"] == []
+    assert packing.get_line(job_id, job.lines[0].id).status == LINE_DONE
+
+    second = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000023", "include_pdf": False, "auto_close": True},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["line"]["id"] == job.lines[2].id
+    assert second.json()["line"]["status"] == LINE_DONE
+
+
 def test_packer_batch_allocate_prints_all_sku_then_scan_labels(tmp_path) -> None:
     client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
     job_id = job.id
