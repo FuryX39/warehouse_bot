@@ -12,6 +12,8 @@ from app.config import Settings
 from app.repositories import (
     STOCK_SYNC_LAST_FAIL_TS_KEY,
     STOCK_SYNC_LAST_OK_TS_KEY,
+    STOCK_SYNC_MARKETPLACE_KEYS,
+    STOCK_SYNC_MARKETPLACE_TITLES,
     InventoryRepository,
 )
 from app.services import StockCoordinator
@@ -21,7 +23,8 @@ from app.warehouse_users_repository import WarehouseUserRow
 
 
 class StockSyncSettingsBody(BaseModel):
-    warehouse_id: int = Field(..., ge=1)
+    warehouse_id: int | None = Field(default=None, ge=1)
+    marketplace_sync: dict[str, bool] | None = None
 
 
 def register_warehouse_stock_sync_routes(
@@ -47,12 +50,25 @@ def register_warehouse_stock_sync_routes(
             row = storage_repo.get_warehouse(int(source_id))
             if row is not None:
                 source = storage_repo.warehouse_to_dict(row)
+        configured_by_name = {a.name: bool(a.is_configured()) for a in coordinator.adapters}
+        flags = inventory_repo.get_marketplace_sync_flags()
+        marketplace_sync = []
+        for name, title in STOCK_SYNC_MARKETPLACE_TITLES.items():
+            marketplace_sync.append(
+                {
+                    "name": name,
+                    "title": title,
+                    "configured": bool(configured_by_name.get(name)),
+                    "sync_enabled": bool(flags.get(name, True)),
+                }
+            )
         return {
             "warehouses": warehouses,
             "source_warehouse_id": source_id,
             "source_warehouse": source,
             "stock_sync_enabled": bool(settings.stock_sync_enabled),
             "default_stocks_sheet_url": str(settings.default_stocks_sheet_url or ""),
+            "marketplace_sync": marketplace_sync,
         }
 
     @app.put("/api/warehouse/stock-sync/settings")
@@ -60,15 +76,31 @@ def register_warehouse_stock_sync_routes(
         body: StockSyncSettingsBody,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        try:
-            source_id = inventory_repo.set_sync_source_warehouse_id(int(body.warehouse_id))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        row = storage_repo.get_warehouse(int(source_id))
+        if body.warehouse_id is None and body.marketplace_sync is None:
+            raise HTTPException(status_code=400, detail="Нечего сохранять")
+        source_id = inventory_repo.get_sync_source_warehouse_id()
+        if body.warehouse_id is not None:
+            try:
+                source_id = inventory_repo.set_sync_source_warehouse_id(int(body.warehouse_id))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        flags = inventory_repo.get_marketplace_sync_flags()
+        if body.marketplace_sync is not None:
+            for name, enabled in body.marketplace_sync.items():
+                key = str(name or "").strip()
+                if key not in STOCK_SYNC_MARKETPLACE_KEYS:
+                    raise HTTPException(status_code=400, detail=f"Неизвестный маркетплейс: {key}")
+                try:
+                    inventory_repo.set_marketplace_sync_enabled(key, bool(enabled))
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            flags = inventory_repo.get_marketplace_sync_flags()
+        row = storage_repo.get_warehouse(int(source_id)) if source_id is not None else None
         return {
             "ok": True,
             "source_warehouse_id": source_id,
             "source_warehouse": storage_repo.warehouse_to_dict(row) if row else None,
+            "marketplace_sync": flags,
         }
 
     @app.get("/api/warehouse/stock-sync/status")
@@ -98,6 +130,7 @@ def register_warehouse_stock_sync_routes(
             "stock_sync_enabled": bool(settings.stock_sync_enabled),
             "source_warehouse_id": source_id,
             "source_warehouse": source,
+            "marketplace_sync": inventory_repo.get_marketplace_sync_flags(),
         }
 
     @app.post("/api/warehouse/stock-sync/run")

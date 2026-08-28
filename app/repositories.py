@@ -37,6 +37,16 @@ AVAILABLE_STOCK_SYNC_KEY = "available_stock_push_hash"
 STOCK_SYNC_SOURCE_WAREHOUSE_KEY = "stock_sync_source_warehouse_id"
 STOCK_SYNC_LAST_OK_TS_KEY = "stock_sync_last_ok_ts"
 STOCK_SYNC_LAST_FAIL_TS_KEY = "stock_sync_last_fail_ts"
+STOCK_SYNC_MARKETPLACE_KEYS: dict[str, str] = {
+    "ozon": "stock_sync_mp_ozon",
+    "wildberries": "stock_sync_mp_wildberries",
+    "yandex_market": "stock_sync_mp_yandex_market",
+}
+STOCK_SYNC_MARKETPLACE_TITLES: dict[str, str] = {
+    "ozon": "Ozon",
+    "wildberries": "Wildberries",
+    "yandex_market": "Яндекс Маркет",
+}
 
 
 def available_stock_map_hash(available_stock: dict[str, int]) -> int:
@@ -177,6 +187,24 @@ class InventoryRepository:
             raise ValueError("Склад не найден")
         self.set_sync_int(STOCK_SYNC_SOURCE_WAREHOUSE_KEY, wh_id)
         return wh_id
+
+    def marketplace_sync_enabled(self, adapter_name: str) -> bool:
+        """False — не тянуть заказы и не пушить остатки. Токен не трогаем."""
+        key = STOCK_SYNC_MARKETPLACE_KEYS.get(str(adapter_name or "").strip())
+        if not key:
+            return True
+        value = self.get_sync_int(key)
+        return value is None or int(value) != 0
+
+    def set_marketplace_sync_enabled(self, adapter_name: str, enabled: bool) -> None:
+        name = str(adapter_name or "").strip()
+        key = STOCK_SYNC_MARKETPLACE_KEYS.get(name)
+        if not key:
+            raise ValueError(f"Неизвестный маркетплейс: {name}")
+        self.set_sync_int(key, 1 if enabled else 0)
+
+    def get_marketplace_sync_flags(self) -> dict[str, bool]:
+        return {name: self.marketplace_sync_enabled(name) for name in STOCK_SYNC_MARKETPLACE_KEYS}
 
     def _read_stocks_map(self, session: Session) -> dict[str, int]:
         source_id = self.get_sync_source_warehouse_id()

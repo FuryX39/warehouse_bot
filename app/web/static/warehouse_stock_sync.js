@@ -43,6 +43,37 @@
     return params.toString();
   }
 
+  function mpCheckboxes(items) {
+    var rows = items || [];
+    if (!rows.length) {
+      return '<p class="wh-muted">Маркетплейсы не заданы.</p>';
+    }
+    return (
+      '<div class="wh-stock-sync-mp-list">' +
+      rows
+        .map(function (mp) {
+          var checked = mp.sync_enabled ? " checked" : "";
+          var disabled = mp.configured ? "" : " disabled";
+          var hint = mp.configured ? "токен задан" : "токен не задан";
+          return (
+            '<label class="wh-stock-sync-mp-item">' +
+            '<input type="checkbox" data-mp-sync="' +
+            esc(mp.name) +
+            '"' +
+            checked +
+            disabled +
+            " /> " +
+            esc(mp.title) +
+            ' <span class="wh-muted">(' +
+            hint +
+            ")</span></label>"
+          );
+        })
+        .join("") +
+      "</div>"
+    );
+  }
+
   function warehouseOptions(selectedId) {
     var warehouses = (state.meta && state.meta.warehouses) || [];
     return warehouses
@@ -163,19 +194,42 @@
         }
         msg.className = "wh-msg";
         msg.textContent = "Сохраняем…";
+        var flags = {};
+        root.querySelectorAll("[data-mp-sync]").forEach(function (cb) {
+          if (cb.disabled) return;
+          flags[cb.getAttribute("data-mp-sync")] = !!cb.checked;
+        });
         fetchJson("/api/warehouse/stock-sync/settings", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ warehouse_id: warehouseId }),
+          body: JSON.stringify({ warehouse_id: warehouseId, marketplace_sync: flags }),
         })
           .then(function (data) {
             state.meta = state.meta || {};
             state.meta.source_warehouse_id = data.source_warehouse_id;
             state.meta.source_warehouse = data.source_warehouse;
+            if (data.marketplace_sync && state.meta.marketplace_sync) {
+              state.meta.marketplace_sync.forEach(function (mp) {
+                if (Object.prototype.hasOwnProperty.call(data.marketplace_sync, mp.name)) {
+                  mp.sync_enabled = !!data.marketplace_sync[mp.name];
+                }
+              });
+            }
             msg.className = "wh-msg wh-msg-ok";
+            var flagsText = "";
+            if (data.marketplace_sync) {
+              var off = Object.keys(data.marketplace_sync).filter(function (name) {
+                return !data.marketplace_sync[name];
+              });
+              flagsText = off.length
+                ? " Отключены в цикле: " + off.join(", ") + "."
+                : " Все указанные МП участвуют в цикле заказов и остатков.";
+            }
             msg.textContent =
               "Склад синхронизации: " +
-              ((data.source_warehouse && data.source_warehouse.name) || "#" + data.source_warehouse_id);
+              ((data.source_warehouse && data.source_warehouse.name) || "#" + data.source_warehouse_id) +
+              "." +
+              flagsText;
             return loadInventory().then(loadStatus);
           })
           .catch(function (err) {
@@ -424,6 +478,11 @@
           "</select></label>" +
           '<button type="button" class="wh-btn wh-btn-primary" id="whStockSyncSaveWarehouse">Сохранить</button>' +
           '<span id="whStockSyncMsg" class="wh-msg"></span>' +
+          "</div>" +
+          '<div class="wh-stock-sync-mp">' +
+          "<h4>Маркетплейсы в цикле заказов и остатков</h4>" +
+          '<p class="wh-muted">Снимите галочку — заказы и пуш остатков с этого МП не идут. Токен в .env не трогается: FBS, ярлыки и прочее продолжают работать.</p>' +
+          mpCheckboxes(meta.marketplace_sync) +
           "</div>" +
           "</div>" +
           '<div class="wh-stock-sync-grid">' +

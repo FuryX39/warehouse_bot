@@ -142,6 +142,11 @@ class StockCoordinator:
         self.last_error: str | None = None
         self.last_warnings: list[str] = []
 
+    def _adapter_in_stock_sync(self, adapter: MarketplaceAdapter) -> bool:
+        if not adapter.is_configured():
+            return False
+        return self.inventory_repo.marketplace_sync_enabled(adapter.name)
+
     def sync_cycle(self, mode: str = "auto") -> dict:
         sync_start_ts = int(time.time())
         mode_l = (mode or "auto").strip().lower()
@@ -150,7 +155,7 @@ class StockCoordinator:
 
         adapter_do_full: dict[str, bool] = {}
         for adapter in self.adapters:
-            if not adapter.is_configured():
+            if not self._adapter_in_stock_sync(adapter):
                 continue
             anchor = _get_anchor(self.inventory_repo, adapter.name)
             last_full = _get_last_full(self.inventory_repo, adapter.name)
@@ -159,6 +164,11 @@ class StockCoordinator:
             )
 
         adapter_sync_kinds = {k: ("full" if v else "delta") for k, v in adapter_do_full.items()}
+        marketplace_sync_skipped = [
+            adapter.name
+            for adapter in self.adapters
+            if adapter.is_configured() and not self.inventory_repo.marketplace_sync_enabled(adapter.name)
+        ]
 
         try:
             all_actions: list[ReservationAction] = []
@@ -168,7 +178,7 @@ class StockCoordinator:
             desired_full_by_source: dict[str, list[ReservationAction]] = {}
 
             for adapter in self.adapters:
-                if not adapter.is_configured():
+                if not self._adapter_in_stock_sync(adapter):
                     continue
                 try:
                     do_full = adapter_do_full.get(adapter.name, True)
@@ -186,7 +196,7 @@ class StockCoordinator:
             reconcile_removed = 0
             reconcile_updated = 0
             for adapter in self.adapters:
-                if not adapter.is_configured() or not fetch_ok.get(adapter.name):
+                if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):
                     continue
                 do_reconcile = adapter_do_full.get(adapter.name, False) or getattr(adapter, "reconcile_on_delta", False)
                 if not do_reconcile:
@@ -205,7 +215,7 @@ class StockCoordinator:
 
             mismatch_parts: list[str] = []
             for adapter in self.adapters:
-                if not adapter.is_configured() or not fetch_ok.get(adapter.name):
+                if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):
                     continue
                 do_reconcile = adapter_do_full.get(adapter.name, False) or getattr(adapter, "reconcile_on_delta", False)
                 if not do_reconcile:
@@ -244,7 +254,7 @@ class StockCoordinator:
             elif stock_changed:
                 stock_push_ok = True
                 for adapter in self.adapters:
-                    if not adapter.is_configured():
+                    if not self._adapter_in_stock_sync(adapter):
                         continue
                     changed_available = self.inventory_repo.get_adapter_stock_push_delta(
                         adapter.name, available_stock
@@ -297,7 +307,7 @@ class StockCoordinator:
                 logger.info("Skip stock push: available stock unchanged")
 
             for adapter in self.adapters:
-                if not adapter.is_configured() or not fetch_ok.get(adapter.name):
+                if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):
                     continue
                 _set_anchor(self.inventory_repo, adapter.name, sync_start_ts)
                 if adapter_do_full.get(adapter.name, False):
@@ -324,6 +334,7 @@ class StockCoordinator:
                 "adapter_errors": adapter_errors,
                 "sync_mode": mode_l,
                 "adapter_sync_kinds": adapter_sync_kinds,
+                "marketplace_sync_skipped": marketplace_sync_skipped,
                 "stock_push_skipped": stock_push_disabled or (not stock_changed),
                 "stock_push_disabled": stock_push_disabled,
                 "admin_alert": admin_alert,

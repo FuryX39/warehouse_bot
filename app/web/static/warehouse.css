@@ -359,6 +359,36 @@ body.wh-body {
   min-width: 220px;
 }
 
+.wh-stock-sync-mp {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.wh-stock-sync-mp h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.wh-stock-sync-mp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+}
+
+.wh-stock-sync-mp-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.wh-stock-sync-mp-item:has(input:disabled) {
+  opacity: 0.55;
+}
+
 .wh-mono-block {
   background: #0f172a;
   color: #e2e8f0;
