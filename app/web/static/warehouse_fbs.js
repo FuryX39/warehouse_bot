@@ -1,6 +1,5 @@
 (function (global) {
   var activeMarketplace = "yandex";
-  var labelTokens = { ozon: null, yandex: null };
   var busy = false;
   var assignees = [];
   var currentJobId = null;
@@ -39,13 +38,7 @@
     });
     var download = root.querySelector("#whFbsDownload");
     if (download) {
-      download.disabled =
-        on ||
-        (activeMarketplace === "ozon"
-          ? !labelTokens.ozon
-          : isPackingJobsMarketplace()
-            ? !hasMerged
-            : !hasMerged);
+      download.disabled = on || !hasMerged;
     }
   }
 
@@ -95,15 +88,21 @@
       return (
         '<div class="wh-route-card">' +
         "<h3>Ozon FBS</h3>" +
-        '<p class="wh-muted">Отправления awaiting_deliver. Порядок списка и этикеток берётся из листа assembly.</p>' +
+        '<p class="wh-muted">Отправления awaiting_deliver. Укажите первое и последнее отправление ' +
+        "(как в ЛК Ozon сверху вниз, включительно) — в задание попадёт всё между ними. Пусто — все. " +
+        "Без Google-таблицы: задание такое же, как у WB и Яндекса.</p>" +
         '<div class="wh-route-form">' +
         '<label>Первое отправление<input type="text" id="whFbsFirstPosting" placeholder="Необязательно" /></label>' +
         '<label>Последнее отправление<input type="text" id="whFbsLastPosting" placeholder="Необязательно" /></label>' +
+        "</div>" +
+        '<label class="wh-fbs-check"><input type="checkbox" id="whFbsRequireCis" /> Обязательная маркировка ЧЗ</label>' +
+        '<p class="wh-muted">Упаковщики</p>' +
+        packerPickerHtml() +
         '<div class="wh-route-actions">' +
         '<button type="button" class="wh-btn wh-fbs-action" id="whFbsRefresh">Обновить список</button>' +
-        '<button type="button" class="wh-btn wh-btn-primary wh-fbs-action" id="whFbsGenerate">Сформировать список и этикетки</button>' +
-        '<button type="button" class="wh-btn wh-fbs-action" id="whFbsDownload" disabled>Скачать этикетки</button>' +
-        "</div></div></div>"
+        '<button type="button" class="wh-btn wh-btn-primary wh-fbs-action" id="whFbsGenerate">Создать задание</button>' +
+        '<button type="button" class="wh-btn wh-fbs-action" id="whFbsDownload" disabled>Скачать общий PDF</button>' +
+        "</div></div>"
       );
     }
     if (activeMarketplace === "wildberries") {
@@ -161,6 +160,21 @@
     return "Открыто";
   }
 
+  function jobMarketplaceLabel(job) {
+    var mp = String((job && job.marketplace) || activeMarketplace || "").toLowerCase();
+    if (mp === "wildberries") return "WB";
+    if (mp === "ozon") return "Ozon";
+    return "Яндекс";
+  }
+
+  function jobSubstatusLabel(job) {
+    var st = String((job && job.order_substatus) || "").toUpperCase();
+    if (st === "AWAITING_DELIVER") return "ожидает отгрузки";
+    if (st === "STARTED") return "к сборке";
+    if (st === "READY_TO_SHIP") return "к отгрузке";
+    return st || "—";
+  }
+
   function renderJobs(root, jobs) {
     var wrap = root.querySelector("#whFbsJobs");
     if (!wrap) return;
@@ -196,9 +210,9 @@
             "</td><td>" +
             esc(jobStatusLabel(job.status)) +
             "</td><td>" +
-            esc((job.marketplace || activeMarketplace || "yandex").toUpperCase()) +
+            esc(jobMarketplaceLabel(job)) +
             " · " +
-            esc((job.order_substatus || "").toUpperCase()) +
+            esc(jobSubstatusLabel(job)) +
             (job.supply_id ? " · " + esc(job.supply_id) : "") +
             "</td><td>" +
             esc(job.line_done) +
@@ -235,12 +249,16 @@
 
   function packingMarketplaceParam() {
     if (activeMarketplace === "wildberries") return "wildberries";
-    if (activeMarketplace === "yandex") return "yandex";
-    return "";
+    if (activeMarketplace === "ozon") return "ozon";
+    return "yandex";
   }
 
   function isPackingJobsMarketplace() {
-    return activeMarketplace === "yandex" || activeMarketplace === "wildberries";
+    return (
+      activeMarketplace === "yandex" ||
+      activeMarketplace === "wildberries" ||
+      activeMarketplace === "ozon"
+    );
   }
 
   function wbSubstatus(root) {
@@ -427,36 +445,36 @@
       yandexParams.set("marketplace", "yandex");
       return "?" + yandexParams.toString();
     }
-    var first = String(root.querySelector("#whFbsFirstPosting").value || "").trim();
-    var last = String(root.querySelector("#whFbsLastPosting").value || "").trim();
-    if (asForm) {
-      var form = new FormData();
-      if (first) form.append("first_posting", first);
-      if (last) form.append("last_posting", last);
-      return form;
-    }
-    var params = new URLSearchParams();
-    if (first) params.set("first_posting", first);
-    if (last) params.set("last_posting", last);
-    var query = params.toString();
-    return query ? "?" + query : "";
+    var first = String((root.querySelector("#whFbsFirstPosting") || {}).value || "").trim();
+    var last = String((root.querySelector("#whFbsLastPosting") || {}).value || "").trim();
+    var ozonParams = new URLSearchParams();
+    ozonParams.set("marketplace", "ozon");
+    if (first) ozonParams.set("first_posting", first);
+    if (last) ozonParams.set("last_posting", last);
+    return "?" + ozonParams.toString();
   }
 
   function refreshList(root) {
     if (busy) return;
     setBusy(root, true);
     setMessage(root, "Получение заказов…", false);
-    var url =
-      activeMarketplace === "ozon"
-        ? "/api/ozon/awaiting-shipment" + queryOrForm(root, false)
-        : "/api/warehouse/fbs-packing/preview" + queryOrForm(root, false);
+    var url = "/api/warehouse/fbs-packing/preview" + queryOrForm(root, false);
     shell()
       .fetchJson(url)
       .then(function (data) {
-        if (activeMarketplace === "ozon") labelTokens.ozon = null;
         renderRows(root, data.list_rows || []);
         var warnings = data.warnings || [];
-        if (activeMarketplace === "yandex" || activeMarketplace === "wildberries") {
+        if (activeMarketplace === "ozon") {
+          warnings.unshift(
+            "Показано отправлений: " +
+              (data.orders_count || 0) +
+              " из " +
+              (data.available_count != null ? data.available_count : data.orders_count || 0) +
+              ", строк: " +
+              (data.count || 0) +
+              "."
+          );
+        } else {
           warnings.unshift(
             "Показано товаров: " +
               (data.count || 0) +
@@ -465,7 +483,7 @@
               "."
           );
         }
-        setMessage(root, warnings.length ? warnings.join("\n") : "Список обновлён.", false);
+        setMessage(root, warnings.join("\n"), false);
       })
       .catch(function (error) {
         setMessage(root, error.message || "Ошибка получения заказов", true);
@@ -477,30 +495,7 @@
 
   function generate(root) {
     if (busy) return;
-    if (activeMarketplace === "yandex" || activeMarketplace === "wildberries") {
-      createJob(root);
-      return;
-    }
-    setBusy(root, true);
-    setMessage(root, "Формирование списка и этикеток…", false);
-    shell()
-      .fetchJson("/api/fbs/ozon/generate", { method: "POST", body: queryOrForm(root, true) })
-      .then(function (data) {
-        labelTokens.ozon = data.labels_token || null;
-        renderRows(root, data.list_rows || []);
-        var notes = [];
-        if (data.sheet_url) notes.push("Список создан: " + data.sheet_url);
-        notes = notes.concat(data.warnings || []);
-        if (!notes.length) notes.push("Список и этикетки сформированы.");
-        setMessage(root, notes.join("\n"), false);
-      })
-      .catch(function (error) {
-        labelTokens.ozon = null;
-        setMessage(root, error.message || "Ошибка формирования", true);
-      })
-      .finally(function () {
-        setBusy(root, false);
-      });
+    createJob(root);
   }
 
   function createJob(root) {
@@ -531,6 +526,14 @@
         }
         body.supply_id = supplyId;
       }
+    }
+    if (activeMarketplace === "ozon") {
+      body.build_list = false;
+      body.order_substatus = "awaiting_deliver";
+      var firstEl = root.querySelector("#whFbsFirstPosting");
+      var lastEl = root.querySelector("#whFbsLastPosting");
+      body.first_posting = firstEl ? String(firstEl.value || "").trim() : "";
+      body.last_posting = lastEl ? String(lastEl.value || "").trim() : "";
     }
     var limitEl =
       root.querySelector("#whFbsYandexItemLimit") || root.querySelector("#whFbsItemLimit");
@@ -565,75 +568,34 @@
 
   function download(root) {
     if (busy) return;
-    if (activeMarketplace === "yandex" || activeMarketplace === "wildberries") {
-      if (!currentJobId || !hasMerged) return;
-      setBusy(root, true);
-      fetch("/api/warehouse/fbs-packing/jobs/" + currentJobId + "/labels", {
-        credentials: "include",
-      })
-        .then(function (response) {
-          if (!response.ok) {
-            return response.text().then(function (text) {
-              throw new Error(text || "Не удалось скачать PDF");
-            });
-          }
-          return response.blob();
-        })
-        .then(function (blob) {
-          var objectUrl = URL.createObjectURL(blob);
-          var link = document.createElement("a");
-          link.href = objectUrl;
-          link.download =
-            activeMarketplace === "wildberries" ? "wb_fbs_labels.pdf" : "yandex_fbs_labels.pdf";
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          setTimeout(function () {
-            URL.revokeObjectURL(objectUrl);
-          }, 1000);
-        })
-        .catch(function (error) {
-          setMessage(root, error.message || "Ошибка скачивания", true);
-        })
-        .finally(function () {
-          setBusy(root, false);
-        });
-      return;
-    }
-    var token = labelTokens.ozon;
-    if (!token) return;
+    if (!currentJobId || !hasMerged) return;
     setBusy(root, true);
-    var url = "/api/fbs/ozon/labels?token=" + encodeURIComponent(token);
-    fetch(url, { credentials: "include" })
+    fetch("/api/warehouse/fbs-packing/jobs/" + currentJobId + "/labels", {
+      credentials: "include",
+    })
       .then(function (response) {
         if (!response.ok) {
           return response.text().then(function (text) {
-            var detail = text;
-            try {
-              var data = text ? JSON.parse(text) : null;
-              if (data && data.detail) detail = data.detail;
-            } catch (e) {
-              // keep text
-            }
-            throw new Error(detail || "Не удалось скачать этикетки");
+            throw new Error(text || "Не удалось скачать PDF");
           });
         }
-        return response.blob().then(function (blob) {
-          var disposition = response.headers.get("Content-Disposition") || "";
-          var match = /filename="?([^";]+)"?/i.exec(disposition);
-          var filename = match && match[1] ? match[1] : "ozon_fbs_labels.pdf";
-          var objectUrl = URL.createObjectURL(blob);
-          var link = document.createElement("a");
-          link.href = objectUrl;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          setTimeout(function () {
-            URL.revokeObjectURL(objectUrl);
-          }, 1000);
-          labelTokens.ozon = null;
-        });
+        return response.blob();
+      })
+      .then(function (blob) {
+        var objectUrl = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = objectUrl;
+        var names = {
+          wildberries: "wb_fbs_labels.pdf",
+          ozon: "ozon_fbs_labels.pdf",
+        };
+        link.download = names[activeMarketplace] || "yandex_fbs_labels.pdf";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(function () {
+          URL.revokeObjectURL(objectUrl);
+        }, 1000);
       })
       .catch(function (error) {
         setMessage(root, error.message || "Ошибка скачивания", true);

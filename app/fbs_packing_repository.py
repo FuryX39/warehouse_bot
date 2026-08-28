@@ -26,6 +26,7 @@ LINE_DONE = "done"
 
 MARKETPLACE_YANDEX = "yandex"
 MARKETPLACE_WB = "wildberries"
+MARKETPLACE_OZON = "ozon"
 
 
 class _Base(DeclarativeBase):

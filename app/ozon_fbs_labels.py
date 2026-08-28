@@ -137,6 +137,105 @@ def filter_by_posting_range(
     return filtered_rows, filtered_order
 
 
+@dataclass(frozen=True)
+class OzonUnitLabel:
+    sku: str
+    posting_number: str
+    pdf: bytes | None
+    error: str = ""
+
+    def scan_keys(self) -> list[str]:
+        return [self.posting_number] if self.posting_number else []
+
+
+def ozon_list_rows_payload(list_rows: list[OzonFbsListRow]) -> list[dict]:
+    return [
+        {
+            "seq": row.seq,
+            "sku": row.sku,
+            "quantity": row.quantity,
+            "order_id": row.posting_number,
+            "order_display": row.posting_number,
+            "posting_number": row.posting_number,
+        }
+        for row in list_rows
+    ]
+
+
+def load_ozon_fbs_list_rows(
+    adapter: OzonAdapter,
+    *,
+    first_posting: str | None = None,
+    last_posting: str | None = None,
+    statuses: tuple[str, ...] = OZON_AWAITING_SHIPMENT_STATUSES,
+) -> tuple[list[OzonFbsListRow], list[OzonFbsPosting], list[str], int]:
+    """Превью и отбор отправлений awaiting_deliver по диапазону, без Google Sheets."""
+    postings = adapter.list_awaiting_shipment_postings(statuses=statuses)
+    if not postings:
+        return [], [], [], 0
+    list_rows = build_sorted_list_rows(postings)
+    posting_order = posting_numbers_chronological(postings)
+    available = len(posting_order)
+    warnings: list[str] = []
+    range_first, range_last = _normalize_posting_range_args(first_posting, last_posting)
+    if range_first or range_last:
+        list_rows, posting_order = filter_by_posting_range(
+            list_rows,
+            posting_order,
+            first_posting=range_first,
+            last_posting=range_last,
+        )
+        warnings.append(
+            f"Диапазон отправлений: {range_first} … {range_last} "
+            f"({len(posting_order)} шт., по времени заказа)."
+        )
+    by_number = {p.posting_number: p for p in postings}
+    ordered = [by_number[pn] for pn in posting_order if pn in by_number]
+    return list_rows, ordered, warnings, available
+
+
+def collect_ozon_unit_labels(
+    adapter: OzonAdapter,
+    list_rows: list[OzonFbsListRow],
+    *,
+    label_rotate_degrees: int = 90,
+) -> tuple[list[OzonUnitLabel], list[str]]:
+    """Одна этикетка на отправление; qty разворачивается в единицы как у Яндекса."""
+    posting_numbers = posting_numbers_in_list_order(list_rows)
+    by_posting, warnings = adapter.fetch_package_label_by_posting(posting_numbers)
+    warnings.append(f"Поворот этикеток Ozon: {int(label_rotate_degrees)}°.")
+    units: list[OzonUnitLabel] = []
+    for row in list_rows:
+        raw = by_posting.get(row.posting_number)
+        pdf: bytes | None = None
+        error = ""
+        if raw is None:
+            error = f"Нет этикетки для отправления {row.posting_number}"
+            warnings.append(error)
+        else:
+            try:
+                pdf = normalize_ozon_package_label_pdf(
+                    raw,
+                    rotate_degrees=label_rotate_degrees,
+                    strict=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error = f"Не удалось повернуть этикетку {row.posting_number}: {exc}"
+                warnings.append(error)
+                pdf = raw
+        qty = max(1, int(row.quantity))
+        for _ in range(qty):
+            units.append(
+                OzonUnitLabel(
+                    sku=row.sku,
+                    posting_number=row.posting_number,
+                    pdf=pdf,
+                    error=error,
+                )
+            )
+    return units, warnings
+
+
 def _fetch_labels_in_order(
     adapter: OzonAdapter,
     posting_numbers: list[str],

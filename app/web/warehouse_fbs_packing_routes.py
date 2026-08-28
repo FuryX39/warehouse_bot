@@ -13,10 +13,11 @@ from fastapi.responses import Response
 from app.catalog_repository import CatalogRepository
 from app.config import Settings
 from app.fbs_labels_common import build_labels_zip
-from app.fbs_packing_repository import FbsPackingRepository, MARKETPLACE_WB
+from app.fbs_packing_repository import FbsPackingRepository, MARKETPLACE_OZON, MARKETPLACE_WB
 from app.fbs_packing_service import (
     _bool,
     build_packing_marking_xlsx,
+    create_ozon_packing_job,
     create_wb_packing_job,
     create_yandex_packing_job,
     list_rows_payload,
@@ -35,6 +36,11 @@ from app.wb_fbs_labels import (
     list_rows_payload as wb_list_rows_payload,
     load_wb_fbs_list_rows,
     normalize_wb_fbs_substatus,
+)
+from app.ozon_fbs_labels import (
+    get_configured_ozon_adapter,
+    load_ozon_fbs_list_rows,
+    ozon_list_rows_payload,
 )
 
 
@@ -121,6 +127,8 @@ def register_warehouse_fbs_packing_routes(
             build_list: str = "1",
             marketplace: str = "yandex",
             supply_id: str = "",
+            first_posting: str = "",
+            last_posting: str = "",
             _: WarehouseUserRow | None = Depends(require_fbs_access),
         ) -> dict:
             mp = str(marketplace or "yandex").strip().lower()
@@ -158,6 +166,37 @@ def register_warehouse_fbs_packing_routes(
                     "substatus": order_substatus,
                     "warnings": warnings,
                     "list_rows": wb_list_rows_payload(list_rows),
+                }
+
+            if mp == MARKETPLACE_OZON:
+                adapter = get_configured_ozon_adapter(coordinator)
+                if adapter is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)",
+                    )
+
+                def _run_ozon():
+                    return load_ozon_fbs_list_rows(
+                        adapter,
+                        first_posting=first_posting,
+                        last_posting=last_posting,
+                    )
+
+                try:
+                    list_rows, postings, warnings, available = await asyncio.to_thread(_run_ozon)
+                except ValueError as exc:
+                    raise _http_value_error(exc) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=502, detail=f"Ozon API: {exc}") from exc
+                return {
+                    "marketplace": mp,
+                    "count": len(list_rows),
+                    "available_count": available,
+                    "orders_count": len(postings),
+                    "substatus": "awaiting_deliver",
+                    "warnings": warnings,
+                    "list_rows": ozon_list_rows_payload(list_rows),
                 }
 
             try:
@@ -291,6 +330,35 @@ def register_warehouse_fbs_packing_routes(
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
                 return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
+            if mp == MARKETPLACE_OZON:
+                adapter = get_configured_ozon_adapter(coordinator)
+                if adapter is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Ozon API не настроен (OZON_CLIENT_ID / OZON_API_KEY)",
+                    )
+
+                def _run_ozon():
+                    return create_ozon_packing_job(
+                        adapter=adapter,
+                        catalog=catalog_repo,
+                        packing_repo=packing_repo,
+                        settings=settings,
+                        require_cis=_bool(payload.get("require_cis"), False),
+                        packer_user_ids=raw_ids,
+                        created_by_user_id=int(user.id) if user else None,
+                        first_posting=str(payload.get("first_posting") or ""),
+                        last_posting=str(payload.get("last_posting") or ""),
+                    )
+
+                try:
+                    job = await asyncio.to_thread(_run_ozon)
+                except ValueError as exc:
+                    raise _http_value_error(exc) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                return {"job": packing_repo.job_to_dict(job, include_lines=True)}
+
             adapter = get_configured_yandex_adapter(coordinator)
             if adapter is None:
                 raise HTTPException(
@@ -356,10 +424,16 @@ def register_warehouse_fbs_packing_routes(
                 pdf = packing_repo.read_merged_pdf(job_id)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+            job = packing_repo.get_job(job_id)
+            mp = str(job.marketplace if job else "")
+            filename = {
+                MARKETPLACE_WB: "wb_fbs_labels.pdf",
+                MARKETPLACE_OZON: "ozon_fbs_labels.pdf",
+            }.get(mp, "yandex_fbs_labels.pdf")
             return Response(
                 content=pdf,
                 media_type="application/pdf",
-                headers={"Content-Disposition": _attachment_disposition("yandex_fbs_labels.pdf")},
+                headers={"Content-Disposition": _attachment_disposition(filename)},
             )
 
         @app.get("/api/warehouse/fbs-packing/jobs/{job_id}/marking.xlsx")

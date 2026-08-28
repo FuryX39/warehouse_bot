@@ -11,6 +11,7 @@ from app.fbs_labels_common import merge_label_pdfs
 from app.fbs_packing_repository import (
     FbsPackingJobRow,
     FbsPackingRepository,
+    MARKETPLACE_OZON,
     MARKETPLACE_WB,
     MARKETPLACE_YANDEX,
 )
@@ -30,8 +31,10 @@ from app.wb_fbs_labels import (
     load_wb_fbs_list_rows,
     normalize_wb_fbs_substatus,
 )
+from app.ozon_fbs_labels import collect_ozon_unit_labels, load_ozon_fbs_list_rows
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.adapters.wildberries import WildberriesAdapter
+from app.adapters.ozon import OzonAdapter
 
 
 def _bool(value: object, default: bool = True) -> bool:
@@ -321,6 +324,78 @@ def create_wb_packing_job(
         build_list=False,
         require_cis=bool(require_cis),
         supply_id=effective_supply,
+        created_by_user_id=created_by_user_id,
+        packer_user_ids=packer_user_ids,
+        warnings=warnings,
+        merged_pdf=merged_pdf,
+        lines=line_payloads,
+    )
+
+
+def create_ozon_packing_job(
+    *,
+    adapter: OzonAdapter,
+    catalog: CatalogRepository,
+    packing_repo: FbsPackingRepository,
+    settings: Settings,
+    packer_user_ids: list[int],
+    created_by_user_id: int | None,
+    require_cis: bool = False,
+    first_posting: str = "",
+    last_posting: str = "",
+) -> FbsPackingJobRow:
+    list_rows, _postings, warnings, _available = load_ozon_fbs_list_rows(
+        adapter,
+        first_posting=first_posting,
+        last_posting=last_posting,
+    )
+    if not list_rows:
+        raise ValueError("Нет отправлений Ozon для задания")
+
+    units, label_warnings = collect_ozon_unit_labels(
+        adapter,
+        list_rows,
+        label_rotate_degrees=settings.ozon_label_rotate_degrees,
+    )
+    warnings.extend(label_warnings)
+    units_with_pdf = [unit for unit in units if unit.pdf]
+    if not units_with_pdf:
+        detail = "; ".join(warnings[:5]) if warnings else "нет PDF"
+        raise ValueError(f"Не удалось получить этикетки Ozon: {detail}")
+
+    catalog_by_sku, missing = resolve_catalog_products(
+        catalog, [unit.sku for unit in units_with_pdf]
+    )
+    for sku in missing:
+        warnings.append(f"Артикул «{sku}» не найден в каталоге — строка всё равно в задании")
+
+    pdfs = [unit.pdf for unit in units_with_pdf if unit.pdf]
+    merged_pdf = merge_label_pdfs(pdfs)
+    if merged_pdf is None and len(pdfs) == 1:
+        merged_pdf = pdfs[0]
+
+    line_payloads = []
+    for seq, unit in enumerate(units_with_pdf, start=1):
+        product = catalog_by_sku.get(unit.sku.casefold())
+        line_payloads.append(
+            {
+                "seq": seq,
+                "sku": unit.sku,
+                "product_id": int(product["id"]) if product else None,
+                "product_name": str(product["name"]) if product else "",
+                "order_id": unit.posting_number,
+                "box_id": None,
+                "place_index": 1,
+                "place_total": 1,
+                "scan_keys": unit.scan_keys(),
+                "pdf": unit.pdf,
+            }
+        )
+    return packing_repo.create_job(
+        marketplace=MARKETPLACE_OZON,
+        order_substatus="awaiting_deliver",
+        build_list=False,
+        require_cis=bool(require_cis),
         created_by_user_id=created_by_user_id,
         packer_user_ids=packer_user_ids,
         warnings=warnings,
