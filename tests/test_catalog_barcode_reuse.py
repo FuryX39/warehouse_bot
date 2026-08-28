@@ -81,3 +81,37 @@ def test_orphan_barcode_cleaned_on_init_and_reuse(tmp_path) -> None:
         }
     )
     assert any(b["barcode"] == "ORPHAN-99" for b in product.barcodes)
+
+
+def test_merge_product_barcode_appends_and_rejects_foreign(tmp_path) -> None:
+    repo = _repo(tmp_path, "bc_merge.db")
+    first = repo.create_product(
+        {
+            "name": "One",
+            "sku": "ONE-1",
+            "code": "10001",
+            "is_kit": False,
+            "barcodes": [{"barcode": "OLD-111", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    second = repo.create_product(
+        {
+            "name": "Two",
+            "sku": "TWO-1",
+            "code": "10002",
+            "is_kit": False,
+            "barcodes": [{"barcode": "OLD-222", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    assert repo.merge_product_barcode(product_id=int(first.id), barcode="NEW-333") == "created"
+    again = repo.get_product(int(first.id))
+    codes = {item["barcode"] for item in again.barcodes}
+    assert codes == {"OLD-111", "NEW-333"}
+    assert repo.merge_product_barcode(product_id=int(first.id), barcode="NEW-333") == "updated"
+    try:
+        repo.merge_product_barcode(product_id=int(second.id), barcode="NEW-333")
+        raise AssertionError("expected duplicate barcode error")
+    except ValueError as exc:
+        assert "уже используется" in str(exc)
