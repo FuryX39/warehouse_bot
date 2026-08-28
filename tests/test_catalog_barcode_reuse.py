@@ -109,6 +109,18 @@ def test_merge_product_barcode_appends_and_rejects_foreign(tmp_path) -> None:
     again = repo.get_product(int(first.id))
     codes = {item["barcode"] for item in again.barcodes}
     assert codes == {"OLD-111", "NEW-333"}
+    assert repo.merge_product_barcode(
+        product_id=int(first.id),
+        barcode="NEW-444",
+        label="ШК ВБ",
+        group="Озон",
+        touch_label=True,
+        touch_group=True,
+    ) == "created"
+    labeled = repo.get_product(int(first.id))
+    added = next(item for item in labeled.barcodes if item["barcode"] == "NEW-444")
+    assert added["label"] == "ШК ВБ"
+    assert added["group"] == "Озон"
     assert repo.merge_product_barcode(product_id=int(first.id), barcode="NEW-333") == "updated"
     try:
         repo.merge_product_barcode(product_id=int(second.id), barcode="NEW-333")

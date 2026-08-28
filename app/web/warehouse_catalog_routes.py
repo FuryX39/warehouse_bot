@@ -441,6 +441,10 @@ def register_warehouse_catalog_routes(
             result = catalog_repo.merge_product_barcode(
                 product_id=int(product_id),
                 barcode=str(body.get("barcode") or ""),
+                label=str(body.get("label") or ""),
+                group=str(body.get("group") or ""),
+                touch_label=True,
+                touch_group=True,
             )
         except ValueError as exc:
             msg = str(exc)
