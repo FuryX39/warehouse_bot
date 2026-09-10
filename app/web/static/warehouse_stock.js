@@ -1,6 +1,7 @@
 (function (global) {
   var meta = { warehouse_groups: [], product_groups: [], warehouses: [] };
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var viewMode = "products";
   var expanded = null;
@@ -169,39 +170,90 @@
     );
   }
 
-  function renderWarehouseBlocks(warehouses) {
-    if (!warehouses || !warehouses.length) {
+  function renderWarehouseBlocksPaged(flat) {
+    if (!flat || !flat.length) {
       return '<p class="wh-msg">Нет данных по складам.</p>';
     }
-    return warehouses
-      .map(function (wh) {
-        var lines = (wh.lines || [])
-          .map(function (line) {
-            return (
-              '<tr data-sku="' + esc(line.sku) + '">' +
-              productThumbCell(line.image_url) +
-              "<td>" + esc(line.name) + "</td>" +
-              "<td>" + (line.is_kit ? "Комплект" : "Товар") + "</td>" +
-              "<td>" + esc(line.sku) + "</td>" +
-              "<td>" + esc(line.code || "—") + "</td>" +
-              "<td class=\"wh-stock-num\">" + esc(line.warehouse_stock) + "</td>" +
-              "<td class=\"wh-stock-num\">" + qtyCell(line.sku, "full", line.full_stock) + "</td>" +
-              "<td class=\"wh-stock-num\">" + qtyCell(line.sku, "reserve", line.reserve) + "</td>" +
-              "<td class=\"wh-stock-num\">" + qtyCell(line.sku, "free", line.free_stock) + "</td>" +
-              "</tr>"
-            );
-          })
-          .join("");
-        return (
+    var html = "";
+    var lastWh = null;
+    var lastBin = null;
+    var openTable = false;
+    var openSection = false;
+    function closeTable() {
+      if (openTable) {
+        html += "</tbody></table>";
+        openTable = false;
+      }
+    }
+    function closeSection() {
+      closeTable();
+      if (openSection) {
+        html += "</section>";
+        openSection = false;
+      }
+    }
+    function openBinTable(binName) {
+      closeTable();
+      html +=
+        '<h4 class="wh-stock-bin-title">Ячейка ' +
+        esc(binName) +
+        "</h4>" +
+        '<table class="wh-employees-table wh-crm-table wh-stock-table"><thead><tr>' +
+        "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>В ячейке</th>" +
+        "<th>Полный остаток</th><th>Резерв</th><th>Свободный остаток</th>" +
+        "</tr></thead><tbody>";
+      openTable = true;
+    }
+    flat.forEach(function (item) {
+      var wh = item.warehouse;
+      var line = item.line;
+      var binKey = String(line.bin_id || line.bin_name || "MAIN");
+      var whId = String(wh.warehouse_id || wh.warehouse_name || "");
+      if (lastWh !== whId) {
+        closeSection();
+        html +=
           '<section class="wh-stock-wh-block">' +
-          '<h3 class="wh-stock-wh-title">' + esc(wh.warehouse_name) + " <span class=\"wh-muted\">(" + esc(wh.warehouse_code) + ")</span></h3>" +
-          '<table class="wh-employees-table wh-crm-table wh-stock-table"><thead><tr>' +
-          "<th></th><th>Название</th><th>Тип</th><th>Артикул</th><th>Код</th><th>На складе</th>" +
-          "<th>Полный остаток</th><th>Резерв</th><th>Свободный остаток</th>" +
-          "</tr></thead><tbody>" + lines + "</tbody></table></section>"
-        );
-      })
-      .join("");
+          '<h3 class="wh-stock-wh-title">' +
+          esc(wh.warehouse_name) +
+          ' <span class="wh-muted">(' +
+          esc(wh.warehouse_code) +
+          ")</span></h3>";
+        openSection = true;
+        lastWh = whId;
+        lastBin = null;
+      }
+      if (lastBin !== binKey) {
+        openBinTable(line.bin_name || "MAIN");
+        lastBin = binKey;
+      }
+      html +=
+        '<tr data-sku="' +
+        esc(line.sku) +
+        '">' +
+        productThumbCell(line.image_url) +
+        "<td>" +
+        esc(line.name) +
+        "</td>" +
+        "<td>" +
+        (line.is_kit ? "Комплект" : "Товар") +
+        "</td>" +
+        "<td>" +
+        esc(line.sku) +
+        "</td>" +
+        "<td>" +
+        esc(line.code || "—") +
+        '</td><td class="wh-stock-num">' +
+        esc(line.warehouse_stock) +
+        '</td><td class="wh-stock-num">' +
+        qtyCell(line.sku, "full", line.full_stock) +
+        '</td><td class="wh-stock-num">' +
+        qtyCell(line.sku, "reserve", line.reserve) +
+        '</td><td class="wh-stock-num">' +
+        qtyCell(line.sku, "free", line.free_stock) +
+        "</td></tr>";
+    });
+    closeSection();
+    return html;
   }
 
   function breakdownKey(sku, metric) {
@@ -334,6 +386,7 @@
       listFilters = readFilterPanel(root);
       expanded = null;
       breakdownCache = {};
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whStockResetFilter").addEventListener("click", function () {
@@ -341,6 +394,7 @@
       filterPanelOpen = false;
       expanded = null;
       breakdownCache = {};
+      listPage = 1;
       renderList();
     });
     var quick = root.querySelector("#whStockQuickSearch");
@@ -350,6 +404,7 @@
           listFilters.q = quick.value.trim();
           expanded = null;
           breakdownCache = {};
+          listPage = 1;
           renderList();
         }
       });
@@ -361,6 +416,7 @@
         viewMode = mode;
         expanded = null;
         breakdownCache = {};
+        listPage = 1;
         renderList();
       });
     });
@@ -370,6 +426,12 @@
       e.preventDefault();
       toggleBreakdown(root, btn);
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function renderList() {
@@ -394,10 +456,21 @@
           renderFilterPanel() +
           '<div id="whStockListWrap"></div>';
         var wrap = root.querySelector("#whStockListWrap");
+        var p = global.WH_PAGER;
         if (viewMode === "warehouses") {
-          wrap.innerHTML = renderWarehouseBlocks(data.warehouses || []);
+          var flat = [];
+          (data.warehouses || []).forEach(function (wh) {
+            (wh.lines || []).forEach(function (line) {
+              flat.push({ warehouse: wh, line: line });
+            });
+          });
+          var slicedWh = p ? p.slice(flat, listPage) : { items: flat, state: { page: 1, total: flat.length } };
+          listPage = slicedWh.state.page;
+          wrap.innerHTML = renderWarehouseBlocksPaged(slicedWh.items) + (p ? p.html(slicedWh.state) : "");
         } else {
-          wrap.innerHTML = renderProductsTable(data.items || []);
+          var sliced = p ? p.slice(data.items || [], listPage) : { items: data.items || [], state: { page: 1 } };
+          listPage = sliced.state.page;
+          wrap.innerHTML = renderProductsTable(sliced.items) + (p ? p.html(sliced.state) : "");
         }
         bindListEvents(root);
       })
@@ -413,6 +486,7 @@
     viewMode = "products";
     expanded = null;
     breakdownCache = {};
+    listPage = 1;
     loadMeta().then(renderList).catch(function (err) {
       panelEl().innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
     });

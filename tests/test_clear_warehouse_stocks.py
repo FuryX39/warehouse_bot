@@ -5,8 +5,7 @@ from __future__ import annotations
 from app.storage_warehouse_repository import StorageWarehouseRepository
 
 
-def test_clear_stocks_for_warehouse_only_affects_selected(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'clear_stocks.db').as_posix()}"
+def test_clear_stocks_for_warehouse_only_affects_selected(db_url: str) -> None:
     storage = StorageWarehouseRepository(db_url)
     storage.init_schema()
 

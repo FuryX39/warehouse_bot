@@ -85,6 +85,57 @@ def register_warehouse_storage_routes(
         stocks = storage_repo.list_stocks_for_warehouse(warehouse_id)
         return {"stocks": [{"sku": sku, "stock": qty} for sku, qty in sorted(stocks.items())]}
 
+    @app.get("/api/warehouse/storage/warehouses/{warehouse_id}/bins")
+    async def api_storage_list_bins(
+        warehouse_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        if storage_repo.get_warehouse(warehouse_id) is None:
+            raise HTTPException(status_code=404, detail="Склад не найден")
+        rows = storage_repo.list_bins(warehouse_id)
+        return {"bins": [storage_repo.bin_to_dict(r) for r in rows]}
+
+    @app.post("/api/warehouse/storage/warehouses/{warehouse_id}/bins")
+    async def api_storage_create_bin(
+        warehouse_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        if storage_repo.get_warehouse(warehouse_id) is None:
+            raise HTTPException(status_code=404, detail="Склад не найден")
+        try:
+            row = storage_repo.create_bin(warehouse_id, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"bin": storage_repo.bin_to_dict(row)}
+
+    @app.put("/api/warehouse/storage/warehouses/{warehouse_id}/bins/{bin_id}")
+    async def api_storage_update_bin(
+        warehouse_id: int,
+        bin_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            row = storage_repo.update_bin(warehouse_id, bin_id, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if row is None:
+            raise HTTPException(status_code=404, detail="Ячейка не найдена")
+        return {"bin": storage_repo.bin_to_dict(row)}
+
+    @app.delete("/api/warehouse/storage/warehouses/{warehouse_id}/bins/{bin_id}")
+    async def api_storage_delete_bin(
+        warehouse_id: int,
+        bin_id: int,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            storage_repo.delete_bin(warehouse_id, bin_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
     @app.post("/api/warehouse/storage/warehouses/{warehouse_id}/stocks/clear")
     async def api_storage_clear_warehouse_stocks(
         warehouse_id: int,

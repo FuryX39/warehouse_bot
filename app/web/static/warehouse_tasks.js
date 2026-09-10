@@ -12,6 +12,7 @@
   var listFilters = {};
   var listSort = { by: "start_date", dir: "asc" };
   var listSort2 = { by: "status", dir: "asc" };
+  var listPage = 1;
   var filterPanelOpen = false;
   var editingId = null;
   var formAssigneeIds = [];
@@ -1191,7 +1192,10 @@
         if (data.sort_dir) listSort.dir = data.sort_dir;
         if (data.sort_by2) listSort2.by = data.sort_by2;
         if (data.sort_dir2) listSort2.dir = data.sort_dir2;
-        var rows = (data.tasks || [])
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(data.tasks || [], listPage) : { items: data.tasks || [], state: { page: 1 } };
+        listPage = sliced.state.page;
+        var rows = sliced.items
           .map(function (t) {
             return (
               '<tr data-id="' + esc(t.id) + '">' +
@@ -1243,7 +1247,8 @@
               sortableHeader("end_date", "Отгрузка") +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Задачи не найдены.</p>') +
-          "</div>";
+          "</div>" +
+          (p ? p.html(sliced.state) : "");
         bindListEvents(root);
       })
       .catch(function (err) {
@@ -1333,16 +1338,19 @@
     });
     root.querySelector("#whTkApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whTkResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whTkQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters.q = e.target.value.trim();
+        listPage = 1;
         renderList();
       }
     });
@@ -1367,6 +1375,12 @@
         renderForm(editingId);
       });
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function renderForm(taskId, draft) {
@@ -1630,6 +1644,7 @@
     formAttachmentUploads = [];
     listFilters = {};
     filterPanelOpen = false;
+    listPage = 1;
     loadMeta()
       .then(function () {
         if (item.id === "tasks-summary") {

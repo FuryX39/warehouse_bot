@@ -276,8 +276,22 @@
       window.WhProducts.renderCatalog(tab, item);
       return;
     }
+    if (tab.id === "products" && item.id === "scanner" && window.WhProducts) {
+      window.WhProducts.renderScanner(tab, item);
+      return;
+    }
     if (tab.id === "products" && item.id === "marking-codes" && window.WhMarking) {
       window.WhMarking.render(tab, item);
+      return;
+    }
+    if (window.WhWms && (
+      item.id === "customer-orders" ||
+      item.id === "shipments" ||
+      item.id === "pick-waves" ||
+      item.id === "inventory" ||
+      item.id === "bin-transfers"
+    )) {
+      window.WhWms.render(tab, item);
       return;
     }
     showPlaceholder(tab, item);

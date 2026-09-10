@@ -374,6 +374,49 @@ class WildberriesAdapter(MarketplaceAdapter):
 
         return ready
 
+    def classify_left_reserve(self, posting_id: str) -> str | None:
+        pid = str(posting_id or "").strip()
+        if not pid or not pid.isdigit() or not self.is_configured():
+            return None
+        headers = {"Authorization": self.api_token}
+        status_by_id = self._fetch_statuses(headers, [int(pid)])
+        pair = status_by_id.get(int(pid))
+        if pair is None:
+            return None
+        supplier_s, wb_s = pair
+        supplier_norm = (supplier_s or "").strip().lower()
+        wb_norm = (wb_s or "").strip().lower()
+        cancel_supplier = {
+            "cancel",
+            "canceled",
+            "cancelled",
+            "defect",
+            "declined_by_client",
+        }
+        cancel_wb = {
+            "canceled",
+            "canceled_by_client",
+            "declined_by_client",
+            "defect",
+            "canceled_by_carrier",
+        }
+        ship_supplier = {"complete", "wbgo"}
+        ship_wb = {
+            "sold",
+            "sorted",
+            "ready_for_pickup",
+            "accepted_by_carrier",
+            "sent_to_carrier",
+        }
+        if supplier_norm in cancel_supplier or wb_norm in cancel_wb:
+            return "cancel"
+        if supplier_norm in ship_supplier or wb_norm in ship_wb:
+            return "ship"
+        if supplier_norm in {"new", "confirm"}:
+            return None
+        logger.warning("WB order %s unknown status supplier=%s wb=%s", pid, supplier_s, wb_s)
+        return None
+
     @staticmethod
     def _lookup_chrts(vendor_map: dict[str, list[int]], sku: str) -> list[int]:
         s = sku.strip()
@@ -569,9 +612,15 @@ class WildberriesAdapter(MarketplaceAdapter):
                 logger.exception("Wildberries: ошибка пуша остатков на склад %s", warehouse_id)
                 errors.append(f"{warehouse_id}: {exc}")
         if errors:
-            raise RuntimeError(
-                "Wildberries stock sync failed for warehouse(s): " + "; ".join(errors)
-            )
+            if len(errors) < len(self.warehouse_ids):
+                logger.warning(
+                    "Wildberries: остатки отправлены не на все склады: %s",
+                    "; ".join(errors),
+                )
+            else:
+                raise RuntimeError(
+                    "Wildberries stock sync failed for warehouse(s): " + "; ".join(errors)
+                )
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": self.api_token}

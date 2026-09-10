@@ -25,10 +25,10 @@ def register_warehouse_receipts_routes(
     async def api_receipts_meta(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        warehouses = storage_repo.list_warehouses({})
+        warehouses = storage_repo.warehouses_with_bins()
         price_types = crm_repo.get_meta().get("price_types", [])
         return {
-            "warehouses": [storage_repo.warehouse_to_dict(w) for w in warehouses],
+            "warehouses": warehouses,
             "price_types": price_types,
         }
 
@@ -133,8 +133,11 @@ def register_warehouse_receipts_routes(
         receipt_id: int,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        if not receipts_repo.delete_receipt(receipt_id):
-            raise HTTPException(status_code=404, detail="Оприходование не найдено")
+        try:
+            if not receipts_repo.delete_receipt(receipt_id):
+                raise HTTPException(status_code=404, detail="Оприходование не найдено")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
 

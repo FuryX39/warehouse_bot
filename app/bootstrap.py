@@ -22,6 +22,8 @@ from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
 from app.services import StockCoordinator
 from app.storage_warehouse_repository import StorageWarehouseRepository
+from app.warehouse_orders_repository import WarehouseOrdersRepository
+from app.warehouse_shipments_repository import WarehouseShipmentsRepository
 
 
 def create_inventory_stack() -> tuple[
@@ -48,6 +50,24 @@ def create_inventory_stack() -> tuple[
 
     movement_repo = MovementRepository(settings.movement_db_url)
     movement_repo.init_schema()
+
+    orders_repo = WarehouseOrdersRepository(settings.db_url)
+    orders_repo.init_schema()
+    source_wh = inventory_repo.get_sync_source_warehouse_id()
+    if source_wh is None:
+        source_wh = storage_repo.get_default_warehouse_id()
+    if source_wh is not None:
+        orders_repo.backfill_from_order_items(int(source_wh))
+
+    shipments_repo = WarehouseShipmentsRepository(
+        settings.db_url,
+        orders_repo,
+        storage_repo,
+        inventory_repo,
+        movement_repo,
+    )
+    shipments_repo.init_schema()
+
     dealer_data_dir = dealer_analysis_data_dir_default()
     if settings.dealer_analysis_data_dir:
         dealer_data_dir = Path(settings.dealer_analysis_data_dir)
@@ -73,5 +93,7 @@ def create_inventory_stack() -> tuple[
         ],
         full_sync_interval_seconds=settings.full_sync_interval_seconds,
         stock_sync_enabled=settings.stock_sync_enabled,
+        orders_repo=orders_repo,
+        shipments_repo=shipments_repo,
     )
     return settings, inventory_repo, coordinator, movement_repo, dealer_repo

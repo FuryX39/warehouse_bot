@@ -6,8 +6,7 @@ from app.repositories import STOCK_SYNC_SOURCE_WAREHOUSE_KEY, InventoryRepositor
 from app.storage_warehouse_repository import StorageWarehouseRepository
 
 
-def test_sync_source_defaults_to_legacy_then_can_switch_to_main(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'stock_sync.db').as_posix()}"
+def test_sync_source_defaults_to_legacy_then_can_switch_to_main(db_url: str) -> None:
     storage = StorageWarehouseRepository(db_url)
     storage.init_schema()
     inventory = InventoryRepository(db_url)

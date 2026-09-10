@@ -14,8 +14,7 @@ from app.repositories import InventoryRepository, OrderItem
 from app.sales_analysis import build_sales_analysis
 
 
-def _setup(tmp_path):
-    db_url = f"sqlite:///{(tmp_path / 'sales.db').as_posix()}"
+def _setup(db_url: str):
     crm = CrmRepository(db_url)
     crm.init_schema()
     catalog = CatalogRepository(db_url)
@@ -25,8 +24,8 @@ def _setup(tmp_path):
     return crm, catalog, inventory
 
 
-def test_sales_analysis_sums_orders_by_sku_and_price_type(tmp_path) -> None:
-    crm, catalog, inventory = _setup(tmp_path)
+def test_sales_analysis_sums_orders_by_sku_and_price_type(db_url: str) -> None:
+    crm, catalog, inventory = _setup(db_url)
     pt = crm.get_meta()["price_types"][0]
     catalog.create_product(
         {
@@ -100,8 +99,8 @@ def test_sales_analysis_sums_orders_by_sku_and_price_type(tmp_path) -> None:
     assert any(row and row[0] == "Итого" and row[2] == 6 for row in values)
 
 
-def test_sales_analysis_missing_catalog_price_and_unknown_sku(tmp_path) -> None:
-    crm, catalog, inventory = _setup(tmp_path)
+def test_sales_analysis_missing_catalog_price_and_unknown_sku(db_url: str) -> None:
+    crm, catalog, inventory = _setup(db_url)
     pt = crm.get_meta()["price_types"][0]
     catalog.create_product(
         {

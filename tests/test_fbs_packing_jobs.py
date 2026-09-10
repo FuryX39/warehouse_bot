@@ -44,11 +44,11 @@ def _pdf(text: str) -> bytes:
     return buf.getvalue()
 
 
-def _settings(**kwargs) -> Settings:
+def _settings(db_url: str, **kwargs) -> Settings:
     payload = {
         "telegram_bot_token": "t",
-        "db_url": "sqlite:///:memory:",
-        "movement_db_url": "sqlite:///:memory:",
+        "db_url": db_url,
+        "movement_db_url": db_url,
         "yandex_label_format": "A9_HORIZONTALLY",
         "yandex_label_rotate_degrees": 0,
     }
@@ -56,8 +56,7 @@ def _settings(**kwargs) -> Settings:
     return Settings(**payload)
 
 
-def _catalog(tmp_path, name: str = "pack.db") -> tuple[CatalogRepository, str]:
-    db_url = f"sqlite:///{(tmp_path / name).as_posix()}"
+def _catalog(db_url: str) -> tuple[CatalogRepository, str]:
     crm = CrmRepository(db_url)
     crm.init_schema()
     repo = CatalogRepository(db_url)
@@ -121,8 +120,8 @@ class FakeYandexAdapter:
         raise AssertionError("STARTED must not fetch existing order labels")
 
 
-def test_create_job_one_unit_one_line_with_pdf(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_create_job_one_unit_one_line_with_pdf(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     product = catalog.create_product(
         {
             "name": "Болт",
@@ -142,7 +141,7 @@ def test_create_job_one_unit_one_line_with_pdf(tmp_path) -> None:
         adapter=adapter,
         catalog=catalog,
         packing_repo=packing,
-        settings=_settings(),
+        settings=_settings(db_url),
         order_substatus="STARTED",
         build_list=False,
         item_limit=None,
@@ -160,13 +159,14 @@ def test_create_job_one_unit_one_line_with_pdf(tmp_path) -> None:
     assert job.build_list is False
 
 
-def test_build_list_true_calls_assembly_and_google(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_build_list_true_calls_assembly_and_google(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     packing = _packing_repo(tmp_path, db_url)
     adapter = FakeYandexAdapter(
         [_order(order_id="100001", sku="SKU-MISS", quantity=1, item_id=501)]
     )
     settings = _settings(
+        db_url,
         default_stocks_sheet_url="https://docs.google.com/spreadsheets/d/x/edit",
         google_service_account_file="/tmp/creds.json",
         fbs_list_sheet_url="https://docs.google.com/spreadsheets/d/list/edit",
@@ -204,13 +204,14 @@ def test_build_list_true_calls_assembly_and_google(tmp_path) -> None:
     assert job.lines[0].product_id is None
 
 
-def test_build_list_false_skips_assembly_and_google(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_build_list_false_skips_assembly_and_google(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     packing = _packing_repo(tmp_path, db_url)
     adapter = FakeYandexAdapter(
         [_order(order_id="100001", sku="SKU-A", quantity=1, item_id=501)]
     )
     settings = _settings(
+        db_url,
         default_stocks_sheet_url="https://docs.google.com/spreadsheets/d/x/edit",
         google_service_account_file="/tmp/creds.json",
         fbs_list_sheet_url="https://docs.google.com/spreadsheets/d/list/edit",
@@ -366,8 +367,8 @@ def _seed_job(packing: FbsPackingRepository, catalog: CatalogRepository, packer_
     return job, product_a, product_b
 
 
-def _packing_client(tmp_path):
-    catalog, db_url = _catalog(tmp_path, "http.db")
+def _packing_client(db_url: str, tmp_path):
+    catalog, db_url = _catalog(db_url)
     packing = _packing_repo(tmp_path, db_url)
     packer = _user(7, "packer")
     other = _user(8, "other")
@@ -390,7 +391,7 @@ def _packing_client(tmp_path):
         packing,
         catalog,
         SimpleNamespace(list_assignee_picker=lambda: []),
-        _settings(),
+        _settings(db_url),
         SimpleNamespace(adapters=[]),
         require_fbs_access,
         require_warehouse_user,
@@ -399,8 +400,8 @@ def _packing_client(tmp_path):
     return TestClient(app), packing, job, state, packer, other, product_a, product_b
 
 
-def test_packer_scan_pick_remaining_close_cancel(tmp_path) -> None:
-    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+def test_packer_scan_pick_remaining_close_cancel(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
     prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
 
@@ -479,8 +480,8 @@ def test_packer_scan_pick_remaining_close_cancel(tmp_path) -> None:
     assert token_only.status_code == 400
 
 
-def test_packer_downloads_all_line_labels_zip_and_can_skip_pdf(tmp_path) -> None:
-    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+def test_packer_downloads_all_line_labels_zip_and_can_skip_pdf(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
     prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
 
@@ -504,8 +505,8 @@ def test_packer_downloads_all_line_labels_zip_and_can_skip_pdf(tmp_path) -> None
     assert payload["line"]["id"] == job.lines[0].id
 
 
-def test_packer_auto_close_marks_line_done_and_frees_next_sku(tmp_path) -> None:
-    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+def test_packer_auto_close_marks_line_done_and_frees_next_sku(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
     prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
 
@@ -528,8 +529,8 @@ def test_packer_auto_close_marks_line_done_and_frees_next_sku(tmp_path) -> None:
     assert second.json()["line"]["status"] == LINE_DONE
 
 
-def test_packer_batch_allocate_prints_all_sku_then_scan_labels(tmp_path) -> None:
-    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+def test_packer_batch_allocate_prints_all_sku_then_scan_labels(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
     prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
 
@@ -568,8 +569,8 @@ def test_packer_batch_allocate_prints_all_sku_then_scan_labels(tmp_path) -> None
     assert again.json()["line"]["sku"] == "SKU-B"
 
 
-def test_packer_batch_cancel_resets_all_printed(tmp_path) -> None:
-    client, packing, job, *_rest = _packing_client(tmp_path)
+def test_packer_batch_cancel_resets_all_printed(db_url: str, tmp_path) -> None:
+    client, packing, job, *_rest = _packing_client(db_url, tmp_path)
     job_id = job.id
     prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
 
@@ -669,8 +670,8 @@ def _seed_cis_job(packing: FbsPackingRepository, catalog: CatalogRepository, pac
     return job, product, plain
 
 
-def _cis_client(tmp_path, *, require_cis: bool = False):
-    catalog, db_url = _catalog(tmp_path, "cis.db")
+def _cis_client(db_url: str, tmp_path, *, require_cis: bool = False):
+    catalog, db_url = _catalog(db_url)
     packing = _packing_repo(tmp_path, db_url)
     packer = _user(7, "packer")
     job, product, plain = _seed_cis_job(packing, catalog, packer.id, require_cis=require_cis)
@@ -691,7 +692,7 @@ def _cis_client(tmp_path, *, require_cis: bool = False):
         packing,
         catalog,
         SimpleNamespace(list_assignee_picker=lambda: []),
-        _settings(),
+        _settings(db_url),
         SimpleNamespace(adapters=[]),
         require_fbs_access,
         require_warehouse_user,
@@ -700,8 +701,8 @@ def _cis_client(tmp_path, *, require_cis: bool = False):
     return TestClient(app), packing, job, product, plain
 
 
-def test_cis_scan_allocates_one_line_even_with_batch(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_cis_scan_allocates_one_line_even_with_batch(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="Ser001")
 
@@ -719,8 +720,8 @@ def test_cis_scan_allocates_one_line_even_with_batch(tmp_path) -> None:
     assert packing.get_line(job.id, job.lines[1].id).status == LINE_PENDING
 
 
-def test_require_cis_rejects_plain_barcode_for_gtin_product(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=True)
+def test_require_cis_rejects_plain_barcode_for_gtin_product(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=True)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     rejected = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
@@ -732,8 +733,8 @@ def test_require_cis_rejects_plain_barcode_for_gtin_product(tmp_path) -> None:
     assert ok.json()["line"]["has_cis"] is True
 
 
-def test_require_cis_off_allows_barcode_or_cis(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_require_cis_off_allows_barcode_or_cis(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     by_barcode = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
@@ -747,8 +748,8 @@ def test_require_cis_off_allows_barcode_or_cis(tmp_path) -> None:
     assert by_cis.json()["line"]["has_cis"] is True
 
 
-def test_duplicate_cis_rejected(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_duplicate_cis_rejected(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="DupSer")
 
@@ -764,8 +765,8 @@ def test_duplicate_cis_rejected(tmp_path) -> None:
     assert "уже использован" in again.json()["detail"]
 
 
-def test_cancel_print_clears_cis(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_cancel_print_clears_cis(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="CancelMe")
 
@@ -787,8 +788,8 @@ def test_cancel_print_clears_cis(tmp_path) -> None:
     assert again.status_code == 200, again.text
 
 
-def test_plain_ean_does_not_write_cis_fields(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_plain_ean_does_not_write_cis_fields(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     resp = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
@@ -800,12 +801,12 @@ def test_plain_ean_does_not_write_cis_fields(tmp_path) -> None:
     assert resp.json()["line"]["has_cis"] is False
 
 
-def test_marking_xlsx_two_sheets(tmp_path) -> None:
+def test_marking_xlsx_two_sheets(db_url: str, tmp_path) -> None:
     from io import BytesIO
 
     from openpyxl import load_workbook
 
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     cis = _cis(GTIN14, serial="Xlsx01")
@@ -834,8 +835,8 @@ def test_marking_xlsx_two_sheets(tmp_path) -> None:
     assert packing.get_line(job.id, line_id).status == LINE_DONE
 
 
-def test_require_cis_blocks_pick_sku_for_markable(tmp_path) -> None:
-    client, packing, job, product, plain = _cis_client(tmp_path, require_cis=True)
+def test_require_cis_blocks_pick_sku_for_markable(db_url: str, tmp_path) -> None:
+    client, packing, job, product, plain = _cis_client(db_url, tmp_path, require_cis=True)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     blocked = client.post(
@@ -852,8 +853,8 @@ def test_require_cis_blocks_pick_sku_for_markable(tmp_path) -> None:
     assert allowed.json()["line"]["sku"] == "SKU-PLAIN"
 
 
-def test_packer_job_payload_includes_image_url(tmp_path) -> None:
-    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+def test_packer_job_payload_includes_image_url(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     packed = client.get(f"/api/warehouse/fbs-packing/jobs/{job.id}/pack")
     assert packed.status_code == 200, packed.text
     payload = packed.json()["job"]
@@ -865,8 +866,8 @@ def test_packer_job_payload_includes_image_url(tmp_path) -> None:
     assert by_sku["SKU-B"] == "https://example.test/b.jpg"
 
 
-def test_set_line_status_pending_to_done_and_back(tmp_path) -> None:
-    client, packing, job, state, packer, other, product_a, product_b = _packing_client(tmp_path)
+def test_set_line_status_pending_to_done_and_back(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
     prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
     line_id = job.lines[0].id
@@ -882,8 +883,8 @@ def test_set_line_status_pending_to_done_and_back(tmp_path) -> None:
     assert packing.get_line(job_id, line_id).status == LINE_PENDING
 
 
-def test_set_line_status_keeps_cis_and_reopens_done_job(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_set_line_status_keeps_cis_and_reopens_done_job(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="KeepCis")
 
@@ -911,8 +912,8 @@ def test_set_line_status_keeps_cis_and_reopens_done_job(tmp_path) -> None:
     assert packing.get_job(job.id).status == JOB_STATUS_IN_PROGRESS
 
 
-def test_set_line_status_printed_to_pending_keeps_cis(tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(tmp_path, require_cis=False)
+def test_set_line_status_printed_to_pending_keeps_cis(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="PrintKeep")
 

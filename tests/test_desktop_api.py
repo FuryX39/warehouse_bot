@@ -9,8 +9,7 @@ from app.warehouse_users_repository import WarehouseUsersRepository
 from app.web.desktop_api import create_desktop_api_app
 
 
-def _settings(tmp_path) -> Settings:
-    db_url = f"sqlite:///{(tmp_path / 'api.db').as_posix()}"
+def _settings(db_url: str, tmp_path) -> Settings:
     return Settings(
         telegram_bot_token="t",
         db_url=db_url,
@@ -20,8 +19,8 @@ def _settings(tmp_path) -> Settings:
     )
 
 
-def test_desktop_api_health_login_and_packing_my(tmp_path) -> None:
-    settings = _settings(tmp_path)
+def test_desktop_api_health_login_and_packing_my(db_url: str, tmp_path) -> None:
+    settings = _settings(db_url, tmp_path)
     users = WarehouseUsersRepository(settings.db_url)
     users.init_schema()
     users.create_user(login="packer", password="secret", display_name="Упаковщик")

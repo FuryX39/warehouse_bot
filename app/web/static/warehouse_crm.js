@@ -2,6 +2,7 @@
   var CONFIGURE_VALUE = "__configure__";
   var meta = { statuses: [], groups: [], types: [], price_types: [] };
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var viewMode = "list";
   var editingId = null;
@@ -428,7 +429,10 @@
     if (!items.length) {
       return '<p class="wh-msg">Контрагенты не найдены.</p>';
     }
-    var rows = items
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(items, listPage) : { items: items, state: { page: 1 } };
+    listPage = sliced.state.page;
+    var rows = sliced.items
       .map(function (cp) {
         var title = cp.full_name || cp.inn || "Без названия";
         return (
@@ -461,7 +465,8 @@
       "<th>Наименование</th><th>Статус</th><th>Группа</th><th>Телефон</th><th>Email</th><th>Тип</th>" +
       "</tr></thead><tbody>" +
       rows +
-      "</tbody></table>"
+      "</tbody></table>" +
+      (p ? p.html(sliced.state) : "")
     );
   }
 
@@ -501,17 +506,20 @@
     });
     root.querySelector("#whCrmApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whCrmResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       renderList();
     });
     var qs = root.querySelector("#whCrmQuickSearch");
     qs.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters = readFilterPanel(root);
+        listPage = 1;
         renderList();
       }
     });
@@ -529,6 +537,12 @@
         syncStatusSelectAppearance(sel);
       });
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function contactPersonBlock(cp, index) {
@@ -887,6 +901,7 @@
     editingId = null;
     listFilters = {};
     filterPanelOpen = false;
+    listPage = 1;
     loadMeta()
       .then(function () {
         renderList();

@@ -389,3 +389,34 @@ class YandexMarketAdapter(MarketplaceAdapter):
             timeout=30,
         )
         response.raise_for_status()
+
+    def classify_left_reserve(self, posting_id: str) -> str | None:
+        pid = str(posting_id or "").strip()
+        if not pid or not self.is_configured():
+            return None
+        try:
+            response = requests.get(
+                f"{self.base_url}/campaigns/{self.campaign_id}/orders/{pid}",
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("Yandex order get failed order=%s", pid, exc_info=True)
+            return None
+        body = response.json() or {}
+        order = body.get("order") or body
+        status = str(order.get("status") or "").strip().upper()
+        substatus = str(order.get("substatus") or "").strip().upper()
+        if any(substatus.startswith(p) for p in _NO_RESERVE_SUBSTATUS_PREFIXES):
+            if substatus.startswith("DELIVERY_") or status in {"DELIVERED", "DELIVERY"}:
+                return "ship"
+            return "cancel"
+        if status in {"CANCELLED", "CANCELED", "REJECTED"}:
+            return "cancel"
+        if status in {"DELIVERED", "DELIVERY", "PICKUP"} or substatus.startswith("DELIVERY_"):
+            return "ship"
+        if status == "PROCESSING" and substatus == "STARTED":
+            return None
+        logger.warning("Yandex order %s unknown status=%s sub=%s", pid, status, substatus)
+        return None

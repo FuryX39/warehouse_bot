@@ -10,7 +10,7 @@ from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogProduct, _parse_price
-from app.storage_warehouse_repository import StorageWarehouse, StorageWarehouseRepository
+from app.storage_warehouse_repository import StorageBin, StorageWarehouse, StorageWarehouseRepository, ensure_integer_column
 
 
 class _Base(DeclarativeBase):
@@ -24,6 +24,8 @@ class WarehouseTransfer(_Base):
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     from_warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
     to_warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_bin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    to_bin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     total_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_sum: Mapped[str] = mapped_column(String(32), nullable=False, default="0.00")
@@ -73,6 +75,10 @@ class TransferRow:
     from_warehouse_name: str
     to_warehouse_id: int
     to_warehouse_name: str
+    from_bin_id: Optional[int]
+    from_bin_name: str
+    to_bin_id: Optional[int]
+    to_bin_name: str
     comment: str
     total_quantity: int
     total_sum: str
@@ -111,6 +117,22 @@ class WarehouseTransfersRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_bin_columns()
+
+    def _migrate_bin_columns(self) -> None:
+        ensure_integer_column(self.engine, "warehouse_transfers", "from_bin_id")
+        ensure_integer_column(self.engine, "warehouse_transfers", "to_bin_id")
+        with Session(self.engine) as session:
+            rows = session.scalars(select(WarehouseTransfer)).all()
+            for row in rows:
+                try:
+                    if not row.from_bin_id:
+                        row.from_bin_id = self.storage_repo.get_default_bin_id(int(row.from_warehouse_id))
+                    if not row.to_bin_id:
+                        row.to_bin_id = self.storage_repo.get_default_bin_id(int(row.to_warehouse_id))
+                except Exception:
+                    continue
+            session.commit()
 
     def list_transfers(self, filters: dict[str, str]) -> list[TransferRow]:
         with Session(self.engine) as session:
@@ -152,9 +174,11 @@ class WarehouseTransfersRepository:
             deltas = self._items_to_stock_deltas(old_items)
             from_id = int(row.from_warehouse_id)
             to_id = int(row.to_warehouse_id)
+            from_bin_id = int(row.from_bin_id) if row.from_bin_id else None
+            to_bin_id = int(row.to_bin_id) if row.to_bin_id else None
             session.delete(row)
             session.commit()
-        self._revert_transfer(from_id, to_id, deltas)
+        self._revert_transfer(from_id, to_id, deltas, from_bin_id=from_bin_id, to_bin_id=to_bin_id)
         return True
 
     def transfer_to_dict(self, row: TransferRow, *, include_items: bool = True) -> dict[str, Any]:
@@ -166,6 +190,10 @@ class WarehouseTransfersRepository:
             "from_warehouse_name": row.from_warehouse_name,
             "to_warehouse_id": row.to_warehouse_id,
             "to_warehouse_name": row.to_warehouse_name,
+            "from_bin_id": row.from_bin_id,
+            "from_bin_name": row.from_bin_name,
+            "to_bin_id": row.to_bin_id,
+            "to_bin_name": row.to_bin_name,
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
             "total_quantity": row.total_quantity,
@@ -203,6 +231,8 @@ class WarehouseTransfersRepository:
             raise ValueError("Выберите склады отправителя и получателя") from exc
         if from_warehouse_id == to_warehouse_id:
             raise ValueError("Склад отправителя и склад получателя должны отличаться")
+        from_bin_id = self.storage_repo.resolve_bin_id(from_warehouse_id, data.get("from_bin_id"))
+        to_bin_id = self.storage_repo.resolve_bin_id(to_warehouse_id, data.get("to_bin_id"))
         comment = str(data.get("comment") or "").strip()[:2048]
         items_raw = data.get("items")
         if not isinstance(items_raw, list) or not items_raw:
@@ -218,6 +248,8 @@ class WarehouseTransfersRepository:
 
             old_from_id: int | None = None
             old_to_id: int | None = None
+            old_from_bin_id: int | None = None
+            old_to_bin_id: int | None = None
             old_deltas: dict[str, int] = {}
             if transfer_id is not None:
                 old = session.get(WarehouseTransfer, int(transfer_id))
@@ -225,6 +257,8 @@ class WarehouseTransfersRepository:
                     raise ValueError("Перемещение не найдено")
                 old_from_id = int(old.from_warehouse_id)
                 old_to_id = int(old.to_warehouse_id)
+                old_from_bin_id = int(old.from_bin_id) if old.from_bin_id else None
+                old_to_bin_id = int(old.to_bin_id) if old.to_bin_id else None
                 old_rows = session.scalars(
                     select(WarehouseTransferItem).where(
                         WarehouseTransferItem.transfer_id == int(transfer_id)
@@ -237,6 +271,8 @@ class WarehouseTransfersRepository:
                     title=title[:256],
                     from_warehouse_id=from_warehouse_id,
                     to_warehouse_id=to_warehouse_id,
+                    from_bin_id=from_bin_id,
+                    to_bin_id=to_bin_id,
                     comment=comment,
                     created_at_ts=now,
                 )
@@ -248,6 +284,8 @@ class WarehouseTransfersRepository:
                 transfer.title = title[:256]
                 transfer.from_warehouse_id = from_warehouse_id
                 transfer.to_warehouse_id = to_warehouse_id
+                transfer.from_bin_id = from_bin_id
+                transfer.to_bin_id = to_bin_id
                 transfer.comment = comment
                 session.execute(
                     delete(WarehouseTransferItem).where(
@@ -286,18 +324,35 @@ class WarehouseTransfersRepository:
 
         new_deltas = self._items_to_stock_deltas_from_rows(items_norm)
         if transfer_id is None:
-            self._apply_transfer(from_warehouse_id, to_warehouse_id, new_deltas)
-        elif old_from_id == from_warehouse_id and old_to_id == to_warehouse_id:
+            self._apply_transfer(
+                from_warehouse_id, to_warehouse_id, new_deltas,
+                from_bin_id=from_bin_id, to_bin_id=to_bin_id,
+            )
+        elif (
+            old_from_id == from_warehouse_id
+            and old_to_id == to_warehouse_id
+            and old_from_bin_id == from_bin_id
+            and old_to_bin_id == to_bin_id
+        ):
             net: dict[str, int] = {}
             for sku in set(old_deltas) | set(new_deltas):
                 delta = new_deltas.get(sku, 0) - old_deltas.get(sku, 0)
                 if delta:
                     net[sku] = delta
-            self._apply_transfer(from_warehouse_id, to_warehouse_id, net)
+            self._apply_transfer(
+                from_warehouse_id, to_warehouse_id, net,
+                from_bin_id=from_bin_id, to_bin_id=to_bin_id,
+            )
         else:
             if old_from_id is not None and old_to_id is not None:
-                self._revert_transfer(old_from_id, old_to_id, old_deltas)
-            self._apply_transfer(from_warehouse_id, to_warehouse_id, new_deltas)
+                self._revert_transfer(
+                    old_from_id, old_to_id, old_deltas,
+                    from_bin_id=old_from_bin_id, to_bin_id=old_to_bin_id,
+                )
+            self._apply_transfer(
+                from_warehouse_id, to_warehouse_id, new_deltas,
+                from_bin_id=from_bin_id, to_bin_id=to_bin_id,
+            )
         return result
 
     def _normalize_items(self, items_raw: list) -> list[dict[str, Any]]:
@@ -359,7 +414,9 @@ class WarehouseTransfersRepository:
                 deltas[sku] = deltas.get(sku, 0) + int(item["quantity"])
         return deltas
 
-    def _apply_stock_deltas(self, warehouse_id: int, deltas: dict[str, int], *, multiplier: int) -> None:
+    def _apply_stock_deltas(
+        self, warehouse_id: int, deltas: dict[str, int], *, multiplier: int, bin_id: int | None = None
+    ) -> None:
         if not deltas:
             return
         applied: dict[str, int] = {}
@@ -372,15 +429,31 @@ class WarehouseTransfersRepository:
                 continue
             applied[sku_n] = delta
         if applied:
-            self.storage_repo.adjust_stocks(int(warehouse_id), applied)
+            self.storage_repo.adjust_stocks(int(warehouse_id), applied, bin_id=bin_id)
 
-    def _apply_transfer(self, from_id: int, to_id: int, deltas: dict[str, int]) -> None:
-        self._apply_stock_deltas(from_id, deltas, multiplier=-1)
-        self._apply_stock_deltas(to_id, deltas, multiplier=1)
+    def _apply_transfer(
+        self,
+        from_id: int,
+        to_id: int,
+        deltas: dict[str, int],
+        *,
+        from_bin_id: int | None = None,
+        to_bin_id: int | None = None,
+    ) -> None:
+        self._apply_stock_deltas(from_id, deltas, multiplier=-1, bin_id=from_bin_id)
+        self._apply_stock_deltas(to_id, deltas, multiplier=1, bin_id=to_bin_id)
 
-    def _revert_transfer(self, from_id: int, to_id: int, deltas: dict[str, int]) -> None:
-        self._apply_stock_deltas(from_id, deltas, multiplier=1)
-        self._apply_stock_deltas(to_id, deltas, multiplier=-1)
+    def _revert_transfer(
+        self,
+        from_id: int,
+        to_id: int,
+        deltas: dict[str, int],
+        *,
+        from_bin_id: int | None = None,
+        to_bin_id: int | None = None,
+    ) -> None:
+        self._apply_stock_deltas(from_id, deltas, multiplier=1, bin_id=from_bin_id)
+        self._apply_stock_deltas(to_id, deltas, multiplier=-1, bin_id=to_bin_id)
 
     def _transfer_row(
         self, session: Session, row: WarehouseTransfer, *, load_items: bool
@@ -393,6 +466,17 @@ class WarehouseTransfersRepository:
         to_wh = session.get(StorageWarehouse, int(row.to_warehouse_id))
         if to_wh:
             to_name = to_wh.name
+
+        def _bin_label(bin_id: int | None) -> tuple[int | None, str]:
+            if not bin_id:
+                return None, ""
+            bn = session.get(StorageBin, int(bin_id))
+            if bn is None:
+                return int(bin_id), ""
+            return int(bn.id), bn.name or bn.code
+
+        from_bin_id, from_bin_name = _bin_label(int(row.from_bin_id) if row.from_bin_id else None)
+        to_bin_id, to_bin_name = _bin_label(int(row.to_bin_id) if row.to_bin_id else None)
         items: list[TransferItemRow] = []
         if load_items:
             item_rows = session.scalars(
@@ -426,6 +510,10 @@ class WarehouseTransfersRepository:
             from_warehouse_name=from_name,
             to_warehouse_id=int(row.to_warehouse_id),
             to_warehouse_name=to_name,
+            from_bin_id=from_bin_id,
+            from_bin_name=from_bin_name,
+            to_bin_id=to_bin_id,
+            to_bin_name=to_bin_name,
             comment=str(row.comment or ""),
             total_quantity=int(row.total_quantity),
             total_sum=str(row.total_sum or "0.00"),

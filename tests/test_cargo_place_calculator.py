@@ -105,8 +105,8 @@ def test_missing_dimensions_are_reported_for_inline_editing() -> None:
     assert result["rows"][0]["total_weight_kg"] == 2.5
 
 
-def test_repository_saves_cargo_types_and_product_metrics(tmp_path) -> None:
-    repo = CatalogRepository(f"sqlite:///{tmp_path / 'catalog.sqlite3'}")
+def test_repository_saves_cargo_types_and_product_metrics(db_url: str) -> None:
+    repo = CatalogRepository(db_url)
     repo.init_schema()
     types = repo.save_cargo_place_types(
         [

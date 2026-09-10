@@ -43,11 +43,32 @@ def _bool(value: object, default: bool = True) -> bool:
     if isinstance(value, bool):
         return value
     text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "y", "on"}:
+    if text in {"1", "true", "yes", "on"}:
         return True
-    if text in {"0", "false", "no", "n", "off"}:
+    if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _parse_posting_ids(posting_ids: Any) -> set[str]:
+    if not posting_ids:
+        return set()
+    if isinstance(posting_ids, str):
+        parts = posting_ids.replace(",", " ").split()
+        return {p.strip() for p in parts if p.strip()}
+    if isinstance(posting_ids, (list, tuple, set)):
+        return {str(x).strip() for x in posting_ids if str(x).strip()}
+    return {str(posting_ids).strip()} if str(posting_ids).strip() else set()
+
+
+def _filter_rows_by_posting(list_rows: list, posting_ids: Any, getter) -> list:
+    allow = _parse_posting_ids(posting_ids)
+    if not allow:
+        return list_rows
+    filtered = [row for row in list_rows if str(getter(row) or "").strip() in allow]
+    if not filtered:
+        raise ValueError("Среди выбранных отправлений нет строк для задания")
+    return filtered
 
 
 def resolve_catalog_products(
@@ -147,6 +168,7 @@ def create_yandex_packing_job(
     packer_user_ids: list[int],
     created_by_user_id: int | None,
     require_cis: bool = False,
+    posting_ids: Any = None,
 ) -> FbsPackingJobRow:
     substatus = normalize_yandex_fbs_substatus(order_substatus)
     list_rows, selected_orders, warnings, _available = load_yandex_fbs_list_rows(
@@ -161,6 +183,11 @@ def create_yandex_packing_job(
     )
     if not list_rows:
         raise ValueError("Нет заказов для задания")
+    list_rows = _filter_rows_by_posting(list_rows, posting_ids, lambda r: r.order_id)
+    keep = {str(r.order_id) for r in list_rows}
+    selected_orders = [o for o in selected_orders if str(o.order_id) in keep]
+    if not selected_orders:
+        raise ValueError("Среди выбранных отправлений нет заказов для задания")
 
     units, label_warnings = collect_yandex_unit_labels(
         adapter,
@@ -267,6 +294,7 @@ def create_wb_packing_job(
     created_by_user_id: int | None,
     require_cis: bool = False,
     supply_id: str = "",
+    posting_ids: Any = None,
 ) -> FbsPackingJobRow:
     substatus = normalize_wb_fbs_substatus(order_substatus)
     list_rows, selected_orders, warnings, _available = load_wb_fbs_list_rows(
@@ -277,6 +305,11 @@ def create_wb_packing_job(
     )
     if not list_rows:
         raise ValueError("Нет заказов для задания")
+    list_rows = _filter_rows_by_posting(list_rows, posting_ids, lambda r: r.order_id)
+    keep = {str(r.order_id) for r in list_rows}
+    selected_orders = [o for o in selected_orders if str(o.get("id") or "") in keep]
+    if not selected_orders:
+        raise ValueError("Среди выбранных отправлений нет заказов для задания")
 
     units, label_warnings, effective_supply = collect_wb_unit_labels(
         adapter,
@@ -343,6 +376,7 @@ def create_ozon_packing_job(
     require_cis: bool = False,
     first_posting: str = "",
     last_posting: str = "",
+    posting_ids: Any = None,
 ) -> FbsPackingJobRow:
     list_rows, _postings, warnings, _available = load_ozon_fbs_list_rows(
         adapter,
@@ -351,6 +385,7 @@ def create_ozon_packing_job(
     )
     if not list_rows:
         raise ValueError("Нет отправлений Ozon для задания")
+    list_rows = _filter_rows_by_posting(list_rows, posting_ids, lambda r: r.posting_number)
 
     units, label_warnings = collect_ozon_unit_labels(
         adapter,

@@ -7,7 +7,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from sqlalchemy import Boolean, Integer, String, delete, func, or_, select, text
+from sqlalchemy import Boolean, Integer, String, delete, func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogKitComponent, CatalogProduct, CatalogProductGroup
@@ -16,7 +16,7 @@ from app.kit_stock import (
     kit_component_allocations,
     load_kit_bom_index,
 )
-from app.storage_warehouse_repository import StorageStock, StorageWarehouse
+from app.storage_warehouse_repository import StorageBin, StorageStock, StorageWarehouse
 from app.repositories import OrderItem
 
 _AffectedSkusCallback = Callable[[set[str]], None]
@@ -201,6 +201,8 @@ class WarehouseStockRepository:
                             "code": bal.code if bal else "",
                             "is_kit": bool(bal.is_kit) if bal else False,
                             "warehouse_stock": int(st.stock),
+                            "bin_id": int(st.bin_id) if st.bin_id else None,
+                            "bin_name": "",
                             "full_stock": bal.full_stock if bal else int(st.stock),
                             "reserve": bal.reserve if bal else 0,
                             "free_stock": bal.free_stock if bal else int(st.stock),
@@ -208,6 +210,18 @@ class WarehouseStockRepository:
                             "image_url": bal.image_url if bal else "",
                         }
                     )
+                bins = {
+                    int(b.id): b
+                    for b in session.scalars(
+                        select(StorageBin).where(StorageBin.warehouse_id == int(wh.id))
+                    ).all()
+                }
+                for line in lines:
+                    bn = bins.get(int(line["bin_id"] or 0))
+                    if bn is not None:
+                        line["bin_name"] = str(bn.name or bn.code or "MAIN")
+                    elif not line["bin_name"]:
+                        line["bin_name"] = "MAIN"
                 if filters.get("hide_empty") == "1" and not lines:
                     continue
                 out.append(
@@ -229,22 +243,54 @@ class WarehouseStockRepository:
             raise ValueError("metric должен быть full, reserve или free")
         with Session(self.engine) as session:
             if metric_n == "reserve":
-                rows = session.scalars(
-                    select(OrderItem).where(
-                        OrderItem.sku == sku_n,
-                        OrderItem.state == "added",
-                    )
-                ).all()
-                lines: list[dict[str, Any]] = [
-                    {
-                        "source": r.source,
-                        "external_order_id": r.external_order_id,
-                        "quantity": int(r.quantity),
-                        "from_kit": "",
-                    }
-                    for r in rows
-                ]
-                # Резервы комплектов, в которые входит этот товар.
+                from app.warehouse_orders_repository import (
+                    RESERVE_STATUSES,
+                    WarehouseOrder,
+                    WarehouseOrderLine,
+                )
+
+                tables = set(sa_inspect(self.engine).get_table_names())
+                use_orders = "warehouse_orders" in tables and "warehouse_order_lines" in tables
+                lines: list[dict[str, Any]] = []
+                if use_orders:
+                    order_rows = session.execute(
+                        select(
+                            WarehouseOrder.source,
+                            WarehouseOrder.posting_id,
+                            WarehouseOrderLine.sku,
+                            WarehouseOrderLine.quantity,
+                        )
+                        .join(WarehouseOrder, WarehouseOrder.id == WarehouseOrderLine.order_id)
+                        .where(WarehouseOrder.status.in_(RESERVE_STATUSES))
+                    ).all()
+                    sku_fold = sku_n.casefold()
+                    for source, posting_id, line_sku, qty in order_rows:
+                        if str(line_sku or "").strip().casefold() != sku_fold:
+                            continue
+                        lines.append(
+                            {
+                                "source": str(source),
+                                "external_order_id": str(posting_id),
+                                "quantity": int(qty or 0),
+                                "from_kit": "",
+                            }
+                        )
+                else:
+                    rows = session.scalars(
+                        select(OrderItem).where(
+                            OrderItem.sku == sku_n,
+                            OrderItem.state == "added",
+                        )
+                    ).all()
+                    lines = [
+                        {
+                            "source": r.source,
+                            "external_order_id": r.external_order_id,
+                            "quantity": int(r.quantity),
+                            "from_kit": "",
+                        }
+                        for r in rows
+                    ]
                 kit_index = load_kit_bom_index(session)
                 sku_fold = sku_n.casefold()
                 kit_skus_for_leaf: list[str] = []
@@ -256,18 +302,33 @@ class WarehouseStockRepository:
                             leaf_qty_by_kit[kit_sku] = int(qty)
                             break
                 if kit_skus_for_leaf:
-                    # Заказы могут приходить по sku или code комплекта (любой регистр).
                     offer_folds = set()
                     for kit_sku in kit_skus_for_leaf:
                         offer_folds.add(kit_sku.casefold())
                     for offer_fold, kit_sku in kit_index.offer_to_kit.items():
                         if kit_sku in leaf_qty_by_kit:
                             offer_folds.add(offer_fold)
-                    kit_orders = session.scalars(
-                        select(OrderItem).where(OrderItem.state == "added")
-                    ).all()
-                    for r in kit_orders:
-                        offer = str(r.sku or "").strip()
+                    if use_orders:
+                        kit_orders = session.execute(
+                            select(
+                                WarehouseOrder.source,
+                                WarehouseOrder.posting_id,
+                                WarehouseOrderLine.sku,
+                                WarehouseOrderLine.quantity,
+                            )
+                            .join(WarehouseOrder, WarehouseOrder.id == WarehouseOrderLine.order_id)
+                            .where(WarehouseOrder.status.in_(RESERVE_STATUSES))
+                        ).all()
+                        kit_iter = [
+                            (str(src), str(pid), str(line_sku or "").strip(), int(qty or 0))
+                            for src, pid, line_sku, qty in kit_orders
+                        ]
+                    else:
+                        kit_iter = [
+                            (str(r.source), str(r.external_order_id), str(r.sku or "").strip(), int(r.quantity))
+                            for r in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all()
+                        ]
+                    for source, ext_id, offer, qty in kit_iter:
                         if offer.casefold() not in offer_folds:
                             continue
                         kit_sku = kit_index.resolve_kit_sku(offer) or offer
@@ -276,9 +337,9 @@ class WarehouseStockRepository:
                             continue
                         lines.append(
                             {
-                                "source": r.source,
-                                "external_order_id": r.external_order_id,
-                                "quantity": int(r.quantity) * leaf_qty,
+                                "source": source,
+                                "external_order_id": ext_id,
+                                "quantity": qty * leaf_qty,
                                 "from_kit": kit_sku,
                             }
                         )
@@ -291,10 +352,13 @@ class WarehouseStockRepository:
                     StorageWarehouse.name,
                     StorageWarehouse.code,
                     StorageStock.stock,
+                    StorageBin.code,
+                    StorageBin.name,
                 )
                 .join(StorageStock, StorageStock.warehouse_id == StorageWarehouse.id)
+                .join(StorageBin, StorageBin.id == StorageStock.bin_id)
                 .where(StorageStock.sku == sku_n)
-                .order_by(StorageWarehouse.name)
+                .order_by(StorageWarehouse.name, StorageBin.code)
             ).all()
             bal = session.scalar(select(StockBalanceCache).where(StockBalanceCache.sku == sku_n))
             reserve_total = int(bal.reserve) if bal else self._reserve_for_sku(session, sku_n)
@@ -303,7 +367,7 @@ class WarehouseStockRepository:
             lines = [
                 {
                     "warehouse_id": int(r[0]),
-                    "warehouse_name": str(r[1]),
+                    "warehouse_name": f"{r[1]} / {r[5] or r[4] or 'MAIN'}",
                     "warehouse_code": str(r[2]),
                     "stock": int(r[3] or 0),
                     "reserve": 0,
@@ -518,7 +582,29 @@ class WarehouseStockRepository:
         ).all()
         return {str(sku): int(total or 0) for sku, total in rows}
 
+    def _warehouse_order_reserve_map(self, session: Session) -> dict[str, int] | None:
+        tables = set(sa_inspect(self.engine).get_table_names())
+        if "warehouse_orders" not in tables or "warehouse_order_lines" not in tables:
+            return None
+        from app.warehouse_orders_repository import RESERVE_STATUSES, WarehouseOrder, WarehouseOrderLine
+
+        stmt = (
+            select(WarehouseOrderLine.sku, func.coalesce(func.sum(WarehouseOrderLine.quantity), 0))
+            .join(WarehouseOrder, WarehouseOrder.id == WarehouseOrderLine.order_id)
+            .where(WarehouseOrder.status.in_(RESERVE_STATUSES))
+            .group_by(WarehouseOrderLine.sku)
+        )
+        out: dict[str, int] = {}
+        for sku, qty in session.execute(stmt).all():
+            sku_s = str(sku or "").strip()
+            if sku_s:
+                out[sku_s] = int(qty or 0)
+        return out
+
     def _reserve_by_sku(self, session: Session) -> dict[str, int]:
+        mapped = self._warehouse_order_reserve_map(session)
+        if mapped is not None:
+            return mapped
         out: dict[str, int] = {}
         for row in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all():
             sku = str(row.sku or "").strip()
@@ -528,6 +614,9 @@ class WarehouseStockRepository:
         return out
 
     def _reserve_for_sku(self, session: Session, sku: str) -> int:
+        mapped = self._warehouse_order_reserve_map(session)
+        if mapped is not None:
+            return self._qty_for_sku(mapped, sku)
         return int(
             session.scalar(
                 select(func.coalesce(func.sum(OrderItem.quantity), 0)).where(

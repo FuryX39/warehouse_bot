@@ -71,6 +71,15 @@ Desktop.ini
 
 # Separate packer desktop app repository
 warehouse_packing_app/
+warehouse_packing_app_cs/
+
+# Packer productivity (локальный one-off расчёт, не в репозиторий)
+app/packer_productivity.py
+tools/calc_packer_productivity.py
+tools/_fetch_server_env.py
+tools/_run_packer_on_server.py
+tests/test_packer_productivity.py
+reports/packer_productivity*.xlsx
 
 # Local runtime data
 data/ozon_fbo_labels/

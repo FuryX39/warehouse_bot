@@ -4,6 +4,7 @@
     items: [],
     sort: { col: "sku", dir: 1 },
     search: "",
+    page: 1,
   };
 
   function esc(s) {
@@ -113,14 +114,19 @@
   function renderInventoryTable() {
     var body = panelEl().querySelector("#whStockSyncBody");
     var meta = panelEl().querySelector("#whStockSyncInventoryMeta");
+    var pagerHost = panelEl().querySelector("#whStockSyncPager");
     if (!body) return;
     var rows = filteredItems();
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(rows, state.page) : { items: rows, state: { page: 1, total: rows.length } };
+    state.page = sliced.state.page;
     if (meta) meta.textContent = "Строк: " + rows.length + " / " + state.items.length;
     if (!rows.length) {
       body.innerHTML = '<tr><td colspan="7" class="wh-muted">Нет остатков для отображения.</td></tr>';
+      if (pagerHost) pagerHost.innerHTML = "";
       return;
     }
-    body.innerHTML = rows
+    body.innerHTML = sliced.items
       .map(function (row) {
         return (
           "<tr>" +
@@ -156,6 +162,15 @@
         );
       })
       .join("");
+    if (pagerHost) {
+      pagerHost.innerHTML = p ? p.html(sliced.state) : "";
+      if (p) {
+        p.bind(pagerHost, function (delta) {
+          state.page += delta;
+          renderInventoryTable();
+        });
+      }
+    }
   }
 
   function loadInventory() {
@@ -242,6 +257,7 @@
     if (search) {
       search.addEventListener("input", function () {
         state.search = search.value || "";
+        state.page = 1;
         renderInventoryTable();
       });
     }
@@ -448,6 +464,7 @@
           state.sort.col = col;
           state.sort.dir = 1;
         }
+        state.page = 1;
         renderInventoryTable();
       });
   }
@@ -524,7 +541,8 @@
           '<th data-col="available" class="num">Доступно</th><th data-col="is_top">Топ</th><th></th>' +
           "</tr></thead>" +
           '<tbody id="whStockSyncBody"></tbody>' +
-          "</table></div></div></div>";
+          "</table></div>" +
+          '<div id="whStockSyncPager"></div></div></div>';
         bindEvents(root);
         return Promise.all([loadInventory(), loadStatus()]);
       })

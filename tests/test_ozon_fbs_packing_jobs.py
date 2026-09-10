@@ -58,8 +58,7 @@ class FakeOzonAdapter(OzonAdapter):
         return {str(pn): _pdf(str(pn)) for pn in posting_numbers}, []
 
 
-def _catalog(tmp_path) -> tuple[CatalogRepository, str]:
-    db_url = f"sqlite:///{(tmp_path / 'ozon.db').as_posix()}"
+def _catalog(db_url: str) -> tuple[CatalogRepository, str]:
     crm = CrmRepository(db_url)
     crm.init_schema()
     repo = CatalogRepository(db_url)
@@ -97,8 +96,8 @@ def test_filter_by_posting_range_inclusive_and_swap() -> None:
         filter_by_posting_range(rows, order, first_posting="P-9", last_posting="P-9")
 
 
-def test_create_ozon_job_range_explodes_qty_without_sheets(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_create_ozon_job_range_explodes_qty_without_sheets(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     catalog.create_product(
         {
             "name": "Ozon товар",
@@ -143,8 +142,8 @@ def test_create_ozon_job_range_explodes_qty_without_sheets(tmp_path) -> None:
     assert adapter.listed == 1
 
 
-def test_ozon_preview_and_create_routes(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_ozon_preview_and_create_routes(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     catalog.create_product(
         {
             "name": "Ozon товар",

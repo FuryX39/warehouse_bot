@@ -2,6 +2,8 @@
   var CONFIGURE_VALUE = "__configure__";
   var meta = { groups: [], units: [], marking_types: [], price_types: [] };
   var listFilters = {};
+  var listPage = 1;
+  var LIST_PAGE_SIZE = 50;
   var filterPanelOpen = false;
   var editingId = null;
   var formIsKit = false;
@@ -297,6 +299,44 @@
     return parts.length ? "?" + parts.join("&") : "";
   }
 
+  function listQuery() {
+    var base = filtersQuery();
+    var pagePart = "page=" + encodeURIComponent(String(listPage || 1));
+    return base ? base + "&" + pagePart : "?" + pagePart;
+  }
+
+  function renderPager(total, page, pages) {
+    total = Number(total || 0);
+    page = Number(page || 1);
+    pages = Number(pages || 1);
+    if (total <= 0) {
+      return '<p class="wh-cat-pager-info">Нет товаров</p>';
+    }
+    var from = (page - 1) * LIST_PAGE_SIZE + 1;
+    var to = Math.min(page * LIST_PAGE_SIZE, total);
+    return (
+      '<div class="wh-cat-pager">' +
+      '<button type="button" class="wh-btn" id="whCatPrevPage"' +
+      (page <= 1 ? " disabled" : "") +
+      ">Назад</button>" +
+      '<span class="wh-cat-pager-info">' +
+      from +
+      "–" +
+      to +
+      " из " +
+      total +
+      " · стр. " +
+      page +
+      " из " +
+      pages +
+      "</span>" +
+      '<button type="button" class="wh-btn" id="whCatNextPage"' +
+      (page >= pages ? " disabled" : "") +
+      ">Вперёд</button>" +
+      "</div>"
+    );
+  }
+
   function readFilterPanel(root) {
     var f = {};
     var q = root.querySelector("#whCatQuickSearch");
@@ -435,8 +475,9 @@
   function renderList() {
     var root = panelEl();
     root.innerHTML = "<p class=\"wh-msg\">Загрузка…</p>";
-    fetchJson("/api/warehouse/catalog/products" + filtersQuery())
+    fetchJson("/api/warehouse/catalog/products" + listQuery())
       .then(function (data) {
+        listPage = Number(data.page || 1);
         root.innerHTML =
           '<div class="wh-crm-toolbar">' +
           '<input type="search" id="whCatQuickSearch" class="wh-crm-search" placeholder="Быстрый поиск…" value="' + esc(listFilters.q || "") + '" />' +
@@ -449,7 +490,8 @@
           '<button type="button" class="wh-btn" id="whCatCreateKit">+ Комплект</button>' +
           "</div>" +
           renderFilterPanel() +
-          '<div id="whCatListWrap"></div>';
+          '<div id="whCatListWrap"></div>' +
+          renderPager(data.total, data.page, data.pages);
         root.querySelector("#whCatListWrap").innerHTML = renderListTable(data.products || []);
         bindListEvents(root);
         updateBulkDeleteButton(root);
@@ -953,19 +995,38 @@
     });
     root.querySelector("#whCatApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whCatResetFilter").addEventListener("click", function () {
       listFilters = {};
+      listPage = 1;
       filterPanelOpen = false;
       renderList();
     });
     root.querySelector("#whCatQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters = readFilterPanel(root);
+        listPage = 1;
         renderList();
       }
     });
+    var prevBtn = root.querySelector("#whCatPrevPage");
+    if (prevBtn) {
+      prevBtn.addEventListener("click", function () {
+        if (listPage > 1) {
+          listPage -= 1;
+          renderList();
+        }
+      });
+    }
+    var nextBtn = root.querySelector("#whCatNextPage");
+    if (nextBtn) {
+      nextBtn.addEventListener("click", function () {
+        listPage += 1;
+        renderList();
+      });
+    }
     root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
       tr.style.cursor = "pointer";
       tr.addEventListener("click", function (e) {
@@ -1766,8 +1827,242 @@
       });
   }
 
+  var productScanHistory = [];
+  var productScanLast = null;
+  var productScanSeq = 0;
+  var productScanRefocusTimer = null;
+  var productScanning = true;
+
+  function showScanCode(raw) {
+    return String(raw || "").replace(/\u001d/g, "<GS>");
+  }
+
+  function productScanThumbHtml(imageUrl) {
+    var u = String(imageUrl || "").trim();
+    if (!u) {
+      return '<div class="wh-scan-product-thumb wh-scan-product-thumb--empty" aria-hidden="true"></div>';
+    }
+    return (
+      '<img class="wh-scan-product-thumb" src="' +
+      esc(u) +
+      '" alt="" onerror="this.style.display=\'none\'" />'
+    );
+  }
+
+  function productScanBarcodeList(product, scanned) {
+    var items = (product && product.barcodes) || [];
+    if (!items.length) return "—";
+    var needle = String(scanned || "").toLowerCase();
+    return items
+      .map(function (row) {
+        var code = row.barcode || "";
+        var hit = code.toLowerCase() === needle;
+        return (
+          '<code class="' +
+          (hit ? "wh-scan-barcode-hit" : "") +
+          '">' +
+          esc(code) +
+          "</code>"
+        );
+      })
+      .join(" ");
+  }
+
+  function renderProductScanResultHtml(entry) {
+    if (!entry) {
+      return '<p class="wh-muted">Отсканируйте штрихкод товара и нажмите Enter.</p>';
+    }
+    var scanned = showScanCode(entry.barcode);
+    if (!entry.product) {
+      return (
+        '<div class="wh-scan-product wh-scan-product--miss">' +
+        "<div><strong>Товар не найден</strong>" +
+        '<p class="wh-muted">Штрихкод <code>' +
+        esc(scanned) +
+        "</code> в каталоге не найден.</p></div></div>"
+      );
+    }
+    var p = entry.product;
+    var typeLabel = p.is_kit ? "комплект" : "товар";
+    return (
+      '<div class="wh-scan-product">' +
+      productScanThumbHtml(p.image_url) +
+      '<div class="wh-scan-product-body">' +
+      "<h3 class=\"wh-scan-product-name\">" +
+      esc(p.name || "Без названия") +
+      "</h3>" +
+      '<dl class="wh-scan-product-dl">' +
+      "<dt>Тип</dt><dd>" +
+      esc(typeLabel) +
+      "</dd>" +
+      "<dt>Артикул</dt><dd><code>" +
+      esc(p.sku || "") +
+      "</code></dd>" +
+      "<dt>Код</dt><dd><code>" +
+      esc(p.code || "") +
+      "</code></dd>" +
+      "<dt>Группа</dt><dd>" +
+      esc(p.group_name || "—") +
+      "</dd>" +
+      "<dt>Ед.</dt><dd>" +
+      esc(p.unit_name || "—") +
+      "</dd>" +
+      "<dt>Штрихкод</dt><dd>" +
+      productScanBarcodeList(p, entry.barcode) +
+      "</dd>" +
+      "</dl></div></div>"
+    );
+  }
+
+  function renderProductScanHistory(root) {
+    var box = root.querySelector("#whProductScanHistory");
+    if (!box) return;
+    if (!productScanHistory.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML =
+      '<h4 class="wh-crm-section-title">Последние сканы</h4>' +
+      '<ul class="wh-marking-scan-list">' +
+      productScanHistory
+        .map(function (entry, idx) {
+          var label = entry.product
+            ? esc(entry.product.name || "") +
+              " · <code>" +
+              esc(entry.product.sku || "") +
+              "</code>"
+            : "не найден";
+          return (
+            '<li class="wh-marking-scan-item">' +
+            '<span class="wh-marking-scan-idx">' +
+            (idx + 1) +
+            ".</span>" +
+            '<span class="wh-marking-scan-code"><code>' +
+            esc(showScanCode(entry.barcode)) +
+            "</code> — " +
+            label +
+            "</span></li>"
+          );
+        })
+        .join("") +
+      "</ul>";
+  }
+
+  function setProductScanning(root, on) {
+    productScanning = !!on;
+    var input = root.querySelector("#whProductScanInput");
+    var stopBtn = root.querySelector("#whProductScanStop");
+    var resumeBtn = root.querySelector("#whProductScanResume");
+    var status = root.querySelector("#whProductScanStatus");
+    if (!input) return;
+    input.disabled = !productScanning;
+    if (stopBtn) stopBtn.hidden = !productScanning;
+    if (resumeBtn) resumeBtn.hidden = productScanning;
+    if (status) {
+      status.textContent = productScanning
+        ? "Сканирование включено: ввод → Enter."
+        : "Сканирование остановлено.";
+    }
+    if (productScanning) {
+      setTimeout(function () {
+        input.focus();
+      }, 0);
+    } else {
+      input.blur();
+    }
+  }
+
+  function lookupProductBarcode(root, raw) {
+    var msg = root.querySelector("#whProductScanMsg");
+    var value = String(raw || "").trim();
+    if (msg) {
+      msg.className = "wh-msg";
+      msg.textContent = "";
+    }
+    if (!value) return;
+    var seq = ++productScanSeq;
+    if (msg) msg.textContent = "Ищем…";
+    fetchJson(
+      "/api/warehouse/catalog/products/by-barcode?barcode=" + encodeURIComponent(value)
+    )
+      .then(function (data) {
+        if (seq !== productScanSeq) return;
+        productScanLast = {
+          barcode: (data && data.barcode) || value,
+          product: (data && data.product) || null,
+        };
+        productScanHistory.unshift(productScanLast);
+        if (productScanHistory.length > 20) productScanHistory.length = 20;
+        var resultEl = root.querySelector("#whProductScanResult");
+        if (resultEl) resultEl.innerHTML = renderProductScanResultHtml(productScanLast);
+        if (msg) {
+          msg.className = productScanLast.product ? "wh-msg wh-msg-ok" : "wh-msg wh-msg-error";
+          msg.textContent = productScanLast.product
+            ? "Товар найден."
+            : "Товар с таким штрихкодом не найден.";
+        }
+        renderProductScanHistory(root);
+      })
+      .catch(function (err) {
+        if (seq !== productScanSeq) return;
+        if (msg) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+        }
+      })
+      .then(function () {
+        if (!productScanning) return;
+        var input = root.querySelector("#whProductScanInput");
+        if (input) input.focus();
+      });
+  }
+
+  function renderScanner(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML =
+      '<div class="wh-route-card">' +
+      '<p class="wh-muted">Поиск только по штрихкоду товара. Отсканируйте ШК в поле ниже.</p>' +
+      '<div class="wh-crm-toolbar"><span class="wh-muted" id="whProductScanStatus"></span></div>' +
+      '<label class="wh-marking-scan-label">Штрихкод' +
+      '<input type="text" id="whProductScanInput" class="wh-marking-scan-input" autocomplete="off" spellcheck="false" placeholder="Отсканируйте или введите ШК и нажмите Enter" />' +
+      "</label>" +
+      '<div class="wh-tools-actions">' +
+      '<button type="button" class="wh-btn" id="whProductScanStop">Остановиться</button>' +
+      '<button type="button" class="wh-btn" id="whProductScanResume" hidden>Продолжить</button>' +
+      "</div>" +
+      '<p class="wh-msg" id="whProductScanMsg"></p>' +
+      '<div id="whProductScanResult"></div>' +
+      '<div id="whProductScanHistory"></div></div>';
+    var resultEl = root.querySelector("#whProductScanResult");
+    if (resultEl) resultEl.innerHTML = renderProductScanResultHtml(productScanLast);
+    renderProductScanHistory(root);
+    var input = root.querySelector("#whProductScanInput");
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      lookupProductBarcode(root, input.value);
+      input.value = "";
+    });
+    input.addEventListener("blur", function () {
+      if (!productScanning) return;
+      clearTimeout(productScanRefocusTimer);
+      productScanRefocusTimer = setTimeout(function () {
+        if (productScanning) input.focus();
+      }, 50);
+    });
+    root.querySelector("#whProductScanStop").addEventListener("click", function () {
+      setProductScanning(root, false);
+    });
+    root.querySelector("#whProductScanResume").addEventListener("click", function () {
+      setProductScanning(root, true);
+    });
+    setProductScanning(root, true);
+  }
+
   global.WhProducts = {
     renderCatalog: renderCatalog,
+    renderScanner: renderScanner,
     renderPriceTypes: renderPriceTypes,
   };
 })(window);

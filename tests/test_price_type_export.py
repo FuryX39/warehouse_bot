@@ -20,8 +20,7 @@ def test_attachment_disposition_allows_cyrillic_filename() -> None:
     assert "Розничная" not in header.split("filename*=", 1)[0]
 
 
-def test_build_price_type_prices_export_fills_prices(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'pt_export.db').as_posix()}"
+def test_build_price_type_prices_export_fills_prices(db_url: str) -> None:
     crm = CrmRepository(db_url)
     crm.init_schema()
     catalog = CatalogRepository(db_url)

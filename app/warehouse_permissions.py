@@ -38,6 +38,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
         "title": "Товары",
         "items": [
             {"id": "catalog", "title": "Товары и услуги"},
+            {"id": "scanner", "title": "Сканер"},
             {"id": "price-lists", "title": "Прайс-листы"},
             {"id": "price-types", "title": "Виды цен"},
             {"id": "serial-numbers", "title": "Серийные номера"},
@@ -81,6 +82,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
             {"id": "excel-to-pdf", "title": "Excel → PDF"},
             {"id": "cargo-places", "title": "Подсчёт грузомест"},
             {"id": "yandex-label-sort", "title": "Сортировка ярлыков Яндекс"},
+            {"id": "scanner", "title": "Сканер"},
         ],
     },
     {

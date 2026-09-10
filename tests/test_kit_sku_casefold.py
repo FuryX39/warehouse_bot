@@ -12,8 +12,7 @@ from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 
 
-def _boot(tmp_path, name: str):
-    db_url = f"sqlite:///{(tmp_path / name).as_posix()}"
+def _boot(db_url: str):
     CatalogRepository(db_url).init_schema()
     storage = StorageWarehouseRepository(db_url)
     storage.init_schema()
@@ -26,8 +25,8 @@ def _boot(tmp_path, name: str):
     return storage, inventory, stock
 
 
-def test_kit_reserve_matches_case_insensitive_sku(tmp_path) -> None:
-    storage, inventory, stock = _boot(tmp_path, "kit_case.db")
+def test_kit_reserve_matches_case_insensitive_sku(db_url: str) -> None:
+    storage, inventory, stock = _boot(db_url)
 
     with Session(inventory.engine) as session:
         product = CatalogProduct(
@@ -71,8 +70,8 @@ def test_kit_reserve_matches_case_insensitive_sku(tmp_path) -> None:
     assert rows["part-a"].free_stock == 6
 
 
-def test_kit_reserve_matches_by_product_code(tmp_path) -> None:
-    storage, inventory, stock = _boot(tmp_path, "kit_code.db")
+def test_kit_reserve_matches_by_product_code(db_url: str) -> None:
+    storage, inventory, stock = _boot(db_url)
 
     with Session(inventory.engine) as session:
         product = CatalogProduct(
@@ -115,8 +114,7 @@ def test_kit_reserve_matches_by_product_code(tmp_path) -> None:
     assert rows["LEAF-X"].reserve == 2
 
 
-def test_allocation_lookup_by_folded_kit_sku(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'kit_fold.db').as_posix()}"
+def test_allocation_lookup_by_folded_kit_sku(db_url: str) -> None:
     CatalogRepository(db_url).init_schema()
     with Session(CatalogRepository(db_url).engine) as session:
         product = CatalogProduct(

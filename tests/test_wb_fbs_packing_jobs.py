@@ -90,8 +90,7 @@ class FakeWbAdapter(WildberriesAdapter):
         return [{"id": self.supply_id, "name": "Test supply", "done": False}]
 
 
-def _catalog(tmp_path) -> tuple[CatalogRepository, str]:
-    db_url = f"sqlite:///{(tmp_path / 'wb.db').as_posix()}"
+def _catalog(db_url: str) -> tuple[CatalogRepository, str]:
     crm = CrmRepository(db_url)
     crm.init_schema()
     repo = CatalogRepository(db_url)
@@ -99,8 +98,8 @@ def _catalog(tmp_path) -> tuple[CatalogRepository, str]:
     return repo, db_url
 
 
-def test_create_wb_job_started(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_create_wb_job_started(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     catalog.create_product(
         {
             "name": "WB товар",
@@ -132,8 +131,8 @@ def test_create_wb_job_started(tmp_path) -> None:
     assert all(packing.read_line_pdf(job.id, line.id).startswith(b"%PDF") for line in job.lines)
 
 
-def test_wb_preview_and_create_routes(tmp_path) -> None:
-    catalog, db_url = _catalog(tmp_path)
+def test_wb_preview_and_create_routes(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
     catalog.create_product(
         {
             "name": "WB товар",

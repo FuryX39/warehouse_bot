@@ -133,11 +133,15 @@ class StockCoordinator:
         *,
         full_sync_interval_seconds: int = 3600,
         stock_sync_enabled: bool = True,
+        orders_repo=None,
+        shipments_repo=None,
     ) -> None:
         self.adapters = adapters
         self.inventory_repo = inventory_repo
         self.full_sync_interval_seconds = full_sync_interval_seconds
         self.stock_sync_enabled = bool(stock_sync_enabled)
+        self.orders_repo = orders_repo
+        self.shipments_repo = shipments_repo
         self.last_run_at: datetime | None = None
         self.last_error: str | None = None
         self.last_warnings: list[str] = []
@@ -195,23 +199,56 @@ class StockCoordinator:
 
             reconcile_removed = 0
             reconcile_updated = 0
-            for adapter in self.adapters:
-                if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):
-                    continue
-                do_reconcile = adapter_do_full.get(adapter.name, False) or getattr(adapter, "reconcile_on_delta", False)
-                if not do_reconcile:
-                    continue
-                if not getattr(adapter, "supports_reserve_reconciliation", False):
-                    continue
-                desired = actions_by_source.get(adapter.name, [])
-                removed, updated = self.inventory_repo.reconcile_active_reserves(adapter.name, desired)
-                reconcile_removed += removed
-                reconcile_updated += updated
+            use_orders = self.orders_repo is not None and self.shipments_repo is not None
+            if not use_orders:
+                for adapter in self.adapters:
+                    if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):
+                        continue
+                    do_reconcile = adapter_do_full.get(adapter.name, False) or getattr(adapter, "reconcile_on_delta", False)
+                    if not do_reconcile:
+                        continue
+                    if not getattr(adapter, "supports_reserve_reconciliation", False):
+                        continue
+                    desired = actions_by_source.get(adapter.name, [])
+                    removed, updated = self.inventory_repo.reconcile_active_reserves(adapter.name, desired)
+                    reconcile_removed += removed
+                    reconcile_updated += updated
 
             order_items_stats = self.inventory_repo.upsert_order_items_from_actions(
                 all_actions, sync_start_ts
             )
             inserted = int(order_items_stats.get("inserted", 0))
+
+            if use_orders:
+                from app.warehouse_order_sync import classify_missing_orders, upsert_orders_from_actions
+                from app.warehouse_orders_repository import posting_id_from_external
+
+                wh_id = self.inventory_repo.get_sync_source_warehouse_id()
+                if wh_id is not None:
+                    upsert_orders_from_actions(
+                        self.orders_repo, warehouse_id=int(wh_id), actions=all_actions
+                    )
+                    for adapter in self.adapters:
+                        if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):
+                            continue
+                        do_reconcile = adapter_do_full.get(adapter.name, False) or getattr(
+                            adapter, "reconcile_on_delta", False
+                        )
+                        if not do_reconcile:
+                            continue
+                        snapshot = {
+                            posting_id_from_external(a.external_order_id)
+                            for a in actions_by_source.get(adapter.name, [])
+                            if posting_id_from_external(a.external_order_id)
+                        }
+                        classify_missing_orders(
+                            adapter=adapter,
+                            orders_repo=self.orders_repo,
+                            shipments_repo=self.shipments_repo,
+                            inventory_repo=self.inventory_repo,
+                            source=adapter.name,
+                            snapshot_posting_ids=snapshot,
+                        )
 
             mismatch_parts: list[str] = []
             for adapter in self.adapters:

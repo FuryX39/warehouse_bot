@@ -2,6 +2,7 @@
   var CONFIGURE_VALUE = "__configure__";
   var meta = { groups: [] };
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var editingId = null;
 
@@ -228,7 +229,10 @@
     if (!items.length) {
       return '<p class="wh-msg">Склады не найдены.</p>';
     }
-    var rows = items
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(items, listPage) : { items: items, state: { page: 1 } };
+    listPage = sliced.state.page;
+    var rows = sliced.items
       .map(function (wh) {
         var defaultTag = wh.is_default
           ? ' <span class="wh-badge wh-badge-admin">основной</span>'
@@ -264,7 +268,8 @@
       "<th>Наименование</th><th>Код</th><th>Группа</th><th>Адрес</th><th>Позиций</th><th>Остаток, шт.</th>" +
       "</tr></thead><tbody>" +
       rows +
-      "</tbody></table>"
+      "</tbody></table>" +
+      (p ? p.html(sliced.state) : "")
     );
   }
 
@@ -304,16 +309,19 @@
     });
     root.querySelector("#whStorageApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whStorageResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whStorageQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters = readFilterPanel(root);
+        listPage = 1;
         renderList();
       }
     });
@@ -324,6 +332,12 @@
         renderForm(editingId);
       });
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function renderForm(warehouseId) {
@@ -387,7 +401,15 @@
               esc(wh.sku_count) +
               "</strong>, всего единиц: <strong>" +
               esc(wh.total_stock) +
-              "</strong>. Детальный просмотр — в разделе «Остатки» (в разработке).</p></section>"
+              "</strong>. Детальный просмотр — в разделе «Остатки».</p></section>" +
+              '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Ячейки</h4>' +
+              '<p class="wh-msg">Основную ячейку MAIN нельзя удалить. Ячейку с остатком тоже нельзя.</p>' +
+              '<div id="whStorageBins"></div>' +
+              '<div class="wh-form-row" style="margin-top:0.75rem;">' +
+              '<div><label>Код</label><input type="text" id="whStBinCode" placeholder="A-01" /></div>' +
+              '<div><label>Название</label><input type="text" id="whStBinName" placeholder="Стеллаж A" /></div>' +
+              '<div class="wh-rc-search-btn-wrap"><button type="button" class="wh-btn" id="whStBinAdd">Добавить ячейку</button></div>' +
+              "</div></section>"
             : "");
 
         bindConfigureSelect(root.querySelector("#whStGroup"), function () {
@@ -409,10 +431,90 @@
             clearWarehouseStocks(root, warehouseId, wh.name);
           });
         }
+        if (warehouseId) bindBins(root, warehouseId);
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
       });
+  }
+
+  function bindBins(root, warehouseId) {
+    function renderBins(bins) {
+      var wrap = root.querySelector("#whStorageBins");
+      if (!wrap) return;
+      if (!bins.length) {
+        wrap.innerHTML = '<p class="wh-msg">Ячеек нет.</p>';
+        return;
+      }
+      wrap.innerHTML =
+        '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
+        "<th>Код</th><th>Название</th><th>Основная</th><th>Позиций</th><th>Единиц</th><th></th>" +
+        "</tr></thead><tbody>" +
+        bins
+          .map(function (b) {
+            return (
+              '<tr data-bin-id="' +
+              esc(b.id) +
+              '"><td><code>' +
+              esc(b.code) +
+              "</code></td><td>" +
+              esc(b.name) +
+              "</td><td>" +
+              (b.is_default ? "MAIN" : "—") +
+              '</td><td class="wh-stock-num">' +
+              esc(b.sku_count) +
+              '</td><td class="wh-stock-num">' +
+              esc(b.total_stock) +
+              "</td><td>" +
+              (b.is_default
+                ? ""
+                : '<button type="button" class="wh-btn wh-btn-sm wh-st-bin-del" data-id="' +
+                  esc(b.id) +
+                  '">Удалить</button>') +
+              "</td></tr>"
+            );
+          })
+          .join("") +
+        "</tbody></table>";
+      wrap.querySelectorAll(".wh-st-bin-del").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          if (!confirm("Удалить ячейку?")) return;
+          fetchJson("/api/warehouse/storage/warehouses/" + warehouseId + "/bins/" + btn.getAttribute("data-id"), {
+            method: "DELETE",
+          })
+            .then(loadBins)
+            .catch(function (err) {
+              alert(err.message || "Не удалось удалить");
+            });
+        });
+      });
+    }
+    function loadBins() {
+      fetchJson("/api/warehouse/storage/warehouses/" + warehouseId + "/bins").then(function (data) {
+        renderBins(data.bins || []);
+      });
+    }
+    var addBtn = root.querySelector("#whStBinAdd");
+    if (addBtn) {
+      addBtn.addEventListener("click", function () {
+        var code = (root.querySelector("#whStBinCode").value || "").trim();
+        var name = (root.querySelector("#whStBinName").value || "").trim();
+        fetchJson("/api/warehouse/storage/warehouses/" + warehouseId + "/bins", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code, name: name }),
+        })
+          .then(function () {
+            root.querySelector("#whStBinCode").value = "";
+            root.querySelector("#whStBinName").value = "";
+            loadBins();
+          })
+          .catch(function (err) {
+            alert(err.message || "Не удалось добавить ячейку");
+          });
+      });
+    }
+    loadBins();
   }
 
   function clearWarehouseStocks(root, warehouseId, warehouseName) {
@@ -497,6 +599,7 @@
     editingId = null;
     listFilters = {};
     filterPanelOpen = false;
+    listPage = 1;
     loadMeta()
       .then(function () {
         renderList();

@@ -4,6 +4,10 @@
   var assignees = [];
   var currentJobId = null;
   var hasMerged = false;
+  var jobsCache = [];
+  var jobsPage = 1;
+  var previewRowsCache = [];
+  var previewPage = 1;
 
   function shell() {
     return global.WH_SHELL || {};
@@ -178,16 +182,23 @@
   function renderJobs(root, jobs) {
     var wrap = root.querySelector("#whFbsJobs");
     if (!wrap) return;
-    jobs = jobs || [];
+    if (jobs) {
+      jobsCache = jobs;
+      jobsPage = 1;
+    }
+    jobs = jobsCache || [];
     if (!jobs.length) {
       wrap.innerHTML = '<p class="wh-muted">Заданий пока нет.</p>';
       return;
     }
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(jobs, jobsPage) : { items: jobs, state: { page: 1 } };
+    jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
       "<th>№</th><th>Статус</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th>ЧЗ</th><th></th>" +
       "</tr></thead><tbody>" +
-      jobs
+      sliced.items
         .map(function (job) {
           var sheet = job.sheet_url
             ? '<a href="' + esc(job.sheet_url) + '" target="_blank" rel="noopener">лист</a>'
@@ -234,7 +245,14 @@
           );
         })
         .join("") +
-      "</tbody></table>";
+      "</tbody></table>" +
+      (p ? p.html(sliced.state) : "");
+    if (p) {
+      p.bind(wrap, function (delta) {
+        jobsPage += delta;
+        renderJobs(root, null);
+      });
+    }
     wrap.querySelectorAll(".wh-fbs-job-cancel").forEach(function (btn) {
       btn.addEventListener("click", function () {
         cancelJob(root, parseInt(btn.getAttribute("data-id"), 10));
@@ -372,18 +390,25 @@
   }
 
   function renderRows(root, rows) {
-    rows = rows || [];
     var wrap = root.querySelector("#whFbsResult");
     if (!wrap) return;
+    if (rows) {
+      previewRowsCache = rows || [];
+      previewPage = 1;
+    }
+    rows = previewRowsCache || [];
     if (!rows.length) {
       wrap.innerHTML = '<p class="wh-msg">Подходящих заказов нет.</p>';
       return;
     }
-    var body = rows
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(rows, previewPage) : { items: rows, state: { page: 1 } };
+    previewPage = sliced.state.page;
+    var body = sliced.items
       .map(function (row, index) {
         return (
           "<tr><td>" +
-          esc(row.seq != null ? row.seq : index + 1) +
+          esc(row.seq != null ? row.seq : (sliced.state.offset || 0) + index + 1) +
           "</td><td><code>" +
           esc(row.sku) +
           "</code></td><td>" +
@@ -402,7 +427,14 @@
       "<th>№</th><th>Артикул</th><th>Кол-во</th><th>Заказ / отправление</th>" +
       "</tr></thead><tbody>" +
       body +
-      "</tbody></table>";
+      "</tbody></table>" +
+      (p ? p.html(sliced.state) : "");
+    if (p) {
+      p.bind(wrap, function (delta) {
+        previewPage += delta;
+        renderRows(root, null);
+      });
+    }
   }
 
   function queryOrForm(root, asForm) {

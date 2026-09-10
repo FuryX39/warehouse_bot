@@ -37,6 +37,7 @@ _DEFAULT_MARKING_TYPES = (
     "Ветеринарные препараты",
 )
 _CODE128_RE = re.compile(r"^[\x20-\x7E]+$")
+CATALOG_LIST_PAGE_SIZE = 50
 
 
 class _Base(DeclarativeBase):
@@ -793,12 +794,30 @@ class CatalogRepository:
             session.commit()
             return updated
 
-    def list_products(self, filters: dict[str, str]) -> list[CatalogProductRow]:
+    def count_products(self, filters: dict[str, str]) -> int:
+        with Session(self.engine) as session:
+            stmt = select(func.count()).select_from(CatalogProduct)
+            conds = self._filter_conditions(session, filters)
+            if conds:
+                stmt = stmt.where(*conds)
+            return int(session.scalar(stmt) or 0)
+
+    def list_products(
+        self,
+        filters: dict[str, str],
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[CatalogProductRow]:
         with Session(self.engine) as session:
             q = select(CatalogProduct).order_by(CatalogProduct.name, CatalogProduct.sku)
             conds = self._filter_conditions(session, filters)
             if conds:
                 q = q.where(*conds)
+            if offset:
+                q = q.offset(max(0, int(offset)))
+            if limit is not None:
+                q = q.limit(max(1, int(limit)))
             rows = session.scalars(q).all()
             return [self._product_row(session, r, load_details=False) for r in rows]
 
@@ -1273,6 +1292,29 @@ class CatalogRepository:
             if row is None:
                 return None
             return self._product_row(session, row, load_details=True)
+
+    def find_product_by_barcode(self, barcode: str) -> CatalogProductRow | None:
+        """Точное совпадение ШК (без учёта регистра). None если пусто или не найден."""
+        code = str(barcode or "").strip(" \t\r\n")
+        if not code:
+            return None
+        key = code.casefold()
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(CatalogProductBarcode).where(CatalogProductBarcode.barcode == code)
+            )
+            if row is None:
+                row = session.scalar(
+                    select(CatalogProductBarcode).where(
+                        func.lower(CatalogProductBarcode.barcode) == key
+                    )
+                )
+            if row is None:
+                return None
+            product = session.get(CatalogProduct, int(row.product_id))
+            if product is None:
+                return None
+            return self._product_row(session, product, load_details=True)
 
     def create_product(self, data: dict[str, Any]) -> CatalogProductRow:
         return self._save_product(None, data)

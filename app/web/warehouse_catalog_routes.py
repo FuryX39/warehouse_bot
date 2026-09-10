@@ -22,7 +22,7 @@ from app.catalog_price_type_import import (
     import_price_type_prices_from_xlsx,
 )
 from app.barcode_label_pdf import generate_barcode_label_pdf
-from app.catalog_repository import CatalogRepository
+from app.catalog_repository import CATALOG_LIST_PAGE_SIZE, CatalogRepository
 from app.crm_repository import CrmRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.warehouse_users_repository import WarehouseUserRow
@@ -225,9 +225,24 @@ def register_warehouse_catalog_routes(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         filters = _filters_from_query(request.query_params)
-        rows = catalog_repo.list_products(filters)
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        page = max(1, page)
+        limit = CATALOG_LIST_PAGE_SIZE
+        total = catalog_repo.count_products(filters)
+        pages = max(1, (total + limit - 1) // limit) if total else 1
+        if page > pages:
+            page = pages
+        offset = (page - 1) * limit
+        rows = catalog_repo.list_products(filters, limit=limit, offset=offset)
         return {
-            "products": [catalog_repo.product_to_dict(r, include_details=False) for r in rows]
+            "products": [catalog_repo.product_to_dict(r, include_details=False) for r in rows],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": pages,
         }
 
     @app.get("/api/warehouse/catalog/products/picker")
@@ -244,6 +259,19 @@ def register_warehouse_catalog_routes(
             except ValueError:
                 exclude_id = None
         return {"products": catalog_repo.list_products_picker(q=q, exclude_id=exclude_id)}
+
+    @app.get("/api/warehouse/catalog/products/by-barcode")
+    async def api_catalog_product_by_barcode(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        code = (request.query_params.get("barcode") or "").strip(" \t\r\n")
+        if not code:
+            raise HTTPException(status_code=400, detail="Укажите штрихкод")
+        row = catalog_repo.find_product_by_barcode(code)
+        if row is None:
+            return {"product": None, "barcode": code}
+        return {"product": catalog_repo.product_to_dict(row), "barcode": code}
 
     @app.get("/api/warehouse/catalog/products/import/template")
     async def api_catalog_import_template(

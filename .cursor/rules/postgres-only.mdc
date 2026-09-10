@@ -1,0 +1,38 @@
+---
+description: Проект на PostgreSQL; остатки SQLite — сообщить и заменить
+alwaysApply: true
+---
+
+# База данных: только PostgreSQL
+
+Проект **полностью перешёл на PostgreSQL**. SQLite — не целевая СУБД для runtime, тестов и нового кода.
+
+## Стандарт
+
+- `DB_URL`, `MOVEMENT_DB_URL`, `DEALER_ANALYSIS_DB_URL` — `postgresql+psycopg://…`
+- Тесты: фикстура `db_url` из `tests/conftest.py` (изолированная схема на тест), не `sqlite:///…` во `tmp_path`
+- Новый код не добавляет SQLite-URL, `PRAGMA`, `.db`-файлы как рабочую БД
+
+## Если нашли остатки SQLite
+
+**Сообщить пользователю**, где именно (файл, строка, сценарий), и **заменить на актуальное**:
+
+| Контекст | Замена |
+|---|---|
+| Тест | `db_url` из `tests/conftest.py`, `TEST_DATABASE_URL` или `DB_URL` с Postgres |
+| Конфиг / `.env.example` | Postgres как основной вариант; SQLite — только закомментированный legacy, если ещё нужен для миграции |
+| `create_db_engine` / репозитории | Postgres; ветки `dialect == "sqlite"` не расширять без причины |
+| Документация | Postgres как default, путь миграции — `tools/migrate_sqlite_to_postgres.py` |
+
+## Допустимые исключения (не «боевой» SQLite)
+
+- `tools/migrate_sqlite_to_postgres.py` и `tests/test_sqlite_to_postgres_migrate.py` — **источник** при переливе
+- Существующие ветки `if dialect == "sqlite"` в миграциях/утилитах — не удалять без задачи, но **не копировать** в новый код
+
+```text
+❌ BAD: db_url = f"sqlite:///{tmp_path / 'test.db'}"
+✅ GOOD: def test_foo(db_url): …  # tests/conftest.py, PostgreSQL schema
+
+❌ BAD: DB_URL=sqlite:///crm_bot.db  # как default в новом коде/доках
+✅ GOOD: DB_URL=postgresql+psycopg://warehouse:…@127.0.0.1:5432/warehouse
+```

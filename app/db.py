@@ -27,6 +27,10 @@ def add_boolean_column_sql(dialect: str, table: str, column: str) -> str | None:
 
 
 def create_db_engine(db_url: str):
+    search_path: str | None = None
+    if "#schema=" in db_url:
+        db_url, tail = db_url.split("#schema=", 1)
+        search_path = tail.split("#", 1)[0].strip() or None
     connect_args: dict[str, object] = {}
     if db_url.startswith("sqlite"):
         connect_args = {"check_same_thread": False, "timeout": 30}
@@ -39,6 +43,14 @@ def create_db_engine(db_url: str):
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    elif search_path and engine.dialect.name == "postgresql":
+
+        @event.listens_for(engine, "connect")
+        def _set_pg_search_path(dbapi_conn, _record) -> None:
+            cursor = dbapi_conn.cursor()
+            cursor.execute(f'SET search_path TO "{search_path}"')
             cursor.close()
 
     return engine

@@ -116,7 +116,8 @@ class Settings:
 
 
 def dealer_analysis_db_url_default() -> str:
-    return os.getenv("DEALER_ANALYSIS_DB_URL", "sqlite:///dealer_analysis.db").strip() or "sqlite:///dealer_analysis.db"
+    default = "postgresql+psycopg://warehouse:PASSWORD@127.0.0.1:5432/warehouse"
+    return os.getenv("DEALER_ANALYSIS_DB_URL", default).strip() or default
 
 
 def dealer_analysis_data_dir_default() -> Path:
@@ -152,8 +153,9 @@ def load_settings() -> Settings:
     load_dotenv(_PROJECT_ROOT / ".env", override=False)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     interval = int(os.getenv("RESERVE_INTERVAL_SECONDS", "120"))
-    db_url = os.getenv("DB_URL", "sqlite:///crm_bot.db").strip() or "sqlite:///crm_bot.db"
-    movement_db_url = os.getenv("MOVEMENT_DB_URL", "sqlite:///movements.db").strip() or "sqlite:///movements.db"
+    default_db = "postgresql+psycopg://warehouse:PASSWORD@127.0.0.1:5432/warehouse"
+    db_url = os.getenv("DB_URL", default_db).strip() or default_db
+    movement_db_url = os.getenv("MOVEMENT_DB_URL", db_url).strip() or db_url
     return Settings(
         telegram_bot_token=token,
         db_url=db_url,

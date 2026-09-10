@@ -1,6 +1,7 @@
 (function (global) {
   var meta = { warehouses: [], price_types: [] };
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var editingId = null;
   var formItems = [];
@@ -181,6 +182,24 @@
       html += '<option value="' + esc(w.id) + '"' + sel + ">" + esc(w.name) + "</option>";
     });
     return html;
+  }
+
+  function binsForWarehouse(warehouseId) {
+    for (var i = 0; i < meta.warehouses.length; i++) {
+      if (String(meta.warehouses[i].id) === String(warehouseId)) return meta.warehouses[i].bins || [];
+    }
+    return [];
+  }
+
+  function binOptions(warehouseId, selectedId) {
+    var bins = binsForWarehouse(warehouseId);
+    var html = "";
+    bins.forEach(function (b) {
+      var sel = String(selectedId || "") === String(b.id) ? " selected" : "";
+      if (!selectedId && b.is_default) sel = " selected";
+      html += '<option value="' + esc(b.id) + '"' + sel + ">" + esc((b.code || "") + (b.name && b.name !== b.code ? " — " + b.name : "")) + "</option>";
+    });
+    return html || '<option value="">MAIN</option>';
   }
 
   function priceTypeMenuHtml() {
@@ -393,7 +412,10 @@
     root.innerHTML = "<p class=\"wh-msg\">Загрузка…</p>";
     fetchJson("/api/warehouse/receipts" + filtersQuery())
       .then(function (data) {
-        var rows = (data.receipts || [])
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(data.receipts || [], listPage) : { items: data.receipts || [], state: { page: 1 } };
+        listPage = sliced.state.page;
+        var rows = sliced.items
           .map(function (r) {
             return (
               '<tr data-id="' + esc(r.id) + '">' +
@@ -419,7 +441,8 @@
               "<th>Название</th><th>Кол-во</th><th>Сумма</th><th>Склад</th><th>Комментарий</th><th>Дата</th>" +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Оприходования не найдены.</p>') +
-          "</div>";
+          "</div>" +
+          (p ? p.html(sliced.state) : "");
         bindListEvents(root);
       })
       .catch(function (err) {
@@ -440,16 +463,19 @@
     });
     root.querySelector("#whRcApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whRcResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whRcQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters.q = e.target.value.trim();
+        listPage = 1;
         renderList();
       }
     });
@@ -460,6 +486,12 @@
         renderForm(editingId);
       });
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function renderForm(receiptId) {
@@ -493,14 +525,18 @@
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whRcBack">&larr; К списку</button>' +
-          (receiptId ? '<button type="button" class="wh-btn wh-btn-danger" id="whRcDelete">Удалить</button>' : "") +
-          '<button type="button" class="wh-btn wh-btn-primary" id="whRcSave">Сохранить</button>' +
+          (r.locked ? "" : (receiptId ? '<button type="button" class="wh-btn wh-btn-danger" id="whRcDelete">Удалить</button>' : "") +
+          '<button type="button" class="wh-btn wh-btn-primary" id="whRcSave">Сохранить</button>') +
           "</div>" +
-          '<p class="wh-msg" id="whRcFormMsg"></p>' +
+          '<p class="wh-msg" id="whRcFormMsg">' +
+          (r.locked ? "Документ создан инвентаризацией и не может быть изменён." : "") +
+          "</p>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Оприходование</h4>' +
           '<div class="wh-form-row">' +
           '<div><label>Название</label><input type="text" id="whRcTitle" value="' + esc(r.title) + '" placeholder="Например, поставка от 15.06" /></div>' +
           '<div><label>Склад</label><select id="whRcWarehouse">' + warehouseOptions(r.warehouse_id) + "</select></div>" +
+          '<div><label>Ячейка</label><select id="whRcBin">' + binOptions(r.warehouse_id, r.bin_id) + "</select></div>" +
+          '<div><label>Ячейка</label><select id="whRcBin">' + binOptions(r.warehouse_id, r.bin_id) + "</select></div>" +
           "</div>" +
           '<p class="wh-muted">Отображается как: <strong>Оприходование {название}</strong></p></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Добавление товаров</h4>' +
@@ -521,6 +557,13 @@
           '<textarea id="whRcComment" class="wh-rc-comment" rows="3" placeholder="Необязательно">' + esc(r.comment) + "</textarea></section>";
 
         bindItemRowEvents(root);
+        var whSel = root.querySelector("#whRcWarehouse");
+        var binSel = root.querySelector("#whRcBin");
+        if (whSel && binSel) {
+          whSel.addEventListener("change", function () {
+            binSel.innerHTML = binOptions(whSel.value, "");
+          });
+        }
         root.querySelector("#whRcBack").addEventListener("click", function () {
           editingId = null;
           formItems = [];
@@ -550,11 +593,13 @@
             if (menu) menu.classList.add("hidden");
           }
         });
-        root.querySelector("#whRcSave").addEventListener("click", function () {
-          saveReceipt(root, receiptId);
-        });
-        if (receiptId) {
-          root.querySelector("#whRcDelete").addEventListener("click", function () {
+        root.querySelector("#whRcSave") &&
+          root.querySelector("#whRcSave").addEventListener("click", function () {
+            saveReceipt(root, receiptId);
+          });
+        var delBtn = root.querySelector("#whRcDelete");
+        if (delBtn) {
+          delBtn.addEventListener("click", function () {
             if (!confirm("Удалить оприходование? Остатки будут скорректированы.")) return;
             fetchJson("/api/warehouse/receipts/" + receiptId, { method: "DELETE" })
               .then(function () {
@@ -582,6 +627,7 @@
     var body = {
       title: root.querySelector("#whRcTitle").value.trim(),
       warehouse_id: root.querySelector("#whRcWarehouse").value,
+      bin_id: (root.querySelector("#whRcBin") && root.querySelector("#whRcBin").value) || "",
       comment: root.querySelector("#whRcComment").value.trim(),
       items: collectItemsFromDom(root),
     };
@@ -618,6 +664,7 @@
     formItems = [];
     listFilters = {};
     filterPanelOpen = false;
+    listPage = 1;
     loadMeta()
       .then(function () {
         renderList();

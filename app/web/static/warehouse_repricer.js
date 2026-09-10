@@ -1,5 +1,7 @@
 (function (global) {
   var meta = { price_types: [] };
+  var previewRows = [];
+  var previewPage = 1;
 
   function esc(s) {
     return String(s || "")
@@ -168,7 +170,21 @@
         })
         .then(function (result) {
           downloadBlob(result.blob, "yandex_repricer_result.xlsx");
-          preview.innerHTML = renderPreviewTable(result.rows || []);
+          previewRows = result.rows || [];
+          previewPage = 1;
+          function paintPreview() {
+            var p = global.WH_PAGER;
+            var sliced = p ? p.slice(previewRows, previewPage) : { items: previewRows, state: { page: 1 } };
+            previewPage = sliced.state.page;
+            preview.innerHTML = renderPreviewTable(sliced.items) + (p ? p.html(sliced.state) : "");
+            if (p) {
+              p.bind(preview, function (delta) {
+                previewPage += delta;
+                paintPreview();
+              });
+            }
+          }
+          paintPreview();
           var stats = result.stats || {};
           msg.className = "wh-msg wh-msg-ok";
           msg.textContent =

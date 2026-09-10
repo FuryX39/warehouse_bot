@@ -5,6 +5,7 @@
   var rolesCache = [];
   var employeesCache = [];
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var editingEmployeeId = null;
   var editingRoleId = null;
@@ -357,7 +358,10 @@
 
   function renderEmployeesList() {
     var root = panelEl();
-    var rows = employeesCache
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(employeesCache, listPage) : { items: employeesCache, state: { page: 1 } };
+    listPage = sliced.state.page;
+    var rows = sliced.items
       .map(function (emp) {
         var status = emp.is_active
           ? "Активен"
@@ -439,6 +443,7 @@
           "</tbody></table>"
         : '<p class="wh-msg">Сотрудники не найдены.</p>') +
       "</div>" +
+      (p ? p.html(sliced.state) : "") +
       '<div id="whStaffEmployeeEditor"></div>';
 
     root.querySelector("#whStaffToggleFilter").addEventListener("click", function () {
@@ -448,6 +453,7 @@
     });
     root.querySelector("#whStaffApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       loadEmployees()
         .then(function () {
           renderEmployeesList();
@@ -459,6 +465,7 @@
     root.querySelector("#whStaffResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       loadEmployees()
         .then(function () {
           renderEmployeesList();
@@ -470,6 +477,7 @@
     root.querySelector("#whStaffQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters = readFilterPanel(root);
+        listPage = 1;
         loadEmployees()
           .then(function () {
             renderEmployeesList();
@@ -528,6 +536,13 @@
         renderEmployeeEditor();
       });
     });
+
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderEmployeesList();
+      });
+    }
 
     if (editingEmployeeId != null) renderEmployeeEditor();
   }
@@ -833,6 +848,7 @@
     preparePanel(tab, item);
     editingEmployeeId = null;
     showEmployeeForm = false;
+    listPage = 1;
     panelEl().innerHTML = '<p class="wh-msg">Загрузка…</p>';
     Promise.all([loadMeta(), loadRoles(), loadEmployees()])
       .then(function () {

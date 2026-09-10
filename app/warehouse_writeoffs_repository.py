@@ -10,7 +10,7 @@ from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, func, or_, 
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogProduct, _parse_price
-from app.storage_warehouse_repository import StorageWarehouse, StorageWarehouseRepository
+from app.storage_warehouse_repository import StorageBin, StorageWarehouse, StorageWarehouseRepository, ensure_integer_column
 
 
 class _Base(DeclarativeBase):
@@ -24,6 +24,8 @@ class WarehouseWriteoff(_Base):
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False)
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    bin_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    locked: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_sum: Mapped[str] = mapped_column(String(32), nullable=False, default="0.00")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -70,6 +72,9 @@ class WriteoffRow:
     display_name: str
     warehouse_id: int
     warehouse_name: str
+    bin_id: Optional[int]
+    bin_name: str
+    locked: bool
     comment: str
     total_quantity: int
     total_sum: str
@@ -109,6 +114,8 @@ class WarehouseWriteoffsRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._migrate_total_sum_column()
+        self._migrate_bin_id_column()
+        self._migrate_locked_column()
         self._backfill_total_sums()
 
     def _migrate_total_sum_column(self) -> None:
@@ -127,6 +134,22 @@ class WarehouseWriteoffsRepository:
                 )
             )
             session.commit()
+
+    def _migrate_bin_id_column(self) -> None:
+        ensure_integer_column(self.engine, "warehouse_writeoffs", "bin_id")
+        with Session(self.engine) as session:
+            rows = session.scalars(select(WarehouseWriteoff)).all()
+            for row in rows:
+                if row.bin_id:
+                    continue
+                try:
+                    row.bin_id = self.storage_repo.get_default_bin_id(int(row.warehouse_id))
+                except Exception:
+                    continue
+            session.commit()
+
+    def _migrate_locked_column(self) -> None:
+        ensure_integer_column(self.engine, "warehouse_writeoffs", "locked")
 
     def _backfill_total_sums(self) -> None:
         with Session(self.engine) as session:
@@ -176,14 +199,17 @@ class WarehouseWriteoffsRepository:
             row = session.get(WarehouseWriteoff, int(writeoff_id))
             if row is None:
                 return False
+            if int(getattr(row, "locked", 0) or 0):
+                raise ValueError("Документ создан инвентаризацией и не может быть изменён")
             old_items = session.scalars(
                 select(WarehouseWriteoffItem).where(WarehouseWriteoffItem.writeoff_id == int(writeoff_id))
             ).all()
             deltas = self._items_to_stock_deltas(old_items)
             wh_id = int(row.warehouse_id)
+            bin_id = int(row.bin_id) if row.bin_id else None
             session.delete(row)
             session.commit()
-        self._apply_stock_deltas(wh_id, deltas, multiplier=1)
+        self._apply_stock_deltas(wh_id, deltas, multiplier=1, bin_id=bin_id)
         return True
 
     def writeoff_to_dict(self, row: WriteoffRow, *, include_items: bool = True) -> dict[str, Any]:
@@ -193,6 +219,9 @@ class WarehouseWriteoffsRepository:
             "display_name": row.display_name,
             "warehouse_id": row.warehouse_id,
             "warehouse_name": row.warehouse_name,
+            "bin_id": row.bin_id,
+            "bin_name": row.bin_name,
+            "locked": bool(row.locked),
             "comment": row.comment,
             "comment_short": _truncate_comment(row.comment),
             "total_quantity": row.total_quantity,
@@ -228,6 +257,7 @@ class WarehouseWriteoffsRepository:
         except (TypeError, ValueError) as exc:
             raise ValueError("Выберите склад") from exc
         comment = str(data.get("comment") or "").strip()[:2048]
+        bin_id = self.storage_repo.resolve_bin_id(warehouse_id, data.get("bin_id"))
         items_raw = data.get("items")
         if not isinstance(items_raw, list) or not items_raw:
             raise ValueError("Добавьте хотя бы один товар")
@@ -239,12 +269,16 @@ class WarehouseWriteoffsRepository:
                 raise ValueError("Склад не найден")
 
             old_wh_id: int | None = None
+            old_bin_id: int | None = None
             old_deltas: dict[str, int] = {}
             if writeoff_id is not None:
                 old = session.get(WarehouseWriteoff, int(writeoff_id))
                 if old is None:
                     raise ValueError("Списание не найдено")
+                if int(getattr(old, "locked", 0) or 0):
+                    raise ValueError("Документ создан инвентаризацией и не может быть изменён")
                 old_wh_id = int(old.warehouse_id)
+                old_bin_id = int(old.bin_id) if old.bin_id else None
                 old_rows = session.scalars(
                     select(WarehouseWriteoffItem).where(
                         WarehouseWriteoffItem.writeoff_id == int(writeoff_id)
@@ -256,7 +290,9 @@ class WarehouseWriteoffsRepository:
                 writeoff = WarehouseWriteoff(
                     title=title[:256],
                     warehouse_id=warehouse_id,
+                    bin_id=bin_id,
                     comment=comment,
+                    locked=1 if data.get("locked") else 0,
                     created_at_ts=now,
                 )
                 session.add(writeoff)
@@ -266,6 +302,7 @@ class WarehouseWriteoffsRepository:
                     raise ValueError("Списание не найдено")
                 writeoff.title = title[:256]
                 writeoff.warehouse_id = warehouse_id
+                writeoff.bin_id = bin_id
                 writeoff.comment = comment
                 session.execute(
                     delete(WarehouseWriteoffItem).where(
@@ -304,18 +341,18 @@ class WarehouseWriteoffsRepository:
 
         new_deltas = self._items_to_stock_deltas_from_rows(items_norm)
         if writeoff_id is None:
-            self._apply_stock_deltas(warehouse_id, new_deltas, multiplier=-1)
-        elif old_wh_id == warehouse_id:
+            self._apply_stock_deltas(warehouse_id, new_deltas, multiplier=-1, bin_id=bin_id)
+        elif old_wh_id == warehouse_id and old_bin_id == bin_id:
             net: dict[str, int] = {}
             for sku in set(old_deltas) | set(new_deltas):
                 delta = new_deltas.get(sku, 0) - old_deltas.get(sku, 0)
                 if delta:
                     net[sku] = delta
-            self._apply_stock_deltas(warehouse_id, net, multiplier=-1)
+            self._apply_stock_deltas(warehouse_id, net, multiplier=-1, bin_id=bin_id)
         else:
             if old_wh_id is not None:
-                self._apply_stock_deltas(old_wh_id, old_deltas, multiplier=1)
-            self._apply_stock_deltas(warehouse_id, new_deltas, multiplier=-1)
+                self._apply_stock_deltas(old_wh_id, old_deltas, multiplier=1, bin_id=old_bin_id)
+            self._apply_stock_deltas(warehouse_id, new_deltas, multiplier=-1, bin_id=bin_id)
         return result
 
     def _normalize_items(self, items_raw: list) -> list[dict[str, Any]]:
@@ -377,7 +414,9 @@ class WarehouseWriteoffsRepository:
                 deltas[sku] = deltas.get(sku, 0) + int(item["quantity"])
         return deltas
 
-    def _apply_stock_deltas(self, warehouse_id: int, deltas: dict[str, int], *, multiplier: int) -> None:
+    def _apply_stock_deltas(
+        self, warehouse_id: int, deltas: dict[str, int], *, multiplier: int, bin_id: int | None = None
+    ) -> None:
         if not deltas:
             return
         applied: dict[str, int] = {}
@@ -390,7 +429,7 @@ class WarehouseWriteoffsRepository:
                 continue
             applied[sku_n] = delta
         if applied:
-            self.storage_repo.adjust_stocks(int(warehouse_id), applied)
+            self.storage_repo.adjust_stocks(int(warehouse_id), applied, bin_id=bin_id)
 
     def _writeoff_row(
         self, session: Session, row: WarehouseWriteoff, *, load_items: bool
@@ -399,6 +438,12 @@ class WarehouseWriteoffsRepository:
         wh = session.get(StorageWarehouse, int(row.warehouse_id))
         if wh:
             wh_name = wh.name
+        bin_id = int(row.bin_id) if row.bin_id else None
+        bin_name = ""
+        if bin_id:
+            bn = session.get(StorageBin, bin_id)
+            if bn:
+                bin_name = bn.name or bn.code
         items: list[WriteoffItemRow] = []
         if load_items:
             item_rows = session.scalars(
@@ -430,6 +475,9 @@ class WarehouseWriteoffsRepository:
             display_name=_display_name(row.title),
             warehouse_id=int(row.warehouse_id),
             warehouse_name=wh_name,
+            bin_id=bin_id,
+            bin_name=bin_name,
+            locked=bool(int(getattr(row, "locked", 0) or 0)),
             comment=str(row.comment or ""),
             total_quantity=int(row.total_quantity),
             total_sum=str(row.total_sum or "0.00"),

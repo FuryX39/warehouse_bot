@@ -1,5 +1,8 @@
 (function (global) {
   var fileQueue = [];
+  var scanLogItems = [];
+  var scanLogScanning = true;
+  var scanLogRefocusTimer = null;
 
   function esc(s) {
     return String(s || "")
@@ -893,6 +896,211 @@
     });
   }
 
+  function downloadXlsxBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  function showScanLogCode(raw) {
+    return String(raw || "").replace(/\u001d/g, "<GS>");
+  }
+
+  function renderScanLogList(root) {
+    var list = root.querySelector("#whToolScanList");
+    var count = root.querySelector("#whToolScanCount");
+    var clearBtn = root.querySelector("#whToolScanClear");
+    var excelBtn = root.querySelector("#whToolScanExcel");
+    if (count) count.textContent = String(scanLogItems.length);
+    if (clearBtn) clearBtn.disabled = !scanLogItems.length;
+    if (excelBtn) excelBtn.disabled = !scanLogItems.length;
+    if (!list) return;
+    if (!scanLogItems.length) {
+      list.innerHTML = '<p class="wh-muted">Пока пусто — сканируйте коды подряд и нажимайте Enter.</p>';
+      return;
+    }
+    list.innerHTML =
+      '<ul class="wh-marking-scan-list">' +
+      scanLogItems
+        .map(function (item, idx) {
+          return (
+            '<li class="wh-marking-scan-item">' +
+            '<span class="wh-marking-scan-idx">' +
+            (idx + 1) +
+            ".</span>" +
+            '<span class="wh-marking-scan-code">' +
+            esc(showScanLogCode(item)) +
+            "</span>" +
+            '<button type="button" class="wh-btn wh-btn-sm wh-marking-scan-x" data-idx="' +
+            idx +
+            '" title="Удалить">&times;</button></li>'
+          );
+        })
+        .join("") +
+      "</ul>";
+    list.querySelectorAll(".wh-marking-scan-x").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-idx") || "", 10);
+        if (idx >= 0 && idx < scanLogItems.length) {
+          scanLogItems.splice(idx, 1);
+          renderScanLogList(root);
+        }
+      });
+    });
+  }
+
+  function setScanLogScanning(root, on) {
+    scanLogScanning = !!on;
+    var input = root.querySelector("#whToolScanInput");
+    var stopBtn = root.querySelector("#whToolScanStop");
+    var resumeBtn = root.querySelector("#whToolScanResume");
+    var status = root.querySelector("#whToolScanStatus");
+    if (!input) return;
+    input.disabled = !scanLogScanning;
+    if (stopBtn) stopBtn.hidden = !scanLogScanning;
+    if (resumeBtn) resumeBtn.hidden = scanLogScanning;
+    if (status) {
+      status.textContent = scanLogScanning
+        ? "Сканирование включено: ввод → Enter → следующий код."
+        : "Сканирование остановлено.";
+    }
+    if (scanLogScanning) {
+      setTimeout(function () {
+        input.focus();
+      }, 0);
+    } else {
+      input.blur();
+    }
+  }
+
+  function addScanLogCode(root, raw) {
+    var msg = root.querySelector("#whToolScanMsg");
+    var value = String(raw || "").trim();
+    if (msg) {
+      msg.className = "wh-msg";
+      msg.textContent = "";
+    }
+    if (!value) return;
+    scanLogItems.push(value);
+    renderScanLogList(root);
+  }
+
+  function exportScanLog(root) {
+    var msg = root.querySelector("#whToolScanMsg");
+    var btn = root.querySelector("#whToolScanExcel");
+    if (msg) {
+      msg.className = "wh-msg";
+      msg.textContent = "";
+    }
+    if (!scanLogItems.length) {
+      if (msg) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Список пуст — сначала отсканируйте данные.";
+      }
+      return;
+    }
+    if (btn) btn.disabled = true;
+    if (msg) msg.textContent = "Формируем Excel…";
+    fetch("/api/warehouse/tools/scanner/export", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codes: scanLogItems }),
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.text().then(function (text) {
+            var detail = text;
+            try {
+              var json = JSON.parse(text);
+              if (json && json.detail) detail = json.detail;
+            } catch (e) {}
+            throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать файл");
+          });
+        }
+        return r.blob();
+      })
+      .then(function (blob) {
+        downloadXlsxBlob(blob, "scans.xlsx");
+        if (msg) {
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent = "Файл скачан: список отсканированных данных.";
+        }
+      })
+      .catch(function (err) {
+        if (msg) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Не удалось сформировать файл";
+        }
+      })
+      .then(function () {
+        if (btn) btn.disabled = !scanLogItems.length;
+      });
+  }
+
+  function renderScanLog(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML =
+      '<div class="wh-route-card wh-scan-log-card">' +
+      '<p class="wh-muted">Сканируйте коды подряд. Сопоставление с каталогом не выполняется — в Excel попадут значения как есть.</p>' +
+      '<div class="wh-crm-toolbar"><span class="wh-muted" id="whToolScanStatus"></span></div>' +
+      '<label class="wh-marking-scan-label">Скан' +
+      '<input type="text" id="whToolScanInput" class="wh-marking-scan-input" autocomplete="off" spellcheck="false" placeholder="Отсканируйте или введите данные и нажмите Enter" />' +
+      "</label>" +
+      '<div class="wh-tools-actions">' +
+      '<button type="button" class="wh-btn" id="whToolScanStop">Остановиться</button>' +
+      '<button type="button" class="wh-btn" id="whToolScanResume" hidden>Продолжить</button>' +
+      '<button type="button" class="wh-btn" id="whToolScanClear" disabled>Очистить список</button>' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whToolScanExcel" disabled>Скачать Excel</button>' +
+      "</div>" +
+      '<p class="wh-msg" id="whToolScanMsg"></p>' +
+      '<h4 class="wh-crm-section-title">Отсканировано: <span id="whToolScanCount">0</span></h4>' +
+      '<div id="whToolScanList"></div></div>';
+    var input = root.querySelector("#whToolScanInput");
+    input.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      addScanLogCode(root, input.value);
+      input.value = "";
+    });
+    input.addEventListener("blur", function () {
+      if (!scanLogScanning) return;
+      clearTimeout(scanLogRefocusTimer);
+      scanLogRefocusTimer = setTimeout(function () {
+        if (scanLogScanning) input.focus();
+      }, 50);
+    });
+    root.querySelector("#whToolScanStop").addEventListener("click", function () {
+      setScanLogScanning(root, false);
+    });
+    root.querySelector("#whToolScanResume").addEventListener("click", function () {
+      setScanLogScanning(root, true);
+    });
+    root.querySelector("#whToolScanClear").addEventListener("click", function () {
+      scanLogItems = [];
+      var msg = root.querySelector("#whToolScanMsg");
+      if (msg) {
+        msg.className = "wh-msg";
+        msg.textContent = "";
+      }
+      renderScanLogList(root);
+      if (scanLogScanning) input.focus();
+    });
+    root.querySelector("#whToolScanExcel").addEventListener("click", function () {
+      exportScanLog(root);
+    });
+    renderScanLogList(root);
+    setScanLogScanning(root, true);
+  }
+
   function render(tab, item) {
     if (item.id === "pdf-merge") {
       renderPdfMerge(tab, item);
@@ -908,6 +1116,10 @@
     }
     if (item.id === "yandex-label-sort") {
       renderYandexLabelSort(tab, item);
+      return;
+    }
+    if (item.id === "scanner") {
+      renderScanLog(tab, item);
       return;
     }
     preparePanel(tab, item);

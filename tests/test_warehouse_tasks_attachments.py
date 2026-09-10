@@ -13,9 +13,7 @@ from app.warehouse_users_repository import WarehouseUsersRepository
 _SAMPLE_PDF = b"%PDF-1.4\n% test attachment\n"
 
 
-def _make_tasks_repo(tmp_path) -> tuple[WarehouseTasksRepository, WarehouseUsersRepository, int, int]:
-    db_path = tmp_path / "tasks.db"
-    db_url = f"sqlite:///{db_path.as_posix()}"
+def _make_tasks_repo(db_url, tmp_path) -> tuple[WarehouseTasksRepository, WarehouseUsersRepository, int, int]:
     files_dir = tmp_path / "task_files"
 
     users_repo = WarehouseUsersRepository(db_url)
@@ -57,8 +55,8 @@ def _make_tasks_repo(tmp_path) -> tuple[WarehouseTasksRepository, WarehouseUsers
     return tasks_repo, users_repo, int(task.id), int(packer.id)
 
 
-def test_task_attachment_upload_list_download_delete(tmp_path) -> None:
-    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(tmp_path)
+def test_task_attachment_upload_list_download_delete(db_url: str, tmp_path) -> None:
+    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(db_url, tmp_path)
 
     attachment = tasks_repo.add_attachment(
         task_id,
@@ -92,8 +90,8 @@ def test_task_attachment_upload_list_download_delete(tmp_path) -> None:
     assert task_after.attachments == []
 
 
-def test_task_attachment_rejects_invalid_kind(tmp_path) -> None:
-    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(tmp_path)
+def test_task_attachment_rejects_invalid_kind(db_url: str, tmp_path) -> None:
+    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(db_url, tmp_path)
     with pytest.raises(ValueError, match="a4 или label"):
         tasks_repo.add_attachment(
             task_id,
@@ -109,8 +107,8 @@ def test_task_file_storage_rejects_non_pdf(tmp_path) -> None:
         storage.store_pdf(content=b"not-a-pdf", original_filename="x.pdf")
 
 
-def test_task_description_saved_in_task_dict(tmp_path) -> None:
-    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(tmp_path)
+def test_task_description_saved_in_task_dict(db_url: str, tmp_path) -> None:
+    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(db_url, tmp_path)
     task = tasks_repo.get_task(task_id)
     assert task is not None
     payload = tasks_repo.task_to_dict(task)
@@ -128,8 +126,8 @@ def test_task_description_saved_in_task_dict(tmp_path) -> None:
     assert tasks_repo.task_to_dict(updated)["description"] == "Новое описание"
 
 
-def test_task_date_validation_message(tmp_path) -> None:
-    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(tmp_path)
+def test_task_date_validation_message(db_url: str, tmp_path) -> None:
+    tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(db_url, tmp_path)
     task = tasks_repo.get_task(task_id)
     assert task is not None
     with pytest.raises(ValueError, match="Дата отгрузки не может быть раньше даты сборки"):

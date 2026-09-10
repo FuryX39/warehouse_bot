@@ -26,6 +26,7 @@ from app.warehouse_schedule_repository import WarehouseScheduleRepository
 from app.warehouse_task_summary_repository import WarehouseTaskSummaryRepository
 from app.warehouse_tasks_repository import WarehouseTasksRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
+from app.warehouse_orders_repository import WarehouseOrdersRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
@@ -117,6 +118,9 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     packing_files_dir = Path(settings.warehouse_task_files_data_dir) / "fbs_packing"
     packing_repo = FbsPackingRepository(settings.db_url, files_data_dir=packing_files_dir)
     packing_repo.init_schema()
+
+    orders_repo = WarehouseOrdersRepository(settings.db_url)
+    orders_repo.init_schema()
 
     def _try_bootstrap_warehouse_admin() -> None:
         login, password = resolve_warehouse_admin_credentials(settings)
@@ -246,5 +250,7 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
         require_tasks_access=require_tasks_access,
         include_manager=False,
         packer_prefixes=("/api/v1/fbs-packing",),
+        orders_repo=orders_repo,
+        wave_warehouse_id=storage_repo.get_default_warehouse_id,
     )
     return app

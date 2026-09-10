@@ -10,6 +10,7 @@ from fastapi import Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.cargo_place_calculator import build_cargo_place_template, calculate_cargo_places
+from app.scan_log_export import build_scan_log_export, normalize_scan_codes
 from app.excel_to_pdf import excel_to_pdf, excel_to_pdf_download_name, list_excel_to_pdf_profiles
 from app.pdf_merge import merge_pdfs_in_order
 from app.warehouse_users_repository import WarehouseUserRow
@@ -207,4 +208,25 @@ def register_warehouse_tools_routes(
                 "X-Label-Sort-Stats": _header_json(result.stats),
                 "X-Label-Sort-Warnings": warnings_header_json(result.warnings),
             },
+        )
+
+    @app.post("/api/warehouse/tools/scanner/export")
+    async def api_tools_scanner_export(
+        payload: dict = Body(...),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        try:
+            codes = normalize_scan_codes(payload)
+            content = await asyncio.to_thread(build_scan_log_export, codes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="scans.xlsx"'},
         )

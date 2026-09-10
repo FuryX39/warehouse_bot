@@ -15,6 +15,8 @@
   var ozonOrdersLoaded = false;
   var ozonOrders = [];
   var ozonOrdersCount = 0;
+  var ozonOrdersPage = 1;
+  var batchListPage = 1;
   var listView = "overview";
   var opsPackingFields = [];
   var opsLogisticsFields = [];
@@ -437,7 +439,10 @@
     if (!orders || !orders.length) {
       return '<p class="wh-muted">Заявок в Ozon с выбранным фильтром не найдено.</p>';
     }
-    var rows = orders
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(orders, ozonOrdersPage) : { items: orders, state: { page: 1 } };
+    ozonOrdersPage = sliced.state.page;
+    var rows = sliced.items
       .map(function (o) {
         var oid = String(o.order_id);
         var checked = ozonSelectedIds[oid] ? " checked" : "";
@@ -464,7 +469,8 @@
     return (
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
       "<th></th><th>order_id</th><th>№ заявки</th><th>Статус</th><th>Доставка</th><th>Склад</th><th>Слот</th><th>Создана</th><th>В системе</th>" +
-      "</tr></thead><tbody>" + rows + "</tbody></table>"
+      "</tr></thead><tbody>" + rows + "</tbody></table>" +
+      (p ? p.html(sliced.state) : "")
     );
   }
 
@@ -496,6 +502,37 @@
     );
   }
 
+  function bindOzonTableEvents(tab, item, root) {
+    var box = root.querySelector("#whFboOzonTable") || root;
+    box.querySelectorAll(".wh-fbo-ozon-check").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var id = cb.getAttribute("data-order-id");
+        if (cb.checked) ozonSelectedIds[id] = true;
+        else delete ozonSelectedIds[id];
+      });
+    });
+    box.querySelectorAll(".wh-fbo-ozon-row").forEach(function (tr) {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", function (e) {
+        if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON")) return;
+        renderOzonOrderDetail(tab, item, parseInt(tr.getAttribute("data-order-id"), 10));
+      });
+    });
+  }
+
+  function paintOzonOrdersPage(tab, item, root) {
+    var box = root.querySelector("#whFboOzonTable");
+    if (!box) return;
+    box.innerHTML = renderOzonOrdersTable(ozonOrders);
+    bindOzonTableEvents(tab, item, root);
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(box, function (delta) {
+        ozonOrdersPage += delta;
+        paintOzonOrdersPage(tab, item, root);
+      });
+    }
+  }
+
   function bindOzonListEvents(tab, item, root) {
     var loadBtn = root.querySelector("#whFboLoadOzon");
     if (loadBtn) {
@@ -507,6 +544,7 @@
     var reloadBtn = root.querySelector("#whFboReloadOzon");
     if (reloadBtn) {
       reloadBtn.addEventListener("click", function () {
+        ozonOrdersPage = 1;
         fetchOzonOrders(tab, item, root);
       });
     }
@@ -514,6 +552,7 @@
     if (scopeSel) {
       scopeSel.addEventListener("change", function (e) {
         ozonScope = e.target.value || "active";
+        ozonOrdersPage = 1;
         fetchOzonOrders(tab, item, root);
       });
     }
@@ -543,20 +582,7 @@
           });
       });
     }
-    root.querySelectorAll(".wh-fbo-ozon-check").forEach(function (cb) {
-      cb.addEventListener("change", function () {
-        var id = cb.getAttribute("data-order-id");
-        if (cb.checked) ozonSelectedIds[id] = true;
-        else delete ozonSelectedIds[id];
-      });
-    });
-    root.querySelectorAll(".wh-fbo-ozon-row").forEach(function (tr) {
-      tr.style.cursor = "pointer";
-      tr.addEventListener("click", function (e) {
-        if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON")) return;
-        renderOzonOrderDetail(tab, item, parseInt(tr.getAttribute("data-order-id"), 10));
-      });
-    });
+    paintOzonOrdersPage(tab, item, root);
   }
 
   function updateOzonSection(tab, item, root) {
@@ -582,6 +608,7 @@
         ozonOrdersLoaded = true;
         ozonOrders = ozonData.orders || [];
         ozonOrdersCount = ozonData.count || ozonOrders.length;
+        ozonOrdersPage = 1;
         updateOzonSection(tab, item, root);
         setMsg(
           root.querySelector("#whFboListMsg"),
@@ -1493,7 +1520,10 @@
     Promise.all([loadMeta(), fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches")])
       .then(function (parts) {
         var batches = (parts[1].batches || []);
-        var batchRows = batches
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(batches, batchListPage) : { items: batches, state: { page: 1 } };
+        batchListPage = sliced.state.page;
+        var batchRows = sliced.items
           .map(function (b) {
             return (
               '<tr data-id="' + esc(b.id) + '">' +
@@ -1520,7 +1550,8 @@
           (batchRows
             ? '<table class="wh-employees-table wh-crm-table wh-fbo-batch-table"><thead><tr>' +
               "<th>№</th><th>Название</th><th>Доставка</th><th>Слот</th><th>Заявок</th><th>Статус</th><th>Этикетки</th><th>Обновлено</th><th></th>" +
-              "</tr></thead><tbody>" + batchRows + "</tbody></table>"
+              "</tr></thead><tbody>" + batchRows + "</tbody></table>" +
+              (p ? p.html(sliced.state) : "")
             : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
           "</section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
@@ -1537,8 +1568,15 @@
           renderCreateWizard(tab, item);
         });
         root.querySelector("#whFboRefreshBatches").addEventListener("click", function () {
+          batchListPage = 1;
           renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
         });
+        if (p) {
+          p.bind(root.querySelector(".wh-fbo-batch-table") ? root.querySelector(".wh-fbo-batch-table").parentNode : root, function (delta) {
+            batchListPage += delta;
+            renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
+          });
+        }
         bindOzonListEvents(tab, item, root);
         bindDefaultClientSettings(tab, item, root);
         bindGlobalOpsSummary(tab, item, root);

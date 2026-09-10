@@ -14,6 +14,11 @@ from app.catalog_repository import CatalogRepository
 from app.config import Settings
 from app.fbs_labels_common import build_labels_zip
 from app.fbs_packing_repository import FbsPackingRepository, MARKETPLACE_OZON, MARKETPLACE_WB
+from app.warehouse_wave import (
+    attach_packing_job_to_orders,
+    mark_packed_if_done,
+    release_packing_job_orders,
+)
 from app.fbs_packing_service import (
     _bool,
     build_packing_marking_xlsx,
@@ -112,7 +117,36 @@ def register_warehouse_fbs_packing_routes(
     *,
     include_manager: bool = True,
     packer_prefixes: tuple[str, ...] | None = None,
+    orders_repo=None,
+    wave_warehouse_id=None,
 ) -> None:
+    def _wave_wh() -> int | None:
+        if callable(wave_warehouse_id):
+            try:
+                raw = wave_warehouse_id()
+            except Exception:
+                return None
+            return int(raw) if raw is not None else None
+        if wave_warehouse_id is not None:
+            return int(wave_warehouse_id)
+        if coordinator is not None:
+            repo = getattr(coordinator, "inventory_repo", None)
+            if repo is not None:
+                raw = repo.get_sync_source_warehouse_id()
+                if raw is not None:
+                    return int(raw)
+        return None
+
+    def _posting_ids(payload: dict) -> list[str]:
+        raw = payload.get("posting_ids")
+        if isinstance(raw, str):
+            return [x.strip() for x in raw.replace(",", " ").split() if x.strip()]
+        if isinstance(raw, list):
+            return [str(x).strip() for x in raw if str(x).strip()]
+        return []
+
+    def _after_job_created(job) -> None:
+        attach_packing_job_to_orders(orders_repo, job, _wave_wh())
     if include_manager:
         @app.get("/api/warehouse/fbs-packing/meta")
         async def api_fbs_packing_meta(
@@ -320,6 +354,7 @@ def register_warehouse_fbs_packing_routes(
                         packer_user_ids=raw_ids,
                         created_by_user_id=int(user.id) if user else None,
                         supply_id=supply_id,
+                        posting_ids=_posting_ids(payload),
                     )
 
                 try:
@@ -328,6 +363,7 @@ def register_warehouse_fbs_packing_routes(
                     raise _http_value_error(exc) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
+                _after_job_created(job)
                 return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
             if mp == MARKETPLACE_OZON:
@@ -349,6 +385,7 @@ def register_warehouse_fbs_packing_routes(
                         created_by_user_id=int(user.id) if user else None,
                         first_posting=str(payload.get("first_posting") or ""),
                         last_posting=str(payload.get("last_posting") or ""),
+                        posting_ids=_posting_ids(payload),
                     )
 
                 try:
@@ -357,6 +394,7 @@ def register_warehouse_fbs_packing_routes(
                     raise _http_value_error(exc) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
+                _after_job_created(job)
                 return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
             adapter = get_configured_yandex_adapter(coordinator)
@@ -382,6 +420,7 @@ def register_warehouse_fbs_packing_routes(
                     item_limit=limit,
                     packer_user_ids=raw_ids,
                     created_by_user_id=int(user.id) if user else None,
+                    posting_ids=_posting_ids(payload),
                 )
 
             try:
@@ -390,6 +429,7 @@ def register_warehouse_fbs_packing_routes(
                 raise _http_value_error(exc) from exc
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
+            _after_job_created(job)
             return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
         @app.get("/api/warehouse/fbs-packing/jobs/{job_id}")
@@ -400,6 +440,7 @@ def register_warehouse_fbs_packing_routes(
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
                 raise HTTPException(status_code=404, detail="Задание не найдено")
+            mark_packed_if_done(orders_repo, job)
             return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
         @app.post("/api/warehouse/fbs-packing/jobs/{job_id}/cancel")
@@ -413,6 +454,7 @@ def register_warehouse_fbs_packing_routes(
                 raise _http_value_error(exc) from exc
             if job is None:
                 raise HTTPException(status_code=404, detail="Задание не найдено")
+            release_packing_job_orders(orders_repo, job_id)
             return {"job": packing_repo.job_to_dict(job)}
 
         @app.get("/api/warehouse/fbs-packing/jobs/{job_id}/labels")
@@ -482,6 +524,7 @@ def register_warehouse_fbs_packing_routes(
         payload = packing_repo.job_to_dict(job, include_lines=True)
         payload["remaining_groups"] = remaining
         _attach_catalog_images(catalog_repo, payload)
+        mark_packed_if_done(orders_repo, payload)
         return payload
 
     if packer_prefixes is None:

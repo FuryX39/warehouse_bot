@@ -18,8 +18,7 @@ GTIN13 = "4600605012345"
 GTIN14 = "04600605012345"
 
 
-def _repo(tmp_path, name: str = "marking.db") -> CatalogRepository:
-    db_url = f"sqlite:///{(tmp_path / name).as_posix()}"
+def _repo(db_url: str) -> CatalogRepository:
     crm = CrmRepository(db_url)
     crm.init_schema()
     repo = CatalogRepository(db_url)
@@ -77,8 +76,8 @@ def test_split_skips_blank_and_comments() -> None:
     assert lines == [_cis(GTIN14)]
 
 
-def test_match_by_explicit_gtin_and_export_excel(tmp_path) -> None:
-    repo = _repo(tmp_path)
+def test_match_by_explicit_gtin_and_export_excel(db_url: str) -> None:
+    repo = _repo(db_url)
     repo.create_product(
         {
             "name": "Болт",
@@ -114,8 +113,8 @@ def test_match_by_explicit_gtin_and_export_excel(tmp_path) -> None:
     assert codes_sheet.cell(3, 3).value
 
 
-def test_match_by_ean13_barcode(tmp_path) -> None:
-    repo = _repo(tmp_path, "ean.db")
+def test_match_by_ean13_barcode(db_url: str) -> None:
+    repo = _repo(db_url)
     repo.create_product(
         {
             "name": "Гайка",
@@ -132,8 +131,8 @@ def test_match_by_ean13_barcode(tmp_path) -> None:
     assert result.unmatched == []
 
 
-def test_unmatched_gtin_and_invalid(tmp_path) -> None:
-    repo = _repo(tmp_path, "miss.db")
+def test_unmatched_gtin_and_invalid(db_url: str) -> None:
+    repo = _repo(db_url)
     repo.create_product(
         {
             "name": "Другой",
@@ -152,8 +151,8 @@ def test_unmatched_gtin_and_invalid(tmp_path) -> None:
     assert len(result.invalid) == 1
 
 
-def test_gtin_unique_across_products(tmp_path) -> None:
-    repo = _repo(tmp_path, "uniq.db")
+def test_gtin_unique_across_products(db_url: str) -> None:
+    repo = _repo(db_url)
     repo.create_product(
         {
             "name": "A",
@@ -181,8 +180,8 @@ def test_gtin_unique_across_products(tmp_path) -> None:
         raise AssertionError("ожидали ошибку уникальности GTIN")
 
 
-def test_add_and_remove_gtin(tmp_path) -> None:
-    repo = _repo(tmp_path, "addgtin.db")
+def test_add_and_remove_gtin(db_url: str) -> None:
+    repo = _repo(db_url)
     product = repo.create_product(
         {
             "name": "Болт",
@@ -200,10 +199,10 @@ def test_add_and_remove_gtin(tmp_path) -> None:
     assert repo.list_product_gtin_rows()[0]["gtins"] == []
 
 
-def test_gtin_excel_import(tmp_path) -> None:
+def test_gtin_excel_import(db_url: str) -> None:
     from app.marking.gtin_import import build_gtin_import_template, import_gtins_from_xlsx
 
-    repo = _repo(tmp_path, "imp.db")
+    repo = _repo(db_url)
     repo.create_product(
         {
             "name": "Болт",
@@ -226,14 +225,14 @@ def test_gtin_excel_import(tmp_path) -> None:
     assert repo.list_product_gtin_rows()[0]["gtins"] == [GTIN14]
 
 
-def test_marking_http_gtin_and_scan_export(tmp_path) -> None:
+def test_marking_http_gtin_and_scan_export(db_url: str) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from app.web.warehouse_marking_routes import register_warehouse_marking_routes
     from app.warehouse_users_repository import WarehouseUserRow
 
-    repo = _repo(tmp_path, "http2.db")
+    repo = _repo(db_url)
     product = repo.create_product(
         {
             "name": "Болт",

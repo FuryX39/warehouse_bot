@@ -587,15 +587,16 @@
   }
 
   async function loadShipPreview() {
-    try {
-      var data = await api(
-        "/api/fbs/ship/preview?scope=" + encodeURIComponent(shipScope)
-      );
-      renderShipPreview(data);
-    } catch (e) {
-      var summary = document.getElementById("shipPreviewSummary");
-      if (summary) summary.textContent = e.message || String(e);
-    }
+    var summary = document.getElementById("shipPreviewSummary");
+    if (summary) summary.textContent = "Старая отгрузка отключена. Используйте /warehouse → Отгрузки.";
+  }
+
+  async function shipRequestCode() {
+    alert("Старая отгрузка FBS отключена. Используйте документ отгрузки в /warehouse → Продажи → Отгрузки.");
+  }
+
+  async function shipConfirm() {
+    alert("Старая отгрузка FBS отключена. Используйте документ отгрузки в /warehouse → Продажи → Отгрузки.");
   }
 
   function renderShipResult(data) {
@@ -649,76 +650,6 @@
     }
   }
 
-  async function shipRequestCode() {
-    if (busy) return;
-    busy = true;
-    try {
-      var data = await apiForm("/api/fbs/ship/request", { scope: shipScope });
-      shipCodeRequested = true;
-      var hint = document.getElementById("shipCodeHint");
-      var confirmBtn = document.getElementById("btnShipConfirm");
-      if (hint) {
-        hint.classList.remove("hidden");
-        hint.textContent =
-          "Код для «" +
-          (data.scope_label || shipScope) +
-          "»: " +
-          data.code +
-          " (действует " +
-          Math.round((data.expires_in || 300) / 60) +
-          " мин). Введите его и нажмите «Выполнить отгрузку».";
-      }
-      if (confirmBtn) confirmBtn.disabled = false;
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function shipConfirm() {
-    if (busy) return;
-    var codeEl = document.getElementById("shipConfirmCode");
-    var code = codeEl ? String(codeEl.value || "").trim() : "";
-    if (!code) {
-      alert("Введите код подтверждения.");
-      return;
-    }
-    if (!shipCodeRequested) {
-      alert("Сначала запросите код.");
-      return;
-    }
-    if (
-      !window.confirm(
-        "Выполнить отгрузку для «" +
-          shipScope +
-          "»? Списание остатков необратимо."
-      )
-    ) {
-      return;
-    }
-    busy = true;
-    var confirmBtn = document.getElementById("btnShipConfirm");
-    if (confirmBtn) confirmBtn.disabled = true;
-    try {
-      var data = await apiForm("/api/fbs/ship/confirm", {
-        scope: shipScope,
-        code: code,
-      });
-      renderShipResult(data);
-      shipCodeRequested = false;
-      if (codeEl) codeEl.value = "";
-      var hint = document.getElementById("shipCodeHint");
-      if (hint) hint.classList.add("hidden");
-      await loadShipPreview();
-    } catch (e) {
-      alert(e.message || String(e));
-      if (confirmBtn) confirmBtn.disabled = false;
-    } finally {
-      busy = false;
-    }
-  }
-
   function initSectionTabs() {
     var tabs = document.querySelectorAll(".fbs-section-tab");
     var title = document.getElementById("fbsPageTitle");
@@ -736,7 +667,7 @@
           title.textContent =
             section === "ship" ? "FBS — отгрузка" : "FBS — список и этикетки";
         }
-        if (section === "ship") loadShipPreview();
+        if (section === "ship") return;
       });
     });
   }

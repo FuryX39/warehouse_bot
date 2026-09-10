@@ -8,10 +8,7 @@ from app.warehouse_tasks_repository import WarehouseTasksRepository
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 
-def _make_tasks_repo(tmp_path) -> tuple[WarehouseTasksRepository, int, int]:
-    db_path = tmp_path / "tasks.db"
-    db_url = f"sqlite:///{db_path.as_posix()}"
-
+def _make_tasks_repo(db_url: str, tmp_path) -> tuple[WarehouseTasksRepository, int, int]:
     users_repo = WarehouseUsersRepository(db_url)
     users_repo.init_schema()
     packer_a = users_repo.create_user(login="packer_a", password="secret", display_name="А")
@@ -69,8 +66,8 @@ def _make_tasks_repo(tmp_path) -> tuple[WarehouseTasksRepository, int, int]:
     return tasks_repo, int(packer_a.id), int(packer_b.id)
 
 
-def test_list_my_tasks_filters_by_assignee_and_sorts_by_dates(tmp_path) -> None:
-    tasks_repo, packer_a_id, packer_b_id = _make_tasks_repo(tmp_path)
+def test_list_my_tasks_filters_by_assignee_and_sorts_by_dates(db_url: str, tmp_path) -> None:
+    tasks_repo, packer_a_id, packer_b_id = _make_tasks_repo(db_url, tmp_path)
 
     rows_a = tasks_repo.list_my_tasks(packer_a_id)
     assert len(rows_a) == 2

@@ -655,3 +655,42 @@ class OzonAdapter(MarketplaceAdapter):
             raise RuntimeError(
                 f"Ozon stock: частичный пуш {total_updated}/{len(stocks)}; {sample}"
             )
+
+    def classify_left_reserve(self, posting_id: str) -> str | None:
+        """cancel | ship | None (неясно)."""
+        pid = str(posting_id or "").strip()
+        if not pid or not self.is_configured():
+            return None
+        try:
+            response = requests.post(
+                f"{self.base_url}/v3/posting/fbs/get",
+                headers=self._headers(),
+                json={"posting_number": pid},
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("Ozon posting get failed posting=%s", pid, exc_info=True)
+            return None
+        body = response.json() or {}
+        posting = body.get("result") or body
+        status = str(posting.get("status") or "").strip().lower()
+        if not status:
+            return None
+        if status in {"cancelled", "canceled"}:
+            return "cancel"
+        if status.startswith("awaiting"):
+            return None
+        if status in {
+            "delivering",
+            "delivered",
+            "sent_by_seller",
+            "driver_pickup",
+            "acceptance_in_progress",
+            "arbitration",
+            "client_arbitration",
+            "not_accepted",
+        } or status.startswith("deliver"):
+            return "ship"
+        logger.warning("Ozon posting %s unknown status=%s", pid, status)
+        return None

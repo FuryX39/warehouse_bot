@@ -1,6 +1,8 @@
 (function (global) {
   var gtinQuery = "";
   var gtinTimer = null;
+  var gtinPage = 1;
+  var gtinAll = [];
   var scanItems = [];
   var scanning = false;
   var scanRefocusTimer = null;
@@ -120,14 +122,30 @@
     );
   }
 
+  function paintGtinTable(root) {
+    var wrap = root.querySelector("#whMarkingGtinList");
+    if (!wrap) return;
+    var p = global.WH_PAGER;
+    var sliced = p ? p.slice(gtinAll, gtinPage) : { items: gtinAll, state: { page: 1 } };
+    gtinPage = sliced.state.page;
+    wrap.innerHTML = renderGtinTable(sliced.items) + (p ? p.html(sliced.state) : "");
+    if (p) {
+      p.bind(wrap, function (delta) {
+        gtinPage += delta;
+        paintGtinTable(root);
+      });
+    }
+    bindGtinTable(root);
+  }
+
   function loadGtinRows(root) {
     var wrap = root.querySelector("#whMarkingGtinList");
     var msg = root.querySelector("#whMarkingGtinMsg");
     wrap.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     fetchJson("/api/warehouse/marking/gtins?q=" + encodeURIComponent(gtinQuery))
       .then(function (data) {
-        wrap.innerHTML = renderGtinTable(data.products || []);
-        bindGtinTable(root);
+        gtinAll = data.products || [];
+        paintGtinTable(root);
       })
       .catch(function (err) {
         wrap.innerHTML = "";
@@ -293,6 +311,7 @@
     });
     root.querySelector("#whMarkingGtinSearch").addEventListener("input", function (e) {
       gtinQuery = e.target.value.trim();
+      gtinPage = 1;
       clearTimeout(gtinTimer);
       gtinTimer = setTimeout(function () {
         loadGtinRows(root);

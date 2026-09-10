@@ -860,6 +860,27 @@ class InventoryRepository:
             return set(ids)
 
     def _direct_reserves_map(self, session: Session) -> dict[str, int]:
+        from sqlalchemy import inspect as sa_inspect
+
+        tables = set(sa_inspect(self.engine).get_table_names())
+        if "warehouse_orders" in tables and "warehouse_order_lines" in tables:
+            from app.warehouse_orders_repository import RESERVE_STATUSES, WarehouseOrder, WarehouseOrderLine
+
+            stmt = (
+                select(WarehouseOrderLine.sku, func.coalesce(func.sum(WarehouseOrderLine.quantity), 0))
+                .join(WarehouseOrder, WarehouseOrder.id == WarehouseOrderLine.order_id)
+                .where(WarehouseOrder.status.in_(RESERVE_STATUSES))
+            )
+            source_id = self.get_sync_source_warehouse_id()
+            if source_id is not None:
+                stmt = stmt.where(WarehouseOrder.warehouse_id == int(source_id))
+            stmt = stmt.group_by(WarehouseOrderLine.sku)
+            out: dict[str, int] = {}
+            for sku, qty in session.execute(stmt).all():
+                sku_s = str(sku or "").strip()
+                if sku_s:
+                    out[sku_s] = int(qty or 0)
+            return out
         reserves_by_sku: dict[str, int] = {}
         for reserve in session.scalars(select(OrderItem).where(OrderItem.state == "added")).all():
             sku = str(reserve.sku or "").strip()
@@ -1064,13 +1085,13 @@ class InventoryRepository:
             from app.storage_warehouse_repository import StorageStock
 
             legacy_row = session.scalar(
-                select(StorageStock).where(
+                select(func.coalesce(func.sum(StorageStock.stock), 0)).where(
                     StorageStock.warehouse_id == int(legacy_id),
                     StorageStock.sku == sku_n,
                 )
             )
             if legacy_row is not None:
-                current = max(current, int(legacy_row.stock))
+                current = max(current, int(legacy_row or 0))
         if current <= 0:
             return False
         new_qty = max(current - int(qty), 0)

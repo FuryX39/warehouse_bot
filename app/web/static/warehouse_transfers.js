@@ -1,6 +1,7 @@
 (function (global) {
   var meta = { warehouses: [], price_types: [] };
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var editingId = null;
   var formItems = [];
@@ -190,6 +191,31 @@
       html += '<option value="' + esc(w.id) + '"' + sel + ">" + esc(w.name) + "</option>";
     });
     return html;
+  }
+
+  function binsForWarehouse(warehouseId) {
+    for (var i = 0; i < meta.warehouses.length; i++) {
+      if (String(meta.warehouses[i].id) === String(warehouseId)) return meta.warehouses[i].bins || [];
+    }
+    return [];
+  }
+
+  function binOptions(warehouseId, selectedId) {
+    var bins = binsForWarehouse(warehouseId);
+    var html = "";
+    bins.forEach(function (b) {
+      var sel = String(selectedId || "") === String(b.id) ? " selected" : "";
+      if (!selectedId && b.is_default) sel = " selected";
+      html +=
+        '<option value="' +
+        esc(b.id) +
+        '"' +
+        sel +
+        ">" +
+        esc((b.code || "") + (b.name && b.name !== b.code ? " — " + b.name : "")) +
+        "</option>";
+    });
+    return html || '<option value="">MAIN</option>';
   }
 
   function priceTypeMenuHtml() {
@@ -582,7 +608,10 @@
     root.innerHTML = "<p class=\"wh-msg\">Загрузка…</p>";
     fetchJson("/api/warehouse/transfers" + filtersQuery())
       .then(function (data) {
-        var rows = (data.transfers || [])
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(data.transfers || [], listPage) : { items: data.transfers || [], state: { page: 1 } };
+        listPage = sliced.state.page;
+        var rows = sliced.items
           .map(function (r) {
             return (
               '<tr data-id="' + esc(r.id) + '">' +
@@ -609,7 +638,8 @@
               "<th>Название</th><th>Кол-во</th><th>Сумма</th><th>Со склада</th><th>На склад</th><th>Комментарий</th><th>Дата</th>" +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Перемещения не найдены.</p>') +
-          "</div>";
+          "</div>" +
+          (p ? p.html(sliced.state) : "");
         bindListEvents(root);
       })
       .catch(function (err) {
@@ -630,16 +660,19 @@
     });
     root.querySelector("#whTrApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whTrResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whTrQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters.q = e.target.value.trim();
+        listPage = 1;
         renderList();
       }
     });
@@ -650,6 +683,12 @@
         renderForm(editingId);
       });
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function renderForm(transferId) {
@@ -693,7 +732,9 @@
           '<div class="wh-form-row">' +
           '<div><label>Название</label><input type="text" id="whTrTitle" value="' + esc(r.title) + '" placeholder="Например, между складами 15.06" /></div>' +
           '<div><label>Со склада</label><select id="whTrFromWarehouse">' + warehouseOptions(r.from_warehouse_id, "— склад отправитель —") + "</select></div>" +
+          '<div><label>Ячейка откуда</label><select id="whTrFromBin">' + binOptions(r.from_warehouse_id, r.from_bin_id) + "</select></div>" +
           '<div><label>На склад</label><select id="whTrToWarehouse">' + warehouseOptions(r.to_warehouse_id, "— склад получатель —") + "</select></div>" +
+          '<div><label>Ячейка куда</label><select id="whTrToBin">' + binOptions(r.to_warehouse_id, r.to_bin_id) + "</select></div>" +
           "</div>" +
           '<p class="wh-muted">Отображается как: <strong>Перемещение {название}</strong></p></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Добавление товаров</h4>' +
@@ -717,6 +758,18 @@
           '<textarea id="whTrComment" class="wh-rc-comment" rows="3" placeholder="Необязательно">' + esc(r.comment) + "</textarea></section>";
 
         bindItemRowEvents(root);
+        var fromWh = root.querySelector("#whTrFromWarehouse");
+        var toWh = root.querySelector("#whTrToWarehouse");
+        if (fromWh) {
+          fromWh.addEventListener("change", function () {
+            root.querySelector("#whTrFromBin").innerHTML = binOptions(fromWh.value, "");
+          });
+        }
+        if (toWh) {
+          toWh.addEventListener("change", function () {
+            root.querySelector("#whTrToBin").innerHTML = binOptions(toWh.value, "");
+          });
+        }
         root.querySelector("#whTrBack").addEventListener("click", function () {
           editingId = null;
           formItems = [];
@@ -789,6 +842,8 @@
       title: root.querySelector("#whTrTitle").value.trim(),
       from_warehouse_id: fromId,
       to_warehouse_id: toId,
+      from_bin_id: (root.querySelector("#whTrFromBin") && root.querySelector("#whTrFromBin").value) || "",
+      to_bin_id: (root.querySelector("#whTrToBin") && root.querySelector("#whTrToBin").value) || "",
       comment: root.querySelector("#whTrComment").value.trim(),
       items: collectItemsFromDom(root),
     };
@@ -825,6 +880,7 @@
     formItems = [];
     listFilters = {};
     filterPanelOpen = false;
+    listPage = 1;
     loadMeta()
       .then(function () {
         renderList();

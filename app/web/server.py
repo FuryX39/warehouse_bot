@@ -104,6 +104,12 @@ from app.web.warehouse_writeoffs_routes import register_warehouse_writeoffs_rout
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 from app.web.warehouse_transfers_routes import register_warehouse_transfers_routes
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
+from app.web.warehouse_bin_transfers_routes import register_warehouse_bin_transfers_routes
+from app.warehouse_bin_transfers_repository import WarehouseBinTransfersRepository
+from app.warehouse_orders_repository import WarehouseOrdersRepository
+from app.warehouse_shipments_repository import WarehouseShipmentsRepository
+from app.warehouse_inventory_counts_repository import WarehouseInventoryCountsRepository
+from app.web.warehouse_wms_routes import register_warehouse_wms_routes
 from app.web.warehouse_tasks_routes import register_warehouse_tasks_routes
 from app.web.warehouse_tasks_api_auth import make_require_tasks_access
 from app.warehouse_tasks_repository import WarehouseTasksRepository
@@ -121,6 +127,15 @@ from app.web.warehouse_reports_routes import register_warehouse_reports_routes
 from app.web.warehouse_marking_routes import register_warehouse_marking_routes
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_tools_routes import register_warehouse_tools_routes
+
+_FBS_SHIP_DISABLED_DETAIL = (
+    "Старая отгрузка FBS отключена. Используйте документ отгрузки в /warehouse."
+)
+
+
+def fbs_ship_disabled() -> None:
+    raise HTTPException(status_code=410, detail=_FBS_SHIP_DISABLED_DETAIL)
+
 
 _WEB_ROOT = Path(__file__).resolve().parent
 _SESSION_COOKIE = "warehouse_session"
@@ -267,6 +282,39 @@ def create_dashboard_app(
     transfers_repo = WarehouseTransfersRepository(settings.db_url, storage_repo)
     transfers_repo.init_schema()
 
+    bin_transfers_repo = WarehouseBinTransfersRepository(settings.db_url, storage_repo)
+    bin_transfers_repo.init_schema()
+
+    orders_repo = WarehouseOrdersRepository(settings.db_url)
+    orders_repo.init_schema()
+    source_wh = inventory_repo.get_sync_source_warehouse_id()
+    if source_wh is None:
+        source_wh = storage_repo.get_default_warehouse_id()
+    if source_wh is not None:
+        orders_repo.backfill_from_order_items(int(source_wh))
+
+    shipments_repo = WarehouseShipmentsRepository(
+        settings.db_url,
+        orders_repo,
+        storage_repo,
+        inventory_repo,
+        movement_repo,
+    )
+    shipments_repo.init_schema()
+
+    inventory_counts_repo = WarehouseInventoryCountsRepository(
+        settings.db_url,
+        storage_repo,
+        receipts_repo,
+        writeoffs_repo,
+    )
+    inventory_counts_repo.init_schema()
+
+    if getattr(coordinator, "orders_repo", None) is None:
+        coordinator.orders_repo = orders_repo
+    if getattr(coordinator, "shipments_repo", None) is None:
+        coordinator.shipments_repo = shipments_repo
+
     tasks_repo = WarehouseTasksRepository(
         settings.db_url,
         warehouse_users_repo,
@@ -306,7 +354,7 @@ def create_dashboard_app(
         after_stock_write=_sync_legacy_stock_to_storage,
     )
     # Пересчёт кэша остатков после смены логики комплектов/резервов.
-    _stock_logic_ver = 4
+    _stock_logic_ver = 5
     if inventory_repo.get_sync_int("stock_balance_logic_version") != _stock_logic_ver:
         stock_repo.rebuild_all()
         inventory_repo.set_sync_int("stock_balance_logic_version", _stock_logic_ver)
@@ -600,6 +648,25 @@ def create_dashboard_app(
         crm_repo,
         require_warehouse_user,
     )
+    register_warehouse_bin_transfers_routes(
+        app,
+        bin_transfers_repo,
+        catalog_repo,
+        storage_repo,
+        require_warehouse_user,
+    )
+    register_warehouse_wms_routes(
+        app,
+        orders_repo,
+        shipments_repo,
+        inventory_counts_repo,
+        catalog_repo,
+        storage_repo,
+        warehouse_users_repo,
+        packing_repo,
+        require_warehouse_user,
+        crm_repo=crm_repo,
+    )
     require_tasks_access = make_require_tasks_access(
         settings.warehouse_tasks_api_token,
         _warehouse_user_from_session,
@@ -626,6 +693,9 @@ def create_dashboard_app(
         require_tasks_access,
         include_manager=True,
         packer_prefixes=(),
+        orders_repo=orders_repo,
+        wave_warehouse_id=lambda: inventory_repo.get_sync_source_warehouse_id()
+        or storage_repo.get_default_warehouse_id(),
     )
 
     @app.api_route(
@@ -1169,91 +1239,19 @@ def create_dashboard_app(
         }
 
     @app.get("/api/fbs/ship/preview", dependencies=[Depends(require_login)])
-    async def api_fbs_ship_preview(
-        scope: Annotated[str, Query(description="all | ozon | wildberries | yandex_market")] = "all",
-    ) -> dict:
-        try:
-            scope_n = normalize_ship_scope(scope)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        sources = sources_for_scope(scope_n)
-        loop = asyncio.get_running_loop()
-        preview = await loop.run_in_executor(
-            None,
-            lambda: preview_fbs_ship(inventory_repo, coordinator, sources),
-        )
-        return {
-            "scope": scope_n,
-            "scope_label": scope_label(scope_n),
-            **preview,
-        }
+    async def api_fbs_ship_preview() -> dict:
+        fbs_ship_disabled()
+        return {}
 
     @app.post("/api/fbs/ship/request", dependencies=[Depends(require_login)])
-    async def api_fbs_ship_request(
-        request: Request,
-        scope: Annotated[str, Form()],
-    ) -> dict:
-        """Запрос кода подтверждения (form, без JSON-тела)."""
-        try:
-            scope_n = normalize_ship_scope(scope)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        code = secrets.token_hex(3).upper()
-        request.session[_FBS_SHIP_SESSION_KEY] = {
-            "scope": scope_n,
-            "code": code,
-            "expires_at": time.time() + _FBS_SHIP_CODE_TTL_SECONDS,
-        }
-        return {
-            "scope": scope_n,
-            "scope_label": scope_label(scope_n),
-            "code": code,
-            "expires_in": _FBS_SHIP_CODE_TTL_SECONDS,
-        }
+    async def api_fbs_ship_request() -> dict:
+        fbs_ship_disabled()
+        return {}
 
     @app.post("/api/fbs/ship/confirm", dependencies=[Depends(require_login)])
-    async def api_fbs_ship_confirm(
-        request: Request,
-        scope: Annotated[str, Form()],
-        code: Annotated[str, Form()],
-    ) -> dict:
-        """Отгрузка после подтверждения кодом (панель FBS)."""
-        try:
-            scope_n = normalize_ship_scope(scope)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _purge_fbs_ship_pending(request.session)
-        entry = request.session.get(_FBS_SHIP_SESSION_KEY)
-        if not entry or entry.get("scope") != scope_n:
-            raise HTTPException(
-                status_code=400,
-                detail="Сначала запросите код: нажмите кнопку отгрузки без ввода кода",
-            )
-        if float(entry.get("expires_at") or 0) < time.time():
-            request.session.pop(_FBS_SHIP_SESSION_KEY, None)
-            raise HTTPException(status_code=400, detail="Код истёк. Запросите новый код.")
-        user_code = str(code or "").strip().upper()
-        if user_code != str(entry.get("code") or "").upper():
-            raise HTTPException(status_code=400, detail="Неверный код. Отгрузка не выполнена.")
-        request.session.pop(_FBS_SHIP_SESSION_KEY, None)
-
-        sources = sources_for_scope(scope_n)
-        loop = asyncio.get_running_loop()
-        try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: execute_fbs_ship(
-                    inventory_repo,
-                    coordinator,
-                    movement_repo,
-                    sources,
-                    sync_before=True,
-                    journal_source="web",
-                ),
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Отгрузка: {exc}") from exc
-        return _ship_result_payload(scope_n, result)
+    async def api_fbs_ship_confirm() -> dict:
+        fbs_ship_disabled()
+        return {}
 
     @app.get("/api/ozon/awaiting-shipment-labels", dependencies=[Depends(require_login)])
     async def api_ozon_awaiting_shipment_labels() -> Response:

@@ -1,6 +1,7 @@
 (function (global) {
   var meta = { warehouses: [], price_types: [] };
   var listFilters = {};
+  var listPage = 1;
   var filterPanelOpen = false;
   var editingId = null;
   var formItems = [];
@@ -181,6 +182,31 @@
       html += '<option value="' + esc(w.id) + '"' + sel + ">" + esc(w.name) + "</option>";
     });
     return html;
+  }
+
+  function binsForWarehouse(warehouseId) {
+    for (var i = 0; i < meta.warehouses.length; i++) {
+      if (String(meta.warehouses[i].id) === String(warehouseId)) return meta.warehouses[i].bins || [];
+    }
+    return [];
+  }
+
+  function binOptions(warehouseId, selectedId) {
+    var bins = binsForWarehouse(warehouseId);
+    var html = "";
+    bins.forEach(function (b) {
+      var sel = String(selectedId || "") === String(b.id) ? " selected" : "";
+      if (!selectedId && b.is_default) sel = " selected";
+      html +=
+        '<option value="' +
+        esc(b.id) +
+        '"' +
+        sel +
+        ">" +
+        esc((b.code || "") + (b.name && b.name !== b.code ? " — " + b.name : "")) +
+        "</option>";
+    });
+    return html || '<option value="">MAIN</option>';
   }
 
   function priceTypeMenuHtml() {
@@ -393,7 +419,10 @@
     root.innerHTML = "<p class=\"wh-msg\">Загрузка…</p>";
     fetchJson("/api/warehouse/writeoffs" + filtersQuery())
       .then(function (data) {
-        var rows = (data.writeoffs || [])
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(data.writeoffs || [], listPage) : { items: data.writeoffs || [], state: { page: 1 } };
+        listPage = sliced.state.page;
+        var rows = sliced.items
           .map(function (r) {
             return (
               '<tr data-id="' + esc(r.id) + '">' +
@@ -419,7 +448,8 @@
               "<th>Название</th><th>Кол-во</th><th>Сумма</th><th>Склад</th><th>Комментарий</th><th>Дата</th>" +
               "</tr></thead><tbody>" + rows + "</tbody></table>"
             : '<p class="wh-msg">Списания не найдены.</p>') +
-          "</div>";
+          "</div>" +
+          (p ? p.html(sliced.state) : "");
         bindListEvents(root);
       })
       .catch(function (err) {
@@ -440,16 +470,19 @@
     });
     root.querySelector("#whWoApplyFilter").addEventListener("click", function () {
       listFilters = readFilterPanel(root);
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whWoResetFilter").addEventListener("click", function () {
       listFilters = {};
       filterPanelOpen = false;
+      listPage = 1;
       renderList();
     });
     root.querySelector("#whWoQuickSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         listFilters.q = e.target.value.trim();
+        listPage = 1;
         renderList();
       }
     });
@@ -460,6 +493,12 @@
         renderForm(editingId);
       });
     });
+    if (global.WH_PAGER) {
+      global.WH_PAGER.bind(root, function (delta) {
+        listPage += delta;
+        renderList();
+      });
+    }
   }
 
   function renderForm(writeoffId) {
@@ -493,14 +532,19 @@
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whWoBack">&larr; К списку</button>' +
-          (writeoffId ? '<button type="button" class="wh-btn wh-btn-danger" id="whWoDelete">Удалить</button>' : "") +
-          '<button type="button" class="wh-btn wh-btn-primary" id="whWoSave">Сохранить</button>' +
+          (r.locked
+            ? ""
+            : (writeoffId ? '<button type="button" class="wh-btn wh-btn-danger" id="whWoDelete">Удалить</button>' : "") +
+              '<button type="button" class="wh-btn wh-btn-primary" id="whWoSave">Сохранить</button>') +
           "</div>" +
-          '<p class="wh-msg" id="whWoFormMsg"></p>' +
+          '<p class="wh-msg" id="whWoFormMsg">' +
+          (r.locked ? "Документ создан инвентаризацией и не может быть изменён." : "") +
+          "</p>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Списание</h4>' +
           '<div class="wh-form-row">' +
-          '<div><label>Название</label><input type="text" id="whWoTitle" value="' + esc(r.title) + '" placeholder="Например, поставка от 15.06" /></div>' +
+          '<div><label>Название</label><input type="text" id="whWoTitle" value="' + esc(r.title) + '" placeholder="Например, брак" /></div>' +
           '<div><label>Склад</label><select id="whWoWarehouse">' + warehouseOptions(r.warehouse_id) + "</select></div>" +
+          '<div><label>Ячейка</label><select id="whWoBin">' + binOptions(r.warehouse_id, r.bin_id) + "</select></div>" +
           "</div>" +
           '<p class="wh-muted">Отображается как: <strong>Списание {название}</strong></p></section>' +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Добавление товаров</h4>' +
@@ -521,6 +565,13 @@
           '<textarea id="whWoComment" class="wh-rc-comment" rows="3" placeholder="Необязательно">' + esc(r.comment) + "</textarea></section>";
 
         bindItemRowEvents(root);
+        var whSel = root.querySelector("#whWoWarehouse");
+        var binSel = root.querySelector("#whWoBin");
+        if (whSel && binSel) {
+          whSel.addEventListener("change", function () {
+            binSel.innerHTML = binOptions(whSel.value, "");
+          });
+        }
         root.querySelector("#whWoBack").addEventListener("click", function () {
           editingId = null;
           formItems = [];
@@ -550,11 +601,13 @@
             if (menu) menu.classList.add("hidden");
           }
         });
-        root.querySelector("#whWoSave").addEventListener("click", function () {
-          saveWriteoff(root, writeoffId);
-        });
-        if (writeoffId) {
-          root.querySelector("#whWoDelete").addEventListener("click", function () {
+        root.querySelector("#whWoSave") &&
+          root.querySelector("#whWoSave").addEventListener("click", function () {
+            saveWriteoff(root, writeoffId);
+          });
+        var delBtn = root.querySelector("#whWoDelete");
+        if (delBtn) {
+          delBtn.addEventListener("click", function () {
             if (!confirm("Удалить списание? Остатки будут скорректированы.")) return;
             fetchJson("/api/warehouse/writeoffs/" + writeoffId, { method: "DELETE" })
               .then(function () {
@@ -582,6 +635,7 @@
     var body = {
       title: root.querySelector("#whWoTitle").value.trim(),
       warehouse_id: root.querySelector("#whWoWarehouse").value,
+      bin_id: (root.querySelector("#whWoBin") && root.querySelector("#whWoBin").value) || "",
       comment: root.querySelector("#whWoComment").value.trim(),
       items: collectItemsFromDom(root),
     };
@@ -618,6 +672,7 @@
     formItems = [];
     listFilters = {};
     filterPanelOpen = false;
+    listPage = 1;
     loadMeta()
       .then(function () {
         renderList();

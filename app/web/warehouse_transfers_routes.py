@@ -34,10 +34,10 @@ def register_warehouse_transfers_routes(
     async def api_transfers_meta(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        warehouses = storage_repo.list_warehouses({})
+        warehouses = storage_repo.warehouses_with_bins()
         price_types = crm_repo.get_meta().get("price_types", [])
         return {
-            "warehouses": [storage_repo.warehouse_to_dict(w) for w in warehouses],
+            "warehouses": warehouses,
             "price_types": price_types,
         }
 

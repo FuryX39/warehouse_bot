@@ -1,6 +1,8 @@
 (function (global) {
   var meta = { assignees: [], supply_kinds: [], statuses: [] };
   var managerFilters = {};
+  var managerPage = 1;
+  var packingPage = 1;
   var itemDraft = [];
   var cargoDraft = [];
   var currentSupply = null;
@@ -234,7 +236,10 @@
     var q = managerFilters.q ? "?q=" + encodeURIComponent(managerFilters.q) : "";
     fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies" + q)
       .then(function (data) {
-        var rows = (data.supplies || [])
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(data.supplies || [], managerPage) : { items: data.supplies || [], state: { page: 1 } };
+        managerPage = sliced.state.page;
+        var rows = sliced.items
           .map(function (s) {
             var labels = s.labels_url
               ? '<a href="' + esc(s.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
@@ -264,8 +269,15 @@
             ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>Кластер/склад</th><th>Упаковщик</th><th>Этикетки</th><th>Обновлено</th></tr></thead><tbody>' +
               rows +
               "</tbody></table>"
-            : '<p class="wh-msg">FBO-заявки не найдены.</p>');
+            : '<p class="wh-msg">FBO-заявки не найдены.</p>') +
+          (p ? p.html(sliced.state) : "");
         bindManagerListEvents(tab, item, root);
+        if (p) {
+          p.bind(root, function (delta) {
+            managerPage += delta;
+            renderManagerList(tab, item);
+          });
+        }
       })
       .catch(function (err) {
         root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
@@ -282,6 +294,7 @@
     root.querySelector("#whFboSearch").addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         managerFilters.q = e.target.value.trim();
+        managerPage = 1;
         renderManagerList(tab, item);
       }
     });
@@ -738,7 +751,10 @@
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     fetchJson("/api/warehouse/marketplaces/ozon-fbo/my-supplies")
       .then(function (data) {
-        var rows = (data.supplies || [])
+        var p = global.WH_PAGER;
+        var sliced = p ? p.slice(data.supplies || [], packingPage) : { items: data.supplies || [], state: { page: 1 } };
+        packingPage = sliced.state.page;
+        var rows = sliced.items
           .map(function (s) {
             var labels = s.labels_url
               ? '<a href="' + esc(s.labels_url) + '" target="_blank" rel="noopener">Этикетки PDF</a>'
@@ -760,10 +776,18 @@
             ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>ГМ</th><th>Этикетки</th></tr></thead><tbody>' +
               rows +
               "</tbody></table>"
-            : '<p class="wh-msg">Назначенных FBO-заданий нет.</p>');
+            : '<p class="wh-msg">Назначенных FBO-заданий нет.</p>') +
+          (p ? p.html(sliced.state) : "");
         root.querySelector("#whFboPackRefresh").addEventListener("click", function () {
+          packingPage = 1;
           renderPackingList(tab, item);
         });
+        if (p) {
+          p.bind(root, function (delta) {
+            packingPage += delta;
+            renderPackingList(tab, item);
+          });
+        }
         root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
           tr.addEventListener("click", function (e) {

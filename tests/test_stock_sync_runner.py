@@ -48,8 +48,7 @@ class _FailFetchAdapter(_DummyAdapter):
         raise RuntimeError("marketplace down")
 
 
-def test_full_sync_writes_reserve_pushes_stock_and_persists_ok_ts(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'sync.db').as_posix()}"
+def test_full_sync_writes_reserve_pushes_stock_and_persists_ok_ts(db_url: str) -> None:
     repo = InventoryRepository(db_url)
     repo.init_schema()
     repo.upsert_stock("SKU-1", 10)
@@ -73,8 +72,7 @@ def test_full_sync_writes_reserve_pushes_stock_and_persists_ok_ts(tmp_path) -> N
     assert coordinator.last_run_at is not None
 
 
-def test_fetch_error_is_warning_not_hard_fail(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'sync_fail.db').as_posix()}"
+def test_fetch_error_is_warning_not_hard_fail(db_url: str) -> None:
     repo = InventoryRepository(db_url)
     repo.init_schema()
     coordinator = StockCoordinator(
@@ -121,8 +119,7 @@ class _WbAdapter:
         self.pushed = dict(available_stock_by_sku)
 
 
-def test_disabled_marketplace_skips_orders_and_stock_but_keeps_token(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'sync_mp.db').as_posix()}"
+def test_disabled_marketplace_skips_orders_and_stock_but_keeps_token(db_url: str) -> None:
     repo = InventoryRepository(db_url)
     repo.init_schema()
     repo.upsert_stock("SKU-1", 10)
@@ -149,8 +146,7 @@ def test_disabled_marketplace_skips_orders_and_stock_but_keeps_token(tmp_path) -
     assert wb.pushed.get("SKU-1") == 9
 
 
-def test_marketplace_sync_flags_default_on(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'sync_flags.db').as_posix()}"
+def test_marketplace_sync_flags_default_on(db_url: str) -> None:
     repo = InventoryRepository(db_url)
     repo.init_schema()
     assert repo.marketplace_sync_enabled("ozon") is True
@@ -161,8 +157,7 @@ def test_marketplace_sync_flags_default_on(tmp_path) -> None:
     assert repo.get_marketplace_sync_flags()["ozon"] is True
 
 
-def test_all_marketplaces_can_be_disabled(tmp_path) -> None:
-    db_url = f"sqlite:///{(tmp_path / 'sync_all_off.db').as_posix()}"
+def test_all_marketplaces_can_be_disabled(db_url: str) -> None:
     repo = InventoryRepository(db_url)
     repo.init_schema()
     repo.upsert_stock("SKU-1", 10)

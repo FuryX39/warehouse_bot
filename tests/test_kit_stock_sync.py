@@ -10,8 +10,7 @@ from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.warehouse_stock_repository import WarehouseStockRepository
 
 
-def _setup(tmp_path):
-    db_url = f"sqlite:///{(tmp_path / 'kits.db').as_posix()}"
+def _setup(db_url: str):
     catalog = CatalogRepository(db_url)
     catalog.init_schema()
     storage = StorageWarehouseRepository(db_url)
@@ -39,8 +38,8 @@ def _add_product(session, *, name, sku, code, is_kit=False):
     return row
 
 
-def test_kit_available_pushed_and_component_reduced_by_kit_reserve(tmp_path) -> None:
-    _catalog, storage, inventory, stock = _setup(tmp_path)
+def test_kit_available_pushed_and_component_reduced_by_kit_reserve(db_url: str) -> None:
+    _catalog, storage, inventory, stock = _setup(db_url)
     legacy_id = int(storage.get_legacy_warehouse_id())
 
     with Session(inventory.engine) as session:
@@ -97,8 +96,8 @@ def test_kit_available_pushed_and_component_reduced_by_kit_reserve(tmp_path) -> 
     assert snap["SKU-A"].available == 6
 
 
-def test_nested_kit_reserve_allocates_leaf_components(tmp_path) -> None:
-    _catalog, storage, inventory, stock = _setup(tmp_path)
+def test_nested_kit_reserve_allocates_leaf_components(db_url: str) -> None:
+    _catalog, storage, inventory, stock = _setup(db_url)
     legacy_id = int(storage.get_legacy_warehouse_id())
 
     with Session(inventory.engine) as session:
