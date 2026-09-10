@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogProduct
@@ -255,7 +256,35 @@ class WarehouseOrdersRepository:
                     updated_at_ts=now,
                 )
                 session.add(row)
-                session.flush()
+                try:
+                    session.flush()
+                except IntegrityError:
+                    session.rollback()
+                    row = session.scalar(
+                        select(WarehouseOrder).where(
+                            WarehouseOrder.source == src,
+                            WarehouseOrder.posting_id == pid,
+                        )
+                    )
+                    catalog = {
+                        str(p.sku or "").strip().casefold(): p
+                        for p in session.scalars(select(CatalogProduct)).all()
+                        if str(p.sku or "").strip()
+                    }
+                    if row is None:
+                        row = WarehouseOrder(
+                            number=self.next_number(session),
+                            warehouse_id=int(warehouse_id),
+                            source=src,
+                            posting_id=pid,
+                            comment=pid,
+                            counterparty_id=self._ensure_counterparty_id(session, src),
+                            status=ORDER_OPEN,
+                            created_at_ts=now,
+                            updated_at_ts=now,
+                        )
+                        session.add(row)
+                        session.flush()
             elif row.status not in TERMINAL_STATUSES:
                 row.updated_at_ts = now
                 if not str(row.comment or "").strip():
@@ -612,7 +641,11 @@ class WarehouseOrdersRepository:
                     updated_at_ts=now,
                 )
                 session.add(order)
-                session.flush()
+                try:
+                    session.flush()
+                except IntegrityError:
+                    session.rollback()
+                    continue
                 self._replace_lines(session, order, lines, catalog)
                 # _replace_lines skips terminal — force lines for backfill
                 if status in TERMINAL_STATUSES:
@@ -628,8 +661,11 @@ class WarehouseOrdersRepository:
                                 quantity=int(payload["quantity"]),
                             )
                         )
-                session.commit()
-                created += 1
+                try:
+                    session.commit()
+                    created += 1
+                except IntegrityError:
+                    session.rollback()
         return created
 
     def to_dict(self, row: WarehouseOrderRow) -> dict[str, Any]:

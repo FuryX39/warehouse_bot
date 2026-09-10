@@ -114,8 +114,8 @@ class WarehouseReceiptsRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._migrate_total_sum_column()
-        self._migrate_bin_id_column()
         self._migrate_locked_column()
+        self._migrate_bin_id_column()
         self._backfill_total_sums()
 
     def _migrate_total_sum_column(self) -> None:
