@@ -1,0 +1,27 @@
+---
+description: Программа упаковщиков — только C#; Tkinter не трогать
+alwaysApply: true
+---
+
+# Упаковщики: только C#, Tkinter неподдерживаемый
+
+Боевая программа упаковщиков — **C#** (`warehouse_packing_app_cs/`).  
+Tkinter (`warehouse_packing_app/`) **оставить как есть**: неподдерживаемая версия, не удалять.
+
+## Нельзя
+
+- Править Tkinter-приложение: UI, вкладки, печать, FBS/FBO, API-клиент, тесты внутри `warehouse_packing_app/`
+- Портить фичи «и в Tkinter тоже» / «заодно обнови старую программу»
+- Переносить новый функционал (в т.ч. Упаковка FBO) в Tkinter
+
+## Нужно
+
+- Новые фичи и правки упаковщиков — только в `warehouse_packing_app_cs/` и в серверном API
+- Если просят «программу упаковщиков» без уточнения — имеется в виду C#
+
+Исключение — пользователь **явно** написал править Tkinter.
+
+```text
+❌ BAD: правки warehouse_packing_app/run.py, fbs_packing_ui.py «чтобы обе версии умели FBO»
+✅ GOOD: API в warehouse_bot + UI в warehouse_packing_app_cs/; Tkinter не трогать
+```

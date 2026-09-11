@@ -95,6 +95,33 @@ def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
     raise RuntimeError("unreachable")
 
 
+def _parse_fbw_supply_id(raw: object) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("Укажите ID поставки FBW")
+    if re.search(r"WB-GI", text, re.IGNORECASE):
+        raise ValueError("Нужен числовой ID поставки FBW из кабинета, не QR WB-GI-…")
+    if not text.isdigit():
+        raise ValueError("ID поставки FBW должен быть числом")
+    return text
+
+
+def _fbw_dict_list(raw: object, *keys: str) -> list[dict]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if not isinstance(raw, dict):
+        return []
+    for key in keys:
+        inner = raw.get(key)
+        if isinstance(inner, list):
+            return [item for item in inner if isinstance(item, dict)]
+        if isinstance(inner, dict):
+            nested = _fbw_dict_list(inner, *keys)
+            if nested:
+                return nested
+    return []
+
+
 def _parse_wb_warehouse_ids(raw: str | list[str] | tuple[str, ...] | None) -> list[str]:
     """Один или несколько id складов WB (через запятую / ; / пробел)."""
     if raw is None:
@@ -796,3 +823,44 @@ class WildberriesAdapter(MarketplaceAdapter):
                     "png_b64": file_b64,
                 }
         return result
+
+    _FBW_BASE = "https://supplies-api.wildberries.ru"
+
+    def _fbw_get_json(self, path: str) -> object:
+        if not self.is_configured():
+            raise ValueError("Wildberries не настроен")
+        response = _wb_request(
+            "GET",
+            f"{self._FBW_BASE}{path}",
+            headers=self._auth_headers(),
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_http_error(response)
+        return response.json()
+
+    def fetch_fbw_supply(self, supply_id: str | int) -> dict:
+        sid = _parse_fbw_supply_id(supply_id)
+        data = self._fbw_get_json(f"/api/v1/supplies/{sid}")
+        if not isinstance(data, dict):
+            raise ValueError("Некорректный ответ WB по поставке FBW")
+        return data
+
+    def fetch_fbw_supply_goods(self, supply_id: str | int) -> list[dict]:
+        sid = _parse_fbw_supply_id(supply_id)
+        return _fbw_dict_list(
+            self._fbw_get_json(f"/api/v1/supplies/{sid}/goods"),
+            "goods",
+            "items",
+            "data",
+        )
+
+    def fetch_fbw_supply_packages(self, supply_id: str | int) -> list[dict]:
+        sid = _parse_fbw_supply_id(supply_id)
+        return _fbw_dict_list(
+            self._fbw_get_json(f"/api/v1/supplies/{sid}/package"),
+            "packages",
+            "package",
+            "items",
+            "data",
+        )

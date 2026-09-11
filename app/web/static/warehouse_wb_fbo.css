@@ -1,0 +1,11 @@
+.wh-wb-fbo-preview {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--wh-border);
+  border-radius: 8px;
+}
+
+.wh-wb-fbo-preview p {
+  margin: 0.2rem 0;
+}

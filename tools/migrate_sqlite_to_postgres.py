@@ -48,6 +48,7 @@ def schema_groups() -> list[tuple[str, list[MetaData]]]:
     from app.fbs_packing_repository import _Base as FbsBase
     from app.movement_repository import MovementBase
     from app.ozon_fbo_supply_repository import _Base as FboBase
+    from app.wb_fbo_packing_repository import _Base as WbFboBase
     from app.repositories import Base as InventoryBase
     from app.storage_warehouse_repository import _Base as StorageBase
     from app.warehouse_receipts_repository import _Base as ReceiptsBase
@@ -79,6 +80,7 @@ def schema_groups() -> list[tuple[str, list[MetaData]]]:
                 TasksBase.metadata,
                 FbsBase.metadata,
                 FboBase.metadata,
+                WbFboBase.metadata,
             ],
         ),
         ("movement", [MovementBase.metadata]),

@@ -20,6 +20,7 @@ from app.catalog_repository import CatalogRepository
 from app.config import Settings, resolve_warehouse_admin_credentials
 from app.crm_repository import CrmRepository
 from app.fbs_packing_repository import FbsPackingRepository
+from app.wb_fbo_packing_repository import WbFboPackingRepository
 from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_schedule_repository import WarehouseScheduleRepository
@@ -30,6 +31,7 @@ from app.warehouse_orders_repository import WarehouseOrdersRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
+from app.web.warehouse_wb_fbo_routes import register_warehouse_wb_fbo_routes
 from app.web.warehouse_tasks_api_auth import make_require_tasks_access
 from app.web.warehouse_tasks_routes import register_warehouse_tasks_routes
 
@@ -119,6 +121,10 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     packing_repo = FbsPackingRepository(settings.db_url, files_data_dir=packing_files_dir)
     packing_repo.init_schema()
 
+    wb_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_packing"
+    wb_fbo_repo = WbFboPackingRepository(settings.db_url, files_data_dir=wb_fbo_files_dir)
+    wb_fbo_repo.init_schema()
+
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
 
@@ -196,6 +202,7 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
             "login": "/api/v1/login",
             "tasks": "/api/v1/tasks",
             "fbs_packing": "/api/v1/fbs-packing",
+            "fbo_packing": "/api/v1/fbo-packing",
         }
 
     @app.get("/api/v1/health")
@@ -252,5 +259,16 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
         packer_prefixes=("/api/v1/fbs-packing",),
         orders_repo=orders_repo,
         wave_warehouse_id=storage_repo.get_default_warehouse_id,
+    )
+    register_warehouse_wb_fbo_routes(
+        app,
+        wb_fbo_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        None,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=False,
+        packer_prefixes=("/api/v1/fbo-packing",),
     )
     return app

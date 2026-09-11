@@ -248,6 +248,10 @@
       window.WhOzonFbo.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "wb-fbo-supplies" && window.WhWbFbo) {
+      window.WhWbFbo.render(tab, item);
+      return;
+    }
     if (tab.id === "marketplaces" && item.id === "fbs" && window.WhFbs) {
       window.WhFbs.render(tab, item);
       return;

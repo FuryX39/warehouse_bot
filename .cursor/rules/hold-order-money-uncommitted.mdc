@@ -1,0 +1,30 @@
+---
+description: Не коммитить локальную работу по ценам/деньгам заказов, пока пользователь явно не разрешит
+alwaysApply: true
+---
+
+# Цены и деньги заказов — не коммитить
+
+Локальная недоделанная работа: **оплачено покупателем / цена в кабинете / удержание МП**. Пока пользователь **явно** не попросил закоммитить именно это, эти файлы **не добавлять** в коммит, даже если рядом просят «закоммить всё» / «остальные изменения».
+
+Не трогать:
+
+- `app/warehouse_order_money.py`
+- `tests/test_warehouse_order_money.py`
+- `tools/backfill_warehouse_orders.py`
+- `app/adapters/wildberries.py`
+- `app/adapters/yandex_market.py`
+- `app/warehouse_order_sync.py`
+- `app/warehouse_orders_repository.py`
+- `app/web/warehouse_wms_routes.py`
+- `app/web/static/warehouse_wms.js`
+- `app/web/static/warehouse.css`
+- `app/web/templates/warehouse.html`
+- `tests/test_wms_orders.py`
+- `data/order_money_cache.json` в `.gitignore`
+- связанные правки в `app/services.py`, `app/web/server.py`, `app/bootstrap.py`
+
+```text
+❌ BAD: git add -A && git commit   # утащит цены вместе с другим фиксом
+✅ GOOD: git add только файлы текущей задачи; money/price оставить unstaged
+```
