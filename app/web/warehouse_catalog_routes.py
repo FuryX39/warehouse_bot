@@ -225,13 +225,26 @@ def register_warehouse_catalog_routes(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         filters = _filters_from_query(request.query_params)
+        total = catalog_repo.count_products(filters)
+        page_raw = request.query_params.get("page")
+        # Without page= return the full list: packing desktop searches locally.
+        if page_raw is None or str(page_raw).strip() == "":
+            rows = catalog_repo.list_products(filters)
+            return {
+                "products": [
+                    catalog_repo.product_to_dict(r, include_details=False) for r in rows
+                ],
+                "total": total,
+                "page": 1,
+                "limit": total,
+                "pages": 1,
+            }
         try:
-            page = int(request.query_params.get("page") or 1)
+            page = int(page_raw)
         except (TypeError, ValueError):
             page = 1
         page = max(1, page)
         limit = CATALOG_LIST_PAGE_SIZE
-        total = catalog_repo.count_products(filters)
         pages = max(1, (total + limit - 1) // limit) if total else 1
         if page > pages:
             page = pages
