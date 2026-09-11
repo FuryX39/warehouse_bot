@@ -15,6 +15,7 @@ from app.config import Settings
 from app.crm_repository import CrmRepository
 from app.warehouse_users_repository import WarehouseUserRow
 from app.wb_fbo_packing_repository import (
+    JOB_STATUS_CANCELLED,
     JOB_STATUS_DONE,
     JOB_STATUS_IN_PROGRESS,
     LINE_DONE,
@@ -320,3 +321,51 @@ def test_set_line_status_reopens_done_job(db_url: str, tmp_path) -> None:
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["line"]["status"] == LINE_PENDING
     assert packing.get_job(job_id).status == JOB_STATUS_IN_PROGRESS
+
+
+def test_manager_can_cancel_done_fbo_job(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    packing = WbFboPackingRepository(db_url, files_data_dir=tmp_path / "wb_fbo_cancel")
+    packing.init_schema()
+    packer = _packer()
+    adapter = FakeFbwAdapter()
+    app = FastAPI()
+    register_warehouse_wb_fbo_routes(
+        app,
+        packing,
+        catalog,
+        SimpleNamespace(list_assignee_picker=lambda: []),
+        SimpleNamespace(adapters=[adapter]),
+        lambda: packer,
+        lambda: TasksApiActor(user=packer, via_api_token=False),
+        include_manager=True,
+        packer_prefixes=("/api/v1/fbo-packing",),
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo/jobs",
+        data={
+            "supply_id": "41357389",
+            "pallet_count": "1",
+            "city": "",
+            "packer_user_ids": "[7]",
+        },
+        files={"qr": ("qr.pdf", _pdf("WB-GI-277689956"), "application/pdf")},
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    for line in created.json()["job"]["lines"]:
+        resp = client.post(
+            f"/api/v1/fbo-packing/jobs/{job_id}/lines/{line['id']}/set-status",
+            json={"status": "done"},
+        )
+        assert resp.status_code == 200, resp.text
+    assert packing.get_job(job_id).status == JOB_STATUS_DONE
+
+    cancelled = client.post(f"/api/warehouse/marketplaces/wb-fbo/jobs/{job_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["job"]["status"] == JOB_STATUS_CANCELLED
+    assert packing.get_job(job_id).status == JOB_STATUS_CANCELLED
+    mine = client.get("/api/v1/fbo-packing/my")
+    assert mine.status_code == 200
+    assert all(item["id"] != job_id for item in mine.json()["jobs"])

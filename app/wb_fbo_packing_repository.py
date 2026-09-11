@@ -386,8 +386,8 @@ class WbFboPackingRepository:
             job = session.get(WbFboPackingJob, int(job_id))
             if job is None:
                 return None
-            if job.status == JOB_STATUS_DONE:
-                raise ValueError("Задание уже выполнено")
+            if job.status == JOB_STATUS_CANCELLED:
+                return self._job_row(session, job)
             job.status = JOB_STATUS_CANCELLED
             job.updated_at_ts = int(time.time())
             session.commit()

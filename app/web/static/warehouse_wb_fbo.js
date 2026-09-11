@@ -137,11 +137,11 @@
       sliced.items
         .map(function (job) {
           var cancel =
-            job.status === "open" || job.status === "in_progress"
-              ? '<button type="button" class="wh-btn wh-btn-sm wh-wb-fbo-job-cancel" data-id="' +
+            job.status === "cancelled"
+              ? ""
+              : '<button type="button" class="wh-btn wh-btn-sm wh-wb-fbo-job-cancel" data-id="' +
                 esc(job.id) +
-                '">Отменить</button>'
-              : "";
+                '">Отменить</button>';
           var files =
             '<a class="wh-btn wh-btn-sm" href="/api/warehouse/marketplaces/wb-fbo/jobs/' +
             esc(job.id) +
@@ -275,7 +275,7 @@
 
   function cancelJob(root, jobId) {
     if (!jobId || busy) return;
-    if (!window.confirm("Отменить задание #" + jobId + "?")) return;
+    if (!window.confirm("Отменить задание #" + jobId + "? Упаковщик его больше не увидит.")) return;
     setBusy(root, true);
     fetchJson("/api/warehouse/marketplaces/wb-fbo/jobs/" + jobId + "/cancel", { method: "POST" })
       .then(function () {
