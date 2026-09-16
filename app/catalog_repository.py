@@ -125,6 +125,21 @@ class CatalogProductBarcode(_Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class CatalogProductBox(_Base):
+    """Короб поставки: ШК грузоместа и сколько штук товара внутри."""
+
+    __tablename__ = "catalog_product_boxes"
+    __table_args__ = (UniqueConstraint("barcode", name="uq_catalog_product_box_barcode"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
+    )
+    barcode: Mapped[str] = mapped_column(String(128), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class CatalogProductGtin(_Base):
     """GTIN товара для Честного знака. Хранится канонически как GTIN-14."""
 
@@ -210,6 +225,7 @@ class CatalogProductRow:
     volume_manual: bool = False
     barcodes: list[dict[str, str]] = field(default_factory=list)
     gtins: list[str] = field(default_factory=list)
+    boxes: list[dict[str, Any]] = field(default_factory=list)
     components: list[KitComponentRow] = field(default_factory=list)
     prices: list[ProductPriceRow] = field(default_factory=list)
     barcode_count: int = 0
@@ -386,6 +402,13 @@ class CatalogRepository:
                 session.execute(
                     text(
                         "DELETE FROM catalog_product_gtins WHERE product_id NOT IN "
+                        "(SELECT id FROM catalog_products)"
+                    )
+                )
+            if "catalog_product_boxes" in tables:
+                session.execute(
+                    text(
+                        "DELETE FROM catalog_product_boxes WHERE product_id NOT IN "
                         "(SELECT id FROM catalog_products)"
                     )
                 )
@@ -1144,6 +1167,15 @@ class CatalogRepository:
                 if product is None:
                     continue
                 by_barcode[str(bc.barcode or "").strip().casefold()] = product
+            box_rows = session.scalars(select(CatalogProductBox)).all()
+            for box in box_rows:
+                key = str(box.barcode or "").strip().casefold()
+                if not key or key in by_barcode:
+                    continue
+                product = picker_by_id.get(int(box.product_id))
+                if product is None:
+                    continue
+                by_barcode[key] = product
         return by_sku, by_code, by_barcode
 
     def image_urls_by_product_ids(self, product_ids: list[int]) -> dict[int, str]:
@@ -1185,6 +1217,24 @@ class CatalogRepository:
                 code = str(row.barcode or "").strip()
                 if code:
                     out[pid] = code
+            return out
+
+    def product_box_quantities_by_id(self, product_ids: list[int]) -> dict[int, set[int]]:
+        """Количество штук в коробах карточки: product_id → набор quantity."""
+        ids = sorted({int(x) for x in product_ids if int(x) > 0})
+        if not ids:
+            return {}
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(CatalogProductBox.product_id, CatalogProductBox.quantity).where(
+                    CatalogProductBox.product_id.in_(ids)
+                )
+            ).all()
+            out: dict[int, set[int]] = {pid: set() for pid in ids}
+            for pid, qty in rows:
+                amount = int(qty or 0)
+                if amount > 0:
+                    out.setdefault(int(pid), set()).add(amount)
             return out
 
     def get_prices_for_products(
@@ -1269,10 +1319,14 @@ class CatalogRepository:
             conds.append(CatalogProduct.is_kit.is_(False))
         barcode = (filters.get("barcode") or "").strip()
         if barcode:
-            sub = select(CatalogProductBarcode.product_id).where(
-                CatalogProductBarcode.barcode.ilike(_like(barcode))
+            pat = _like(barcode)
+            unit_sub = select(CatalogProductBarcode.product_id).where(
+                CatalogProductBarcode.barcode.ilike(pat)
             )
-            conds.append(CatalogProduct.id.in_(sub))
+            box_sub = select(CatalogProductBox.product_id).where(
+                CatalogProductBox.barcode.ilike(pat)
+            )
+            conds.append(or_(CatalogProduct.id.in_(unit_sub), CatalogProduct.id.in_(box_sub)))
         q_text = (filters.get("q") or "").strip()
         if q_text:
             pat = _like(q_text)
@@ -1310,8 +1364,20 @@ class CatalogRepository:
                     )
                 )
             if row is None:
-                return None
-            product = session.get(CatalogProduct, int(row.product_id))
+                box = session.scalar(
+                    select(CatalogProductBox).where(CatalogProductBox.barcode == code)
+                )
+                if box is None:
+                    box = session.scalar(
+                        select(CatalogProductBox).where(
+                            func.lower(CatalogProductBox.barcode) == key
+                        )
+                    )
+                if box is None:
+                    return None
+                product = session.get(CatalogProduct, int(box.product_id))
+            else:
+                product = session.get(CatalogProduct, int(row.product_id))
             if product is None:
                 return None
             return self._product_row(session, product, load_details=True)
@@ -1344,6 +1410,9 @@ class CatalogRepository:
             # (PRAGMA foreign_keys и старые таблицы без ON DELETE CASCADE).
             session.execute(
                 delete(CatalogProductBarcode).where(CatalogProductBarcode.product_id == pid)
+            )
+            session.execute(
+                delete(CatalogProductBox).where(CatalogProductBox.product_id == pid)
             )
             session.execute(
                 delete(CatalogProductGtin).where(CatalogProductGtin.product_id == pid)
@@ -1442,6 +1511,11 @@ class CatalogRepository:
         if update_barcodes and not isinstance(barcodes_raw, list):
             raise ValueError("barcodes должен быть массивом")
         barcodes = self._normalize_barcodes(barcodes_raw) if update_barcodes else []
+        update_boxes = "boxes" in data
+        boxes_raw = data.get("boxes") if update_boxes else []
+        if update_boxes and not isinstance(boxes_raw, list):
+            raise ValueError("boxes должен быть массивом")
+        boxes = self._normalize_boxes(boxes_raw) if update_boxes else []
         update_gtins = "gtins" in data
         gtins_raw = data.get("gtins") if update_gtins else []
         if update_gtins and not isinstance(gtins_raw, list):
@@ -1481,6 +1555,35 @@ class CatalogRepository:
             self._apply_product_fields(row, data, sku, code, name)
             row.updated_at_ts = now
             session.flush()
+            unit_codes = (
+                {item["barcode"] for item in barcodes}
+                if update_barcodes
+                else {
+                    str(r.barcode)
+                    for r in session.scalars(
+                        select(CatalogProductBarcode).where(
+                            CatalogProductBarcode.product_id == row.id
+                        )
+                    ).all()
+                }
+            )
+            box_codes = (
+                {item["barcode"] for item in boxes}
+                if update_boxes
+                else {
+                    str(r.barcode)
+                    for r in session.scalars(
+                        select(CatalogProductBox).where(CatalogProductBox.product_id == row.id)
+                    ).all()
+                }
+            )
+            overlap = unit_codes & box_codes
+            if overlap:
+                code_clash = next(iter(sorted(overlap)))
+                raise ValueError(
+                    f"Штрихкод «{code_clash}» нельзя одновременно использовать "
+                    "как штучный и как короб"
+                )
             if update_barcodes:
                 self._validate_barcodes_unique(session, barcodes, exclude_product_id=int(row.id))
                 session.execute(
@@ -1493,6 +1596,20 @@ class CatalogRepository:
                             barcode=bc["barcode"],
                             label=bc.get("label", ""),
                             barcode_group=bc.get("group", ""),
+                            sort_order=i,
+                        )
+                    )
+            if update_boxes:
+                self._validate_boxes_unique(session, boxes, exclude_product_id=int(row.id))
+                session.execute(
+                    delete(CatalogProductBox).where(CatalogProductBox.product_id == row.id)
+                )
+                for i, box in enumerate(boxes):
+                    session.add(
+                        CatalogProductBox(
+                            product_id=int(row.id),
+                            barcode=box["barcode"],
+                            quantity=int(box["quantity"]),
                             sort_order=i,
                         )
                     )
@@ -1587,18 +1704,94 @@ class CatalogRepository:
                     CatalogProductBarcode.product_id != exclude_product_id,
                 )
             )
-            if other is None:
+            if other is not None:
+                if session.get(CatalogProduct, int(other)) is None:
+                    session.execute(
+                        delete(CatalogProductBarcode).where(
+                            CatalogProductBarcode.barcode == code,
+                            CatalogProductBarcode.product_id == int(other),
+                        )
+                    )
+                else:
+                    raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+            box_owner = session.scalar(
+                select(CatalogProductBox.product_id).where(
+                    CatalogProductBox.barcode == code,
+                    CatalogProductBox.product_id != exclude_product_id,
+                )
+            )
+            if box_owner is None:
                 continue
-            if session.get(CatalogProduct, int(other)) is None:
-                # Сиротский ШК от удалённого товара — освобождаем.
+            if session.get(CatalogProduct, int(box_owner)) is None:
                 session.execute(
-                    delete(CatalogProductBarcode).where(
-                        CatalogProductBarcode.barcode == code,
-                        CatalogProductBarcode.product_id == int(other),
+                    delete(CatalogProductBox).where(
+                        CatalogProductBox.barcode == code,
+                        CatalogProductBox.product_id == int(box_owner),
                     )
                 )
                 continue
-            raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+            raise ValueError(f"Штрихкод «{code}» уже используется как короб")
+
+    def _normalize_boxes(self, raw: list) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            code_raw = str(item.get("barcode") or "").strip()
+            if not code_raw:
+                continue
+            code = _validate_code128(code_raw)
+            try:
+                qty = int(item.get("quantity"))
+            except (TypeError, ValueError):
+                raise ValueError(f"Количество в коробе «{code}» должно быть целым числом") from None
+            if qty < 1:
+                raise ValueError(f"Количество в коробе «{code}» должно быть не меньше 1")
+            if code in seen:
+                raise ValueError(f"Дублирующийся штрихкод короба в карточке: «{code}»")
+            seen.add(code)
+            out.append({"barcode": code, "quantity": qty})
+        return out
+
+    def _validate_boxes_unique(
+        self, session: Session, boxes: list[dict[str, Any]], *, exclude_product_id: int
+    ) -> None:
+        for item in boxes:
+            code = item["barcode"]
+            other = session.scalar(
+                select(CatalogProductBox.product_id).where(
+                    CatalogProductBox.barcode == code,
+                    CatalogProductBox.product_id != exclude_product_id,
+                )
+            )
+            if other is not None:
+                if session.get(CatalogProduct, int(other)) is None:
+                    session.execute(
+                        delete(CatalogProductBox).where(
+                            CatalogProductBox.barcode == code,
+                            CatalogProductBox.product_id == int(other),
+                        )
+                    )
+                else:
+                    raise ValueError(f"Штрихкод короба «{code}» уже используется другим товаром")
+            unit_owner = session.scalar(
+                select(CatalogProductBarcode.product_id).where(
+                    CatalogProductBarcode.barcode == code,
+                    CatalogProductBarcode.product_id != exclude_product_id,
+                )
+            )
+            if unit_owner is None:
+                continue
+            if session.get(CatalogProduct, int(unit_owner)) is None:
+                session.execute(
+                    delete(CatalogProductBarcode).where(
+                        CatalogProductBarcode.barcode == code,
+                        CatalogProductBarcode.product_id == int(unit_owner),
+                    )
+                )
+                continue
+            raise ValueError(f"Штрихкод короба «{code}» уже используется как штучный штрихкод")
 
     def _normalize_gtins(self, raw: list) -> list[str]:
         from app.marking.gtin import normalize_gtin14
@@ -1785,6 +1978,19 @@ class CatalogRepository:
                     )
                 else:
                     raise ValueError(f"Штрихкод «{code}» уже используется другим товаром")
+            box_owner = session.scalar(
+                select(CatalogProductBox.product_id).where(CatalogProductBox.barcode == code)
+            )
+            if box_owner is not None:
+                if session.get(CatalogProduct, int(box_owner)) is None:
+                    session.execute(
+                        delete(CatalogProductBox).where(
+                            CatalogProductBox.barcode == code,
+                            CatalogProductBox.product_id == int(box_owner),
+                        )
+                    )
+                else:
+                    raise ValueError(f"Штрихкод «{code}» уже используется как короб")
             max_order = session.scalar(
                 select(func.max(CatalogProductBarcode.sort_order)).where(
                     CatalogProductBarcode.product_id == int(product_id)
@@ -1877,6 +2083,7 @@ class CatalogRepository:
                 marking_name = m.name
         barcodes: list[dict[str, str]] = []
         gtins: list[str] = []
+        boxes: list[dict[str, Any]] = []
         components: list[KitComponentRow] = []
         barcode_count = int(
             session.scalar(
@@ -1902,6 +2109,15 @@ class CatalogRepository:
                 .order_by(CatalogProductGtin.sort_order)
             ).all()
             gtins = [str(item.gtin) for item in gtin_rows]
+            box_rows = session.scalars(
+                select(CatalogProductBox)
+                .where(CatalogProductBox.product_id == row.id)
+                .order_by(CatalogProductBox.sort_order)
+            ).all()
+            boxes = [
+                {"barcode": b.barcode, "quantity": int(b.quantity)}
+                for b in box_rows
+            ]
             if row.is_kit:
                 comp_rows = session.scalars(
                     select(CatalogKitComponent).where(CatalogKitComponent.kit_product_id == row.id)
@@ -1946,6 +2162,7 @@ class CatalogRepository:
             marking_type_name=marking_name,
             barcodes=barcodes,
             gtins=gtins,
+            boxes=boxes,
             components=components,
             prices=prices,
             barcode_count=barcode_count,
@@ -1983,6 +2200,10 @@ class CatalogRepository:
         if include_details:
             d["barcodes"] = row.barcodes
             d["gtins"] = list(row.gtins)
+            d["boxes"] = [
+                {"barcode": str(item["barcode"]), "quantity": int(item["quantity"])}
+                for item in (row.boxes or [])
+            ]
             d["components"] = [
                 {
                     "component_product_id": c.component_product_id,

@@ -289,11 +289,6 @@ def create_dashboard_app(
 
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
-    source_wh = inventory_repo.get_sync_source_warehouse_id()
-    if source_wh is None:
-        source_wh = storage_repo.get_default_warehouse_id()
-    if source_wh is not None:
-        orders_repo.backfill_from_order_items(int(source_wh))
 
     shipments_repo = WarehouseShipmentsRepository(
         settings.db_url,
@@ -672,6 +667,7 @@ def create_dashboard_app(
         packing_repo,
         require_warehouse_user,
         crm_repo=crm_repo,
+        coordinator=coordinator,
     )
     require_tasks_access = make_require_tasks_access(
         settings.warehouse_tasks_api_token,

@@ -47,8 +47,8 @@ def create_db_engine(db_url: str):
 
     elif search_path and engine.dialect.name == "postgresql":
 
-        @event.listens_for(engine, "connect")
-        def _set_pg_search_path(dbapi_conn, _record) -> None:
+        @event.listens_for(engine, "checkout")
+        def _set_pg_search_path(dbapi_conn, _connection_record, _connection_proxy) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute(f'SET search_path TO "{search_path}"')
             cursor.close()

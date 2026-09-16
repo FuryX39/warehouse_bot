@@ -53,11 +53,6 @@ def create_inventory_stack() -> tuple[
 
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
-    source_wh = inventory_repo.get_sync_source_warehouse_id()
-    if source_wh is None:
-        source_wh = storage_repo.get_default_warehouse_id()
-    if source_wh is not None:
-        orders_repo.backfill_from_order_items(int(source_wh))
 
     shipments_repo = WarehouseShipmentsRepository(
         settings.db_url,

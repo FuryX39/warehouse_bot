@@ -226,7 +226,10 @@ class StockCoordinator:
                 wh_id = self.inventory_repo.get_sync_source_warehouse_id()
                 if wh_id is not None:
                     upsert_orders_from_actions(
-                        self.orders_repo, warehouse_id=int(wh_id), actions=all_actions
+                        self.orders_repo,
+                        warehouse_id=int(wh_id),
+                        actions=all_actions,
+                        coordinator=self,
                     )
                     for adapter in self.adapters:
                         if not self._adapter_in_stock_sync(adapter) or not fetch_ok.get(adapter.name):

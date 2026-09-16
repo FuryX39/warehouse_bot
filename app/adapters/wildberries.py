@@ -61,6 +61,23 @@ def _wb_http_error(response: requests.Response) -> requests.HTTPError:
     return requests.HTTPError(detail, response=response)
 
 
+def _fbw_http_error(response: requests.Response) -> requests.HTTPError:
+    """Ошибки supplies-api: без подсказки про склады FBS, с категорией «Поставки»."""
+    body = (response.text or "").strip()
+    if len(body) > 800:
+        body = body[:800] + "…"
+    detail = f"{response.status_code} Client Error: {response.reason} for url: {response.url}"
+    if body:
+        detail += f" — {body}"
+    if response.status_code in (401, 403):
+        detail += (
+            " Для supplies-api.wildberries.ru нужен токен категории «Поставки» / Supplies."
+        )
+    elif response.status_code == 404:
+        detail += " Поставка или заказ FBW не найдены."
+    return requests.HTTPError(detail, response=response)
+
+
 def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
     """GET/POST/PUT с повторами при временных сбоях TLS и транспорта."""
     transient = (
@@ -165,6 +182,7 @@ class WildberriesAdapter(MarketplaceAdapter):
         # Категория «Контент» для списка карточек (vendorCode → chrtId). Часто совпадает с Marketplace-токеном.
         self._content_token = (content_token.strip() or api_token).strip()
         self._vendor_chrt_cache: tuple[float, dict[str, list[int]]] | None = None
+        self._commission_tariffs_cache: tuple[float, list[dict]] | None = None
 
     def is_configured(self) -> bool:
         return is_value_configured(self.api_token)
@@ -693,6 +711,130 @@ class WildberriesAdapter(MarketplaceAdapter):
         data = response.json() or {}
         return [item for item in data.get("orders") or [] if isinstance(item, dict)]
 
+    def fetch_order_by_id(self, order_id: int, *, around_ts: int | None = None) -> dict | None:
+        """Одно сборочное задание WB: сначала /orders/new, затем узкое окно /orders."""
+        try:
+            oid = int(order_id)
+        except (TypeError, ValueError):
+            return None
+        if not self.is_configured() or oid <= 0:
+            return None
+        for order in self.fetch_new_assembly_orders():
+            try:
+                if int(order.get("id")) == oid:
+                    return order
+            except (TypeError, ValueError):
+                continue
+        headers = self._auth_headers()
+        now = int(time.time())
+        ts = int(around_ts or now)
+        date_from = max(0, ts - 3 * 86400)
+        date_to = min(now + 86400, max(ts + 3 * 86400, now))
+        for order in self._fetch_assembly_orders_between(headers, date_from, date_to):
+            try:
+                if int(order.get("id")) == oid:
+                    return order
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def fetch_commission_tariffs(self) -> list[dict]:
+        """GET common-api /api/v1/tariffs/commission — % КВВ по предметам."""
+        now = time.time()
+        cached = self._commission_tariffs_cache
+        if cached and now - cached[0] < 3600:
+            return cached[1]
+        if not self.is_configured():
+            return []
+        try:
+            response = _wb_request(
+                "GET",
+                "https://common-api.wildberries.ru/api/v1/tariffs/commission",
+                headers=self._auth_headers(),
+                timeout=60,
+            )
+            if not response.ok:
+                raise _wb_http_error(response)
+            data = response.json() or {}
+            rows = data.get("report") or data.get("data") or []
+            out = [row for row in rows if isinstance(row, dict)]
+        except Exception:
+            logger.warning("Wildberries commission tariffs failed", exc_info=True)
+            return cached[1] if cached else []
+        self._commission_tariffs_cache = (now, out)
+        return out
+
+    def fetch_product_card(self, *, vendor_code: str = "", nm_id: int | None = None) -> dict | None:
+        search = str(vendor_code or "").strip() or (str(nm_id) if nm_id else "")
+        if not search or not self._content_token:
+            return None
+        payload = {
+            "settings": {
+                "cursor": {"limit": 20},
+                "filter": {"textSearch": search, "withPhoto": -1},
+            }
+        }
+        try:
+            response = _wb_request(
+                "POST",
+                f"{_CONTENT_BASE}/content/v2/get/cards/list",
+                headers={
+                    "Authorization": self._content_token,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=60,
+            )
+            if not response.ok:
+                raise _wb_http_error(response)
+        except Exception:
+            logger.warning("Wildberries card lookup failed search=%s", search, exc_info=True)
+            return None
+        rows = (response.json() or {}).get("cards") or []
+        want_nm = int(nm_id) if nm_id else None
+        want_vc = str(vendor_code or "").strip().casefold()
+
+        def _match(cards: list) -> dict | None:
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                vc = str(card.get("vendorCode") or "").strip().casefold()
+                try:
+                    cid = int(card.get("nmID") or card.get("nmId") or 0)
+                except (TypeError, ValueError):
+                    cid = 0
+                if want_vc and vc == want_vc:
+                    return card
+                if want_nm and cid == want_nm:
+                    return card
+            return None
+
+        hit = _match(rows)
+        if hit is not None:
+            return hit
+        if want_nm and search != str(want_nm):
+            try:
+                response = _wb_request(
+                    "POST",
+                    f"{_CONTENT_BASE}/content/v2/get/cards/list",
+                    headers={
+                        "Authorization": self._content_token,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "settings": {
+                            "cursor": {"limit": 20},
+                            "filter": {"textSearch": str(want_nm), "withPhoto": -1},
+                        }
+                    },
+                    timeout=60,
+                )
+                if response.ok:
+                    return _match((response.json() or {}).get("cards") or [])
+            except Exception:
+                logger.warning("Wildberries card lookup by nmId failed nm=%s", want_nm, exc_info=True)
+        return None
+
     def list_supplies(self, *, limit: int = 100, next_cursor: int = 0) -> tuple[list[dict], int]:
         if not self.is_configured():
             return [], 0
@@ -824,9 +966,11 @@ class WildberriesAdapter(MarketplaceAdapter):
                 }
         return result
 
+    # Публичный FBW API (supplies-api) — только чтение поставки, товаров и уже
+    # созданных коробов. Создать короба, записать состав и даты этими методами нельзя.
     _FBW_BASE = "https://supplies-api.wildberries.ru"
 
-    def _fbw_get_json(self, path: str) -> object:
+    def _fbw_get_json(self, path: str, *, params: dict[str, str] | None = None) -> object:
         if not self.is_configured():
             raise ValueError("Wildberries не настроен")
         response = _wb_request(
@@ -834,14 +978,25 @@ class WildberriesAdapter(MarketplaceAdapter):
             f"{self._FBW_BASE}{path}",
             headers=self._auth_headers(),
             timeout=90,
+            params=params,
         )
         if not response.ok:
-            raise _wb_http_error(response)
+            raise _fbw_http_error(response)
         return response.json()
+
+    def _fbw_get_json_supply(self, path: str) -> object:
+        """GET поставки FBW; при 404 повторяет с isPreorderID=true (ID заказа, не поставки)."""
+        try:
+            return self._fbw_get_json(path)
+        except requests.HTTPError as exc:
+            resp = exc.response
+            if resp is None or resp.status_code != 404:
+                raise
+            return self._fbw_get_json(path, params={"isPreorderID": "true"})
 
     def fetch_fbw_supply(self, supply_id: str | int) -> dict:
         sid = _parse_fbw_supply_id(supply_id)
-        data = self._fbw_get_json(f"/api/v1/supplies/{sid}")
+        data = self._fbw_get_json_supply(f"/api/v1/supplies/{sid}")
         if not isinstance(data, dict):
             raise ValueError("Некорректный ответ WB по поставке FBW")
         return data
@@ -849,7 +1004,7 @@ class WildberriesAdapter(MarketplaceAdapter):
     def fetch_fbw_supply_goods(self, supply_id: str | int) -> list[dict]:
         sid = _parse_fbw_supply_id(supply_id)
         return _fbw_dict_list(
-            self._fbw_get_json(f"/api/v1/supplies/{sid}/goods"),
+            self._fbw_get_json_supply(f"/api/v1/supplies/{sid}/goods"),
             "goods",
             "items",
             "data",
@@ -858,7 +1013,7 @@ class WildberriesAdapter(MarketplaceAdapter):
     def fetch_fbw_supply_packages(self, supply_id: str | int) -> list[dict]:
         sid = _parse_fbw_supply_id(supply_id)
         return _fbw_dict_list(
-            self._fbw_get_json(f"/api/v1/supplies/{sid}/package"),
+            self._fbw_get_json_supply(f"/api/v1/supplies/{sid}/package"),
             "packages",
             "package",
             "items",

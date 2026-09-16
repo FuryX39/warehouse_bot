@@ -24,6 +24,7 @@ def register_warehouse_wms_routes(
     packing_repo,
     require_warehouse_user,
     crm_repo: CrmRepository | None = None,
+    coordinator=None,
 ) -> None:
     @app.get("/api/warehouse/orders/meta")
     async def api_orders_meta(
@@ -34,6 +35,11 @@ def register_warehouse_wms_routes(
             "warehouses": storage_repo.warehouses_with_bins(),
             "assignees": assignees,
             "counterparties": crm_repo.list_counterparty_picker() if crm_repo else [],
+            "price_types": crm_repo.get_meta().get("price_types", []) if crm_repo else [],
+            "order_kinds": [
+                {"id": "sale", "name": "Продажа покупателю"},
+                {"id": "commission", "name": "Передача на комиссию"},
+            ],
             "statuses": [
                 {"id": "open", "name": "Открыт"},
                 {"id": "in_wave", "name": "В волне"},
@@ -86,12 +92,90 @@ def register_warehouse_wms_routes(
             "pages": pages,
         }
 
+    @app.get("/api/warehouse/orders/products/search")
+    async def api_orders_search_products(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        params = request.query_params
+        products = catalog_repo.list_products_picker(
+            name=str(params.get("name") or "").strip(),
+            sku=str(params.get("sku") or "").strip(),
+            code=str(params.get("code") or "").strip(),
+            q=str(params.get("q") or "").strip(),
+        )
+        return {"products": products}
+
+    @app.post("/api/warehouse/orders/price-by-type")
+    async def api_orders_price_by_type(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            price_type_id = int((body or {}).get("price_type_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Выберите вид цены") from exc
+        raw_ids = (body or {}).get("product_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(status_code=400, detail="product_ids обязателен")
+        try:
+            product_ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Некорректные product_ids") from exc
+        prices = catalog_repo.get_prices_for_products(product_ids, price_type_id)
+        out = {str(pid): prices.get(pid, "0.00") for pid in product_ids}
+        return {"prices": out}
+
     @app.get("/api/warehouse/orders/{order_id}")
     async def api_orders_get(
         order_id: int,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
         row = orders_repo.get_order(order_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Заказ не найден")
+        return {"order": orders_repo.to_dict(row)}
+
+    @app.post("/api/warehouse/orders")
+    async def api_orders_create(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        payload = dict(body) if isinstance(body, dict) else {}
+        if not payload.get("warehouse_id"):
+            payload["warehouse_id"] = storage_repo.get_default_warehouse_id()
+        try:
+            row = orders_repo.create_manual_order(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"order": orders_repo.to_dict(row)}
+
+    @app.patch("/api/warehouse/orders/{order_id}")
+    async def api_orders_update(
+        order_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        payload = body if isinstance(body, dict) else {}
+        try:
+            row = orders_repo.update_order(order_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if row is None:
+            raise HTTPException(status_code=404, detail="Заказ не найден")
+        return {"order": orders_repo.to_dict(row)}
+
+    @app.post("/api/warehouse/orders/{order_id}/apply-price-type")
+    async def api_orders_apply_price_type(
+        order_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            price_type_id = int((body or {}).get("price_type_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Выберите вид цены") from exc
+        row = orders_repo.apply_price_type(order_id, price_type_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Заказ не найден")
         return {"order": orders_repo.to_dict(row)}

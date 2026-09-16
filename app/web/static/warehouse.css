@@ -1103,6 +1103,107 @@ body.wh-body {
   max-width: 640px;
 }
 
+.wh-modal.wh-modal-order {
+  max-width: 1120px;
+}
+
+.wh-order-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.wh-order-form-grid label,
+.wh-order-comment-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.wh-order-comment-label {
+  margin-bottom: 0.75rem;
+}
+
+.wh-order-comment-label textarea,
+.wh-order-form-grid input,
+.wh-order-form-grid select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.wh-order-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 0.75rem;
+}
+
+.wh-order-lines-table input {
+  width: 5.5rem;
+  padding: 0.25rem 0.35rem;
+  box-sizing: border-box;
+}
+
+.wh-order-lines-table .wh-order-qty {
+  width: 4.2rem;
+}
+
+.wh-order-comm-head.hidden,
+.wh-order-comm-cell.hidden {
+  display: none;
+}
+
+.wh-cat-pt-cost {
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.wh-order-grid {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.wh-order-grid dt {
+  color: var(--wh-muted);
+  margin: 0;
+}
+
+.wh-order-grid dd {
+  margin: 0;
+}
+
+.wh-order-money-list {
+  margin: 0 0 0.85rem;
+}
+
+.wh-order-money-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 1.05rem;
+  margin: 0 0 0.25rem;
+}
+
+.wh-order-money {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+
+.wh-order-money-note {
+  color: var(--wh-muted);
+  font-size: 0.85rem;
+  font-weight: 400;
+  margin-bottom: 0.2rem;
+}
+
 .wh-modal-header {
   display: flex;
   align-items: center;

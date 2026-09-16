@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.adapters.base import ReservationAction
 from app.repositories import InventoryRepository, OrderItem
+from app.warehouse_order_money import fetch_order_money
+from app.warehouse_order_pricing import fill_empty_yandex_pricing
 from app.warehouse_orders_repository import (
+    SOURCE_YM,
     WarehouseOrdersRepository,
     posting_id_from_external,
 )
@@ -39,17 +42,40 @@ def upsert_orders_from_actions(
     *,
     warehouse_id: int,
     actions: list[ReservationAction],
+    coordinator: Any = None,
 ) -> int:
     grouped = group_actions_by_posting(actions)
     n = 0
     for (source, posting_id), lines in grouped.items():
-        orders_repo.upsert_from_posting(
+        row = orders_repo.upsert_from_posting(
             source=source,
             posting_id=posting_id,
             warehouse_id=int(warehouse_id),
             lines=lines,
         )
         n += 1
+        filled = orders_repo.fill_empty_costs(row.id)
+        if filled is not None:
+            row = filled
+        if source == SOURCE_YM:
+            try:
+                updated = fill_empty_yandex_pricing(
+                    orders_repo, coordinator=coordinator, order=row
+                )
+                if updated is not None:
+                    row = updated
+            except Exception:
+                logger.exception("yandex line pricing failed source=%s posting=%s", source, posting_id)
+            continue
+        needs_money = row.buyer_paid is None and row.cabinet_price is None
+        if coordinator is not None and needs_money:
+            try:
+                money = fetch_order_money(coordinator, source, posting_id, row.created_at_ts)
+            except Exception:
+                logger.exception("order money fetch failed source=%s posting=%s", source, posting_id)
+                money = None
+            if money:
+                orders_repo.set_order_money(row.id, money)
     return n
 
 

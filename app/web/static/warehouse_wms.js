@@ -1,5 +1,5 @@
 (function (global) {
-  var ordersMeta = { counterparties: [], statuses: [] };
+  var ordersMeta = { counterparties: [], statuses: [], price_types: [], order_kinds: [], warehouses: [] };
   var invMeta = { warehouses: [] };
 
   function esc(s) {
@@ -60,6 +60,441 @@
     return id || "—";
   }
 
+  function formatMoney(n) {
+    if (n == null || n === "") return "—";
+    var num = Number(n);
+    if (!isFinite(num)) return "—";
+    return num.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₽";
+  }
+
+  function parseMoneyInput(s) {
+    var v = String(s || "").trim().replace(/\s/g, "").replace(",", ".");
+    if (!v) return null;
+    var n = parseFloat(v);
+    return isNaN(n) ? null : n;
+  }
+
+  function moneyInputValue(n) {
+    if (n == null || n === "") return "";
+    var num = Number(n);
+    if (!isFinite(num)) return "";
+    return num.toFixed(2);
+  }
+
+  function round2(n) {
+    return Math.round(n * 100) / 100;
+  }
+
+  function splitVatClient(gross, rate) {
+    if (gross == null || !isFinite(gross)) return { net: "", vat: "" };
+    var r = Number(rate);
+    if (!isFinite(r) || r <= 0) return { net: moneyInputValue(gross), vat: moneyInputValue(0) };
+    var net = round2(gross / (1 + r / 100));
+    return { net: moneyInputValue(net), vat: moneyInputValue(round2(gross - net)) };
+  }
+
+  var orderModalSeq = 0;
+  var orderFormLines = [];
+
+  function closeOrderModal() {
+    orderModalSeq += 1;
+    var box = document.querySelector(".wh-modal-backdrop.wh-order-modal");
+    if (box) box.remove();
+    document.removeEventListener("keydown", onOrderModalKey);
+  }
+
+  function onOrderModalKey(e) {
+    if (e.key === "Escape") closeOrderModal();
+  }
+
+  function optionList(items, selectedId, emptyLabel) {
+    var html = emptyLabel ? '<option value="">' + esc(emptyLabel) + "</option>" : "";
+    (items || []).forEach(function (it) {
+      var sel = String(selectedId || "") === String(it.id) ? " selected" : "";
+      html += '<option value="' + esc(it.id) + '"' + sel + ">" + esc(it.name) + "</option>";
+    });
+    return html;
+  }
+
+  function priceTypeMenuHtml() {
+    if (!(ordersMeta.price_types || []).length) {
+      return '<p class="wh-msg">Нет видов цен.</p>';
+    }
+    return ordersMeta.price_types
+      .map(function (pt) {
+        return (
+          '<button type="button" class="wh-rc-price-type-opt" data-price-type-id="' +
+          esc(pt.id) +
+          '">' +
+          esc(pt.name) +
+          "</button>"
+        );
+      })
+      .join("");
+  }
+
+  function orderLineRowHtml(ln, index, kind) {
+    ln = ln || {};
+    var commClass = kind === "commission" ? "" : " hidden";
+    return (
+      '<tr class="wh-order-line-row" data-index="' +
+      index +
+      '">' +
+      "<td><code>" +
+      esc(ln.sku || "") +
+      "</code></td>" +
+      "<td>" +
+      esc(ln.name || "") +
+      "</td>" +
+      '<td><input type="number" class="wh-order-qty" min="0" value="' +
+      esc(ln.quantity == null ? 1 : ln.quantity) +
+      '" /></td>' +
+      '<td><input type="text" class="wh-order-price" inputmode="decimal" value="' +
+      esc(moneyInputValue(ln.unit_price)) +
+      '" /></td>' +
+      '<td><input type="text" class="wh-order-price-net" readonly value="' +
+      esc(moneyInputValue(ln.unit_price_net)) +
+      '" /></td>' +
+      '<td><input type="text" class="wh-order-vat-amt" readonly value="' +
+      esc(moneyInputValue(ln.vat_amount)) +
+      '" /></td>' +
+      '<td><input type="text" class="wh-order-cost" inputmode="decimal" value="' +
+      esc(moneyInputValue(ln.cost)) +
+      '" /></td>' +
+      '<td class="wh-order-comm-cell' +
+      commClass +
+      '"><input type="text" class="wh-order-commission" inputmode="decimal" value="' +
+      esc(moneyInputValue(ln.commission)) +
+      '" /></td>' +
+      '<td><button type="button" class="wh-btn wh-btn-sm wh-order-remove-line" title="Удалить">&times;</button></td></tr>'
+    );
+  }
+
+  function renderOrderLinesTable(root) {
+    var kind = (root.querySelector("#whOrderKind") || {}).value || "sale";
+    var body = root.querySelector("#whOrderLinesBody");
+    if (!orderFormLines.length) {
+      body.innerHTML =
+        '<tr><td colspan="9" class="wh-muted">Нет строк. Найдите товар ниже.</td></tr>';
+      return;
+    }
+    body.innerHTML = orderFormLines.map(function (ln, i) {
+      return orderLineRowHtml(ln, i, kind);
+    }).join("");
+    bindOrderLineEvents(root);
+    recalcOrderLineVat(root);
+  }
+
+  function recalcOrderLineVat(root) {
+    var rate = parseMoneyInput((root.querySelector("#whOrderVatRate") || {}).value);
+    root.querySelectorAll(".wh-order-line-row").forEach(function (tr) {
+      var gross = parseMoneyInput(tr.querySelector(".wh-order-price").value);
+      var parts = splitVatClient(gross, rate);
+      tr.querySelector(".wh-order-price-net").value = parts.net;
+      tr.querySelector(".wh-order-vat-amt").value = parts.vat;
+    });
+  }
+
+  function toggleCommissionColumns(root) {
+    var kind = (root.querySelector("#whOrderKind") || {}).value;
+    var show = kind === "commission";
+    root.querySelectorAll(".wh-order-comm-head, .wh-order-comm-cell").forEach(function (el) {
+      el.classList.toggle("hidden", !show);
+    });
+  }
+
+  function collectOrderLines(root) {
+    var out = [];
+    root.querySelectorAll(".wh-order-line-row").forEach(function (tr) {
+      var idx = parseInt(tr.getAttribute("data-index"), 10);
+      var src = orderFormLines[idx] || {};
+      out.push({
+        sku: src.sku,
+        product_id: src.product_id || null,
+        name: src.name || "",
+        quantity: parseInt(tr.querySelector(".wh-order-qty").value, 10) || 0,
+        unit_price: parseMoneyInput(tr.querySelector(".wh-order-price").value),
+        cost: parseMoneyInput(tr.querySelector(".wh-order-cost").value),
+        commission: parseMoneyInput(tr.querySelector(".wh-order-commission").value),
+      });
+    });
+    return out;
+  }
+
+  function bindOrderLineEvents(root) {
+    root.querySelectorAll(".wh-order-price").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        recalcOrderLineVat(root);
+      });
+    });
+    root.querySelectorAll(".wh-order-remove-line").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        orderFormLines = collectOrderLines(root);
+        var tr = btn.closest("tr");
+        var idx = parseInt(tr.getAttribute("data-index"), 10);
+        orderFormLines.splice(idx, 1);
+        renderOrderLinesTable(root);
+      });
+    });
+  }
+
+  function addProductToOrder(root, product) {
+    orderFormLines = collectOrderLines(root);
+    var sku = String(product.sku || "").trim();
+    if (!sku) return;
+    var existing = null;
+    for (var i = 0; i < orderFormLines.length; i++) {
+      if (orderFormLines[i].sku === sku) {
+        existing = orderFormLines[i];
+        break;
+      }
+    }
+    if (existing) {
+      existing.quantity = (parseInt(existing.quantity, 10) || 0) + 1;
+    } else {
+      orderFormLines.push({
+        sku: sku,
+        product_id: product.id || product.product_id || null,
+        name: product.name || sku,
+        quantity: 1,
+        unit_price: null,
+        cost: null,
+        commission: null,
+      });
+    }
+    renderOrderLinesTable(root);
+  }
+
+  function searchOrderProducts(root) {
+    var q = (root.querySelector("#whOrderProductQ") || {}).value || "";
+    var wrap = root.querySelector("#whOrderSearchResults");
+    if (!q.trim()) {
+      wrap.innerHTML = "";
+      return;
+    }
+    fetchJson("/api/warehouse/orders/products/search?q=" + encodeURIComponent(q.trim()))
+      .then(function (data) {
+        var list = data.products || [];
+        if (!list.length) {
+          wrap.innerHTML = '<p class="wh-msg">Ничего не найдено.</p>';
+          return;
+        }
+        wrap.innerHTML = list
+          .map(function (p) {
+            return (
+              '<button type="button" class="wh-rc-search-item">' +
+              esc(p.name) +
+              " · <code>" +
+              esc(p.sku) +
+              "</code></button>"
+            );
+          })
+          .join("");
+        wrap.querySelectorAll(".wh-rc-search-item").forEach(function (btn, i) {
+          btn.addEventListener("click", function () {
+            addProductToOrder(root, list[i]);
+            wrap.innerHTML = "";
+          });
+        });
+      })
+      .catch(function (err) {
+        wrap.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
+  function applyPriceTypeToOrder(orderId, priceTypeId, root) {
+    if (orderId) {
+      fetchJson("/api/warehouse/orders/" + orderId + "/apply-price-type", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price_type_id: priceTypeId }),
+      })
+        .then(function (d) {
+          orderFormLines = d.order.lines || [];
+          renderOrderLinesTable(root);
+        })
+        .catch(function (err) {
+          alert(err.message || "Не удалось выставить цены");
+        });
+      return;
+    }
+    var ids = [];
+    orderFormLines = collectOrderLines(root);
+    orderFormLines.forEach(function (ln) {
+      if (ln.product_id) ids.push(ln.product_id);
+    });
+    if (!ids.length) return;
+    fetchJson("/api/warehouse/orders/price-by-type", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ price_type_id: priceTypeId, product_ids: ids }),
+    })
+      .then(function (data) {
+        var prices = data.prices || {};
+        orderFormLines.forEach(function (ln) {
+          var raw = prices[String(ln.product_id)];
+          ln.unit_price = raw == null || raw === "" ? 0 : raw;
+        });
+        renderOrderLinesTable(root);
+      })
+      .catch(function (err) {
+        alert(err.message || "Не удалось выставить цены");
+      });
+  }
+
+  function collectOrderPayload(root, includeLines) {
+    var payload = {
+      status: root.querySelector("#whOrderStatus").value,
+      counterparty_id: parseInt(root.querySelector("#whOrderCounterparty").value, 10),
+      comment: root.querySelector("#whOrderComment").value || "",
+      order_kind: root.querySelector("#whOrderKind").value,
+      vat_rate: parseMoneyInput(root.querySelector("#whOrderVatRate").value),
+    };
+    if (includeLines) payload.lines = collectOrderLines(root);
+    return payload;
+  }
+
+  function openOrderModal(order) {
+    closeOrderModal();
+    var isNew = !order || !order.id;
+    orderFormLines = isNew ? [] : (order.lines || []).slice();
+    var title = isNew ? "Новый заказ покупателя" : esc(order.number) + " · " + esc(statusLabel(order.status));
+    var postingHtml = isNew
+      ? ""
+      : "<dt>Отправление</dt><dd>" + esc(order.posting_id || "—") + "</dd>";
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop wh-order-modal";
+    backdrop.innerHTML =
+      '<div class="wh-modal wh-modal-wide wh-modal-order" role="dialog">' +
+      '<div class="wh-modal-header"><h3>' +
+      title +
+      '</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<div class="wh-order-form-grid">' +
+      "<label>Статус <select id=\"whOrderStatus\">" +
+      optionList(ordersMeta.statuses, isNew ? "open" : order.status) +
+      "</select></label>" +
+      "<label>Контрагент <select id=\"whOrderCounterparty\">" +
+      optionList(ordersMeta.counterparties, isNew ? "" : order.counterparty_id, "— выберите —") +
+      "</select></label>" +
+      "<label>Тип заказа <select id=\"whOrderKind\">" +
+      optionList(ordersMeta.order_kinds, isNew ? "sale" : order.order_kind || "sale") +
+      "</select></label>" +
+      "<label>% НДС <input type=\"text\" id=\"whOrderVatRate\" inputmode=\"decimal\" value=\"" +
+      esc(moneyInputValue(isNew ? 22 : order.vat_rate == null ? 22 : order.vat_rate)) +
+      '" /></label></div>' +
+      (postingHtml ? '<dl class="wh-order-grid">' + postingHtml + "</dl>" : "") +
+      '<label class="wh-order-comment-label">Комментарий <textarea id="whOrderComment" rows="3">' +
+      esc(isNew ? "" : order.comment || "") +
+      "</textarea></label>" +
+      '<div class="wh-crm-toolbar">' +
+      '<div class="wh-rc-price-type-wrap">' +
+      '<button type="button" class="wh-btn wh-btn-sm" id="whOrderPriceBtn">Выставить цены по виду ▾</button>' +
+      '<div class="wh-rc-price-menu hidden" id="whOrderPriceMenu">' +
+      priceTypeMenuHtml() +
+      "</div></div></div>" +
+      '<div class="wh-order-table-wrap"><table class="wh-employees-table wh-crm-table wh-order-lines-table"><thead><tr>' +
+      "<th>Артикул</th><th>Наименование</th><th>Кол-во</th><th>Цена с НДС</th><th>Цена без НДС</th><th>Сумма НДС</th><th>Себестоимость</th>" +
+      '<th class="wh-order-comm-head">Комиссия</th><th></th>' +
+      '</tr></thead><tbody id="whOrderLinesBody"></tbody></table></div>' +
+      '<div class="wh-crm-toolbar"><input type="search" id="whOrderProductQ" class="wh-crm-search" placeholder="Найти товар по названию или артикулу…" /></div>' +
+      '<div id="whOrderSearchResults" class="wh-rc-search-results"></div>' +
+      '<p class="wh-msg" id="whOrderFormMsg"></p></div>' +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whOrderSave">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+    renderOrderLinesTable(backdrop);
+    toggleCommissionColumns(backdrop);
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", closeOrderModal);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", closeOrderModal);
+    backdrop.addEventListener("click", function (e) {
+      if (e.target === backdrop) closeOrderModal();
+    });
+    document.addEventListener("keydown", onOrderModalKey);
+    backdrop.querySelector("#whOrderKind").addEventListener("change", function () {
+      toggleCommissionColumns(backdrop);
+    });
+    backdrop.querySelector("#whOrderVatRate").addEventListener("input", function () {
+      recalcOrderLineVat(backdrop);
+    });
+    backdrop.querySelector("#whOrderPriceBtn").addEventListener("click", function (e) {
+      e.stopPropagation();
+      backdrop.querySelector("#whOrderPriceMenu").classList.toggle("hidden");
+    });
+    backdrop.querySelectorAll(".wh-rc-price-type-opt").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        backdrop.querySelector("#whOrderPriceMenu").classList.add("hidden");
+        applyPriceTypeToOrder(isNew ? null : order.id, parseInt(btn.getAttribute("data-price-type-id"), 10), backdrop);
+      });
+    });
+    var searchTimer = null;
+    backdrop.querySelector("#whOrderProductQ").addEventListener("input", function () {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(function () {
+        searchOrderProducts(backdrop);
+      }, 250);
+    });
+    backdrop.querySelector("#whOrderSave").addEventListener("click", function () {
+      var msg = backdrop.querySelector("#whOrderFormMsg");
+      msg.textContent = "";
+      var payload = collectOrderPayload(backdrop, true);
+      if (!payload.counterparty_id) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Укажите контрагента";
+        return;
+      }
+      if (!payload.lines.length) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Добавьте хотя бы одну строку";
+        return;
+      }
+      var url = isNew ? "/api/warehouse/orders" : "/api/warehouse/orders/" + order.id;
+      var method = isNew ? "POST" : "PATCH";
+      fetchJson(url, {
+        method: method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(function () {
+          closeOrderModal();
+          var reloadBtn = panelEl().querySelector("#whOrdersReload");
+          if (reloadBtn) reloadBtn.click();
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || "Не удалось сохранить";
+        });
+    });
+  }
+
+  function showOrderWindow(id) {
+    var seq = ++orderModalSeq;
+    var existing = document.querySelector(".wh-modal-backdrop.wh-order-modal");
+    if (existing) existing.remove();
+    var loading = document.createElement("div");
+    loading.className = "wh-modal-backdrop wh-order-modal";
+    loading.innerHTML =
+      '<div class="wh-modal wh-modal-order" role="dialog"><div class="wh-modal-header"><h3>Заказ</h3>' +
+      '<button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body"><p class="wh-msg">Загрузка…</p></div></div>';
+    document.body.appendChild(loading);
+    loading.querySelector(".wh-modal-close").addEventListener("click", closeOrderModal);
+    loading.addEventListener("click", function (e) {
+      if (e.target === loading) closeOrderModal();
+    });
+    document.addEventListener("keydown", onOrderModalKey);
+    fetchJson("/api/warehouse/orders/" + id)
+      .then(function (d) {
+        if (seq !== orderModalSeq) return;
+        openOrderModal(d.order);
+      })
+      .catch(function (err) {
+        if (seq !== orderModalSeq) return;
+        closeOrderModal();
+        alert((err && err.message) || "Не удалось открыть заказ");
+      });
+  }
   function counterpartyLabel(order) {
     return order.counterparty_name || "—";
   }
@@ -113,14 +548,14 @@
             })
             .join("") +
           "</select>" +
+          '<button type="button" class="wh-btn wh-btn-primary" id="whOrdersCreate">Создать заказ</button>' +
           '<button type="button" class="wh-btn" id="whOrdersReload">Обновить</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whOrdersShip">Отгрузить выбранные</button>' +
           "</div>" +
           '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
           "<th></th><th>ЗК</th><th>Контрагент</th><th>Комментарий</th><th>Статус</th><th>Дата заказа</th>" +
           "</tr></thead><tbody id=\"whOrdersBody\"></tbody></table>" +
-          '<div id="whOrdersPager"></div>' +
-          '<div id="whOrderDetail" class="wh-msg" hidden></div>';
+          '<div id="whOrdersPager"></div>';
 
         function ordersUrl(resetPage) {
           if (resetPage) ordersPage = 1;
@@ -137,37 +572,7 @@
         function bindOrderRows() {
           panelEl().querySelectorAll("#whOrdersBody tr[data-id]").forEach(function (tr) {
             tr.addEventListener("click", function () {
-              var id = tr.getAttribute("data-id");
-              fetchJson("/api/warehouse/orders/" + id).then(function (d) {
-                var o = d.order;
-                var lines = (o.lines || [])
-                  .map(function (ln) {
-                    return "<li>" + esc(ln.sku) + " × " + esc(ln.quantity) + " — " + esc(ln.name) + "</li>";
-                  })
-                  .join("");
-                var box = panelEl().querySelector("#whOrderDetail");
-                box.hidden = false;
-                box.innerHTML =
-                  "<h4>" +
-                  esc(o.number) +
-                  " · " +
-                  statusLabel(o.status) +
-                  "</h4>" +
-                  "<p>Контрагент: " +
-                  esc(o.counterparty_name || "—") +
-                  "</p>" +
-                  "<p>Комментарий: " +
-                  esc(o.comment || "—") +
-                  "</p>" +
-                  "<p>Дата заказа: " +
-                  esc(formatTs(o.created_at_ts)) +
-                  "</p>" +
-                  "<p>Обновлён: " +
-                  esc(formatTs(o.updated_at_ts)) +
-                  "</p><ul>" +
-                  lines +
-                  "</ul>";
-              });
+              showOrderWindow(tr.getAttribute("data-id"));
             });
           });
         }
@@ -195,6 +600,9 @@
 
         panelEl().querySelector("#whOrdersReload").addEventListener("click", function () {
           reload(true);
+        });
+        panelEl().querySelector("#whOrdersCreate").addEventListener("click", function () {
+          openOrderModal(null);
         });
         panelEl().querySelector("#whOrdersQ").addEventListener("keydown", function (e) {
           if (e.key === "Enter") reload(true);
@@ -375,8 +783,14 @@
                   title: "Отгрузка волны " + jobId,
                 }),
               })
-                .then(function () {
-                  alert("Отгрузка волны проведена");
+                .then(function (data) {
+                  var warns = (data && data.shipment && data.shipment.warnings) || [];
+                  alert(
+                    warns.length
+                      ? "Отгрузка волны проведена:\n" + warns.slice(0, 8).join("\n")
+                      : "Отгрузка волны проведена. Заказы в статусе «Отгружено»."
+                  );
+                  renderPickWaves(tab, item);
                 })
                 .catch(function (err) {
                   alert(err.message || "Ошибка");

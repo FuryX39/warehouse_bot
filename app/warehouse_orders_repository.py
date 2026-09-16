@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Iterable
 
-from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint, func, or_, select
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -29,11 +30,18 @@ ORDERS_LIST_PAGE_SIZE = 50
 SOURCE_OZON = "ozon"
 SOURCE_WB = "wildberries"
 SOURCE_YM = "yandex_market"
+SOURCE_MANUAL = "manual"
 SOURCE_COUNTERPARTY_NAMES = {
     SOURCE_OZON: "Ozon",
     SOURCE_WB: "Wildberries",
     SOURCE_YM: "Яндекс Маркет",
 }
+ORDER_KIND_SALE = "sale"
+ORDER_KIND_COMMISSION = "commission"
+DEFAULT_VAT_RATE = Decimal("22")
+RETAIL_PRICE_TYPE_NAME = "Розничная цена"
+COST_PRICE_TYPE_NAME = "Себестоимость"
+MONEY = Numeric(12, 2)
 
 
 class _Base(DeclarativeBase):
@@ -50,9 +58,18 @@ class WarehouseOrder(_Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     posting_id: Mapped[str] = mapped_column(String(128), nullable=False)
     counterparty_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    comment: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default=ORDER_OPEN)
+    order_kind: Mapped[str] = mapped_column(String(16), nullable=False, default=ORDER_KIND_SALE)
+    vat_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=DEFAULT_VAT_RATE)
+    lines_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     packing_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    buyer_paid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cabinet_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    listed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mp_hold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mp_hold_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    mp_hold_note: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -69,6 +86,13 @@ class WarehouseOrderLine(_Base):
     product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    unit_price_net: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    vat_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    commission: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    buyer_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    subsidy: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
 
 
 @dataclass
@@ -78,6 +102,13 @@ class WarehouseOrderLineRow:
     product_id: int | None
     name: str
     quantity: int
+    unit_price: Decimal | None = None
+    unit_price_net: Decimal | None = None
+    vat_amount: Decimal | None = None
+    cost: Decimal | None = None
+    commission: Decimal | None = None
+    buyer_price: Decimal | None = None
+    subsidy: Decimal | None = None
 
 
 @dataclass
@@ -94,6 +125,15 @@ class WarehouseOrderRow:
     packing_job_id: int | None
     created_at_ts: int
     updated_at_ts: int
+    order_kind: str = ORDER_KIND_SALE
+    vat_rate: Decimal = DEFAULT_VAT_RATE
+    lines_manual: bool = False
+    buyer_paid: float | None = None
+    cabinet_price: float | None = None
+    listed_price: float | None = None
+    mp_hold: float | None = None
+    mp_hold_kind: str = ""
+    mp_hold_note: str = ""
     lines: list[WarehouseOrderLineRow] = field(default_factory=list)
 
 
@@ -139,22 +179,96 @@ class WarehouseOrdersRepository:
     def _migrate_customer_order_columns(self) -> None:
         from sqlalchemy import inspect, text
 
-        if "warehouse_orders" not in inspect(self.engine).get_table_names():
+        inspector = inspect(self.engine)
+        tables = inspector.get_table_names()
+        if "warehouse_orders" not in tables:
             return
-        cols = {c["name"] for c in inspect(self.engine).get_columns("warehouse_orders")}
+        cols = {c["name"] for c in inspector.get_columns("warehouse_orders")}
         statements: list[str] = []
+        added_kind = False
+        added_line_prices = False
         if "comment" not in cols:
             statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN comment VARCHAR(1024) NOT NULL DEFAULT ''"
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT ''"
             )
+        else:
+            statements.append("ALTER TABLE warehouse_orders ALTER COLUMN comment TYPE TEXT")
         if "counterparty_id" not in cols:
-            statements.append("ALTER TABLE warehouse_orders ADD COLUMN counterparty_id INTEGER")
-        if not statements:
-            return
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS counterparty_id INTEGER"
+            )
+        if "buyer_paid" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS buyer_paid DOUBLE PRECISION"
+            )
+        if "cabinet_price" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS cabinet_price DOUBLE PRECISION"
+            )
+        if "listed_price" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS listed_price DOUBLE PRECISION"
+            )
+        if "mp_hold" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS mp_hold DOUBLE PRECISION"
+            )
+        if "mp_hold_kind" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS mp_hold_kind "
+                "VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "mp_hold_note" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS mp_hold_note "
+                "VARCHAR(512) NOT NULL DEFAULT ''"
+            )
+        if "order_kind" not in cols:
+            added_kind = True
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS order_kind "
+                "VARCHAR(16) NOT NULL DEFAULT 'sale'"
+            )
+        if "vat_rate" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS vat_rate "
+                "NUMERIC(5,2) NOT NULL DEFAULT 22"
+            )
+        if "lines_manual" not in cols:
+            statements.append(
+                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS lines_manual "
+                "BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        line_cols: set[str] = set()
+        if "warehouse_order_lines" in tables:
+            line_cols = {c["name"] for c in inspector.get_columns("warehouse_order_lines")}
+            for col in (
+                "unit_price",
+                "unit_price_net",
+                "vat_amount",
+                "cost",
+                "commission",
+                "buyer_price",
+                "subsidy",
+            ):
+                if col not in line_cols:
+                    added_line_prices = True
+                    statements.append(
+                        f"ALTER TABLE warehouse_order_lines ADD COLUMN IF NOT EXISTS {col} NUMERIC(12,2)"
+                    )
         with Session(self.engine) as session:
             for sql in statements:
                 session.execute(text(sql))
+            if added_kind:
+                session.execute(
+                    text(
+                        "UPDATE warehouse_orders SET order_kind = 'commission' "
+                        "WHERE source IN ('ozon', 'wildberries', 'yandex_market')"
+                    )
+                )
             session.commit()
+        if added_line_prices:
+            self._backfill_line_prices()
 
     def _crm_ready(self, session: Session) -> bool:
         if self._crm_table_exists is None:
@@ -187,6 +301,205 @@ class WarehouseOrdersRepository:
             if cp and str(cp.full_name or "").strip():
                 return str(cp.full_name)
         return SOURCE_COUNTERPARTY_NAMES.get(str(row.source or ""), "")
+
+    def _money_col(self, value: Any):
+        from app.warehouse_order_pricing import parse_money
+
+        return parse_money(value)
+
+    def _vat_parts(self, unit_price: Any, vat_rate: Any) -> tuple[Any, Any]:
+        from app.warehouse_order_pricing import DEFAULT_VAT_RATE, parse_money, split_vat
+
+        rate = parse_money(vat_rate) or DEFAULT_VAT_RATE
+        return split_vat(parse_money(unit_price), rate)
+
+    def _apply_vat_on_line(self, line: WarehouseOrderLine, vat_rate: Any) -> None:
+        net, vat = self._vat_parts(line.unit_price, vat_rate)
+        line.unit_price_net = net
+        line.vat_amount = vat
+
+    def _catalog_by_sku(self, session: Session) -> dict[str, CatalogProduct]:
+        return {
+            str(p.sku or "").strip().casefold(): p
+            for p in session.scalars(select(CatalogProduct)).all()
+            if str(p.sku or "").strip()
+        }
+
+    def _price_map_for_type(self, session: Session, price_type_id: int | None) -> dict[int, Any]:
+        from app.catalog_repository import CatalogProductPrice
+        from app.warehouse_order_pricing import parse_money
+
+        if not price_type_id:
+            return {}
+        rows = session.scalars(
+            select(CatalogProductPrice).where(CatalogProductPrice.price_type_id == int(price_type_id))
+        ).all()
+        out: dict[int, Any] = {}
+        for row in rows:
+            amount = parse_money(row.price)
+            if amount is not None:
+                out[int(row.product_id)] = amount
+        return out
+
+    def _cost_price_type_id(self, session: Session) -> int | None:
+        from app.crm_repository import CrmPriceType
+
+        rows = session.scalars(
+            select(CrmPriceType).order_by(CrmPriceType.sort_order, CrmPriceType.id)
+        ).all()
+        for row in rows:
+            if bool(getattr(row, "is_cost", False)):
+                return int(row.id)
+        return None
+
+    def _price_type_id_by_name(self, session: Session, name: str) -> int | None:
+        from app.crm_repository import CrmPriceType
+
+        needle = str(name or "").strip().casefold()
+        if not needle:
+            return None
+        for row in session.scalars(select(CrmPriceType)).all():
+            if str(row.name or "").strip().casefold() == needle:
+                return int(row.id)
+        return None
+
+    def _ensure_cost_price_type(self, session: Session) -> int | None:
+        from app.crm_repository import CrmPriceType
+
+        existing = self._cost_price_type_id(session)
+        if existing:
+            return existing
+        if not self._crm_ready(session):
+            return None
+        row = None
+        for item in session.scalars(select(CrmPriceType)).all():
+            if str(item.name or "").strip().casefold() == COST_PRICE_TYPE_NAME.casefold():
+                row = item
+                break
+        if row is None:
+            max_order = session.scalar(select(func.max(CrmPriceType.sort_order))) or 0
+            row = CrmPriceType(name=COST_PRICE_TYPE_NAME, sort_order=int(max_order) + 1)
+            session.add(row)
+            session.flush()
+        row.is_cost = True
+        session.flush()
+        return int(row.id)
+
+    def _backfill_line_prices(self) -> None:
+        from app.warehouse_order_pricing import DEFAULT_VAT_RATE, parse_money
+
+        with Session(self.engine) as session:
+            if not self._crm_ready(session):
+                return
+            cost_type_id = self._ensure_cost_price_type(session)
+            retail_type_id = self._price_type_id_by_name(session, RETAIL_PRICE_TYPE_NAME)
+            cost_map = self._price_map_for_type(session, cost_type_id)
+            retail_map = self._price_map_for_type(session, retail_type_id)
+            catalog = {int(p.id): p for p in session.scalars(select(CatalogProduct)).all()}
+            sku_to_product = {
+                str(p.sku or "").strip().casefold(): p
+                for p in catalog.values()
+                if str(p.sku or "").strip()
+            }
+            orders = {int(o.id): o for o in session.scalars(select(WarehouseOrder)).all()}
+            lines = session.scalars(select(WarehouseOrderLine)).all()
+            for line in lines:
+                order = orders.get(int(line.order_id))
+                if order is None:
+                    continue
+                product = None
+                if line.product_id:
+                    product = catalog.get(int(line.product_id))
+                if product is None:
+                    product = sku_to_product.get(str(line.sku or "").strip().casefold())
+                    if product is not None:
+                        line.product_id = int(product.id)
+                pid = int(product.id) if product is not None else None
+                if line.cost is None:
+                    if pid is not None and pid in cost_map:
+                        line.cost = cost_map[pid]
+                    else:
+                        line.cost = parse_money("0")
+                if str(order.source) != SOURCE_YM and line.unit_price is None and pid is not None:
+                    if pid in retail_map:
+                        line.unit_price = retail_map[pid]
+                self._apply_vat_on_line(line, getattr(order, "vat_rate", None) or DEFAULT_VAT_RATE)
+            session.commit()
+
+    def fill_empty_costs(self, order_id: int) -> WarehouseOrderRow | None:
+        from app.warehouse_order_pricing import parse_money
+
+        with Session(self.engine) as session:
+            order = session.get(WarehouseOrder, int(order_id))
+            if order is None:
+                return None
+            cost_type_id = self._ensure_cost_price_type(session) if self._crm_ready(session) else None
+            cost_map = self._price_map_for_type(session, cost_type_id)
+            catalog = self._catalog_by_sku(session)
+            lines = session.scalars(
+                select(WarehouseOrderLine).where(WarehouseOrderLine.order_id == int(order.id))
+            ).all()
+            changed = False
+            for line in lines:
+                if line.cost is not None:
+                    continue
+                product = None
+                if line.product_id:
+                    product = session.get(CatalogProduct, int(line.product_id))
+                if product is None:
+                    product = catalog.get(str(line.sku or "").strip().casefold())
+                    if product is not None:
+                        line.product_id = int(product.id)
+                pid = int(product.id) if product is not None else None
+                if pid is not None and pid in cost_map:
+                    line.cost = cost_map[pid]
+                else:
+                    line.cost = parse_money("0")
+                changed = True
+            if changed:
+                session.commit()
+            session.refresh(order)
+            return self._order_row(session, order, load_lines=True)
+
+    def apply_empty_line_money(
+        self,
+        order_id: int,
+        patches: list[dict[str, Any]],
+        *,
+        comment: str | None = None,
+    ) -> WarehouseOrderRow | None:
+        with Session(self.engine) as session:
+            order = session.get(WarehouseOrder, int(order_id))
+            if order is None:
+                return None
+            by_sku = {
+                str(r.sku): r
+                for r in session.scalars(
+                    select(WarehouseOrderLine).where(WarehouseOrderLine.order_id == int(order.id))
+                ).all()
+            }
+            for raw in patches:
+                sku = str(raw.get("sku") or "").strip()
+                line = by_sku.get(sku)
+                if line is None:
+                    continue
+                if "unit_price" in raw and line.unit_price is None:
+                    line.unit_price = self._money_col(raw.get("unit_price"))
+                    self._apply_vat_on_line(line, order.vat_rate)
+                if "cost" in raw and line.cost is None:
+                    line.cost = self._money_col(raw.get("cost"))
+                if "commission" in raw and line.commission is None:
+                    line.commission = self._money_col(raw.get("commission"))
+                if "buyer_price" in raw and line.buyer_price is None:
+                    line.buyer_price = self._money_col(raw.get("buyer_price"))
+                if "subsidy" in raw and line.subsidy is None:
+                    line.subsidy = self._money_col(raw.get("subsidy"))
+            if comment is not None:
+                order.comment = str(comment)
+            order.updated_at_ts = int(time.time())
+            session.commit()
+            session.refresh(order)
+            return self._order_row(session, order, load_lines=True)
 
     def _backfill_comment_and_counterparty(self) -> None:
         from sqlalchemy import inspect
@@ -238,11 +551,12 @@ class WarehouseOrdersRepository:
                     WarehouseOrder.posting_id == pid,
                 )
             )
-            catalog = {
-                str(p.sku or "").strip().casefold(): p
-                for p in session.scalars(select(CatalogProduct)).all()
-                if str(p.sku or "").strip()
-            }
+            catalog = self._catalog_by_sku(session)
+            kind = (
+                ORDER_KIND_COMMISSION
+                if src in SOURCE_COUNTERPARTY_NAMES
+                else ORDER_KIND_SALE
+            )
             if row is None:
                 row = WarehouseOrder(
                     number=self.next_number(session),
@@ -252,6 +566,9 @@ class WarehouseOrdersRepository:
                     comment=pid,
                     counterparty_id=self._ensure_counterparty_id(session, src),
                     status=ORDER_OPEN,
+                    order_kind=kind,
+                    vat_rate=DEFAULT_VAT_RATE,
+                    lines_manual=False,
                     created_at_ts=now,
                     updated_at_ts=now,
                 )
@@ -266,11 +583,7 @@ class WarehouseOrdersRepository:
                             WarehouseOrder.posting_id == pid,
                         )
                     )
-                    catalog = {
-                        str(p.sku or "").strip().casefold(): p
-                        for p in session.scalars(select(CatalogProduct)).all()
-                        if str(p.sku or "").strip()
-                    }
+                    catalog = self._catalog_by_sku(session)
                     if row is None:
                         row = WarehouseOrder(
                             number=self.next_number(session),
@@ -280,6 +593,9 @@ class WarehouseOrdersRepository:
                             comment=pid,
                             counterparty_id=self._ensure_counterparty_id(session, src),
                             status=ORDER_OPEN,
+                            order_kind=kind,
+                            vat_rate=DEFAULT_VAT_RATE,
+                            lines_manual=False,
                             created_at_ts=now,
                             updated_at_ts=now,
                         )
@@ -298,6 +614,221 @@ class WarehouseOrdersRepository:
                     row.updated_at_ts = now
             session.commit()
             session.refresh(row)
+            created = self._order_row(session, row, load_lines=True)
+        filled = self.fill_empty_costs(created.id)
+        return filled or created
+
+    def set_order_money(self, order_id: int, money: dict[str, Any] | None) -> None:
+        if not money:
+            return
+        with Session(self.engine) as session:
+            row = session.get(WarehouseOrder, int(order_id))
+            if row is None:
+                return
+            row.buyer_paid = money.get("buyer_paid")
+            row.cabinet_price = money.get("cabinet_price")
+            row.listed_price = money.get("listed_price")
+            row.mp_hold = money.get("mp_hold")
+            row.mp_hold_kind = str(money.get("mp_hold_kind") or "")[:32]
+            row.mp_hold_note = str(money.get("mp_hold_note") or "")[:512]
+            row.updated_at_ts = int(time.time())
+            session.commit()
+
+    def _merge_line_payloads(self, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        by_sku: dict[str, dict[str, Any]] = {}
+        for raw in lines:
+            if not isinstance(raw, dict):
+                continue
+            sku = str(raw.get("sku") or "").strip()
+            if not sku:
+                continue
+            qty = int(raw.get("quantity") or 0)
+            prev = by_sku.get(sku)
+            if prev is None:
+                item = dict(raw)
+                item["sku"] = sku
+                item["quantity"] = qty
+                by_sku[sku] = item
+            else:
+                prev["quantity"] = int(prev.get("quantity") or 0) + qty
+        return list(by_sku.values())
+
+    def _write_line_money(self, line: WarehouseOrderLine, payload: dict[str, Any], vat_rate) -> None:
+        from app.warehouse_order_pricing import parse_money
+
+        if "unit_price" in payload:
+            line.unit_price = parse_money(payload.get("unit_price"))
+            self._apply_vat_on_line(line, vat_rate)
+        if "cost" in payload:
+            line.cost = parse_money(payload.get("cost"))
+        if "commission" in payload:
+            line.commission = parse_money(payload.get("commission"))
+        if "buyer_price" in payload:
+            line.buyer_price = parse_money(payload.get("buyer_price"))
+        if "subsidy" in payload:
+            line.subsidy = parse_money(payload.get("subsidy"))
+
+    def _set_manual_lines(
+        self,
+        session: Session,
+        order: WarehouseOrder,
+        lines: list[dict[str, Any]],
+        catalog: dict[str, CatalogProduct],
+        *,
+        lock_lines: bool,
+    ) -> None:
+        merged = self._merge_line_payloads(lines)
+        existing = {
+            str(r.sku): r
+            for r in session.scalars(
+                select(WarehouseOrderLine).where(WarehouseOrderLine.order_id == int(order.id))
+            ).all()
+        }
+        keep: set[str] = set()
+        for payload in merged:
+            sku = str(payload["sku"])
+            keep.add(sku)
+            product = catalog.get(sku.casefold())
+            name = str(payload.get("name") or "") or (str(product.name) if product else sku)
+            product_id = payload.get("product_id")
+            try:
+                product_id = int(product_id) if product_id not in (None, "") else None
+            except (TypeError, ValueError):
+                product_id = None
+            if product_id is None and product is not None:
+                product_id = int(product.id)
+            row = existing.get(sku)
+            if row is None:
+                row = WarehouseOrderLine(
+                    order_id=int(order.id),
+                    sku=sku,
+                    product_id=product_id,
+                    name=name[:512],
+                    quantity=int(payload.get("quantity") or 0),
+                )
+                session.add(row)
+                session.flush()
+            else:
+                row.quantity = int(payload.get("quantity") or 0)
+                row.name = name[:512]
+                row.product_id = product_id
+            self._write_line_money(row, payload, order.vat_rate)
+            if row.unit_price is not None:
+                self._apply_vat_on_line(row, order.vat_rate)
+        for sku, row in existing.items():
+            if sku not in keep:
+                session.delete(row)
+        if lock_lines:
+            order.lines_manual = True
+
+    def create_manual_order(self, payload: dict[str, Any]) -> WarehouseOrderRow:
+        from app.warehouse_order_pricing import parse_money
+
+        now = int(time.time())
+        status = str(payload.get("status") or ORDER_OPEN).strip() or ORDER_OPEN
+        kind = str(payload.get("order_kind") or ORDER_KIND_SALE).strip() or ORDER_KIND_SALE
+        if kind not in {ORDER_KIND_SALE, ORDER_KIND_COMMISSION}:
+            raise ValueError("Некорректный тип заказа")
+        vat_rate = parse_money(payload.get("vat_rate")) or DEFAULT_VAT_RATE
+        try:
+            warehouse_id = int(payload.get("warehouse_id"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Склад обязателен") from exc
+        try:
+            counterparty_id = int(payload.get("counterparty_id"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Контрагент обязателен") from exc
+        raw_lines = payload.get("lines") or []
+        if not isinstance(raw_lines, list) or not raw_lines:
+            raise ValueError("Добавьте хотя бы одну строку")
+        with Session(self.engine) as session:
+            number = self.next_number(session)
+            row = WarehouseOrder(
+                number=number,
+                warehouse_id=warehouse_id,
+                source=SOURCE_MANUAL,
+                posting_id=f"M-{number}",
+                counterparty_id=counterparty_id,
+                comment=str(payload.get("comment") or ""),
+                status=status,
+                order_kind=kind,
+                vat_rate=vat_rate,
+                lines_manual=True,
+                created_at_ts=now,
+                updated_at_ts=now,
+            )
+            session.add(row)
+            session.flush()
+            catalog = self._catalog_by_sku(session)
+            self._set_manual_lines(session, row, raw_lines, catalog, lock_lines=True)
+            session.commit()
+            session.refresh(row)
+            created = self._order_row(session, row, load_lines=True)
+        filled = self.fill_empty_costs(created.id)
+        return filled or created
+
+    def update_order(self, order_id: int, payload: dict[str, Any]) -> WarehouseOrderRow | None:
+        from app.warehouse_order_pricing import parse_money
+
+        with Session(self.engine) as session:
+            row = session.get(WarehouseOrder, int(order_id))
+            if row is None:
+                return None
+            if "status" in payload and payload.get("status") is not None:
+                row.status = str(payload.get("status") or "").strip() or row.status
+            if "comment" in payload:
+                row.comment = str(payload.get("comment") or "")
+            if "order_kind" in payload and payload.get("order_kind") is not None:
+                kind = str(payload.get("order_kind") or "").strip()
+                if kind not in {ORDER_KIND_SALE, ORDER_KIND_COMMISSION}:
+                    raise ValueError("Некорректный тип заказа")
+                row.order_kind = kind
+            if "counterparty_id" in payload and payload.get("counterparty_id") not in (None, ""):
+                row.counterparty_id = int(payload.get("counterparty_id"))
+            vat_changed = False
+            if "vat_rate" in payload and payload.get("vat_rate") not in (None, ""):
+                row.vat_rate = parse_money(payload.get("vat_rate")) or DEFAULT_VAT_RATE
+                vat_changed = True
+            catalog = self._catalog_by_sku(session)
+            if "lines" in payload:
+                raw_lines = payload.get("lines") or []
+                if not isinstance(raw_lines, list):
+                    raise ValueError("lines должен быть массивом")
+                self._set_manual_lines(session, row, raw_lines, catalog, lock_lines=True)
+            elif vat_changed:
+                for line in session.scalars(
+                    select(WarehouseOrderLine).where(WarehouseOrderLine.order_id == int(row.id))
+                ).all():
+                    self._apply_vat_on_line(line, row.vat_rate)
+            row.updated_at_ts = int(time.time())
+            session.commit()
+            session.refresh(row)
+            updated = self._order_row(session, row, load_lines=True)
+        filled = self.fill_empty_costs(updated.id)
+        return filled or updated
+
+    def apply_price_type(self, order_id: int, price_type_id: int) -> WarehouseOrderRow | None:
+        with Session(self.engine) as session:
+            row = session.get(WarehouseOrder, int(order_id))
+            if row is None:
+                return None
+            price_map = self._price_map_for_type(session, int(price_type_id))
+            catalog = self._catalog_by_sku(session)
+            lines = session.scalars(
+                select(WarehouseOrderLine).where(WarehouseOrderLine.order_id == int(row.id))
+            ).all()
+            for line in lines:
+                pid = int(line.product_id) if line.product_id else None
+                if pid is None:
+                    product = catalog.get(str(line.sku or "").strip().casefold())
+                    if product is not None:
+                        pid = int(product.id)
+                        line.product_id = pid
+                line.unit_price = price_map.get(pid, Decimal("0.00")) if pid else Decimal("0.00")
+                self._apply_vat_on_line(line, row.vat_rate)
+            row.updated_at_ts = int(time.time())
+            session.commit()
+            session.refresh(row)
             return self._order_row(session, row, load_lines=True)
 
     def _all_lines_zero(self, session: Session, order_id: int) -> bool:
@@ -314,6 +845,8 @@ class WarehouseOrdersRepository:
         catalog: dict[str, CatalogProduct],
     ) -> None:
         if order.status in TERMINAL_STATUSES:
+            return
+        if bool(getattr(order, "lines_manual", False)):
             return
         by_sku: dict[str, dict[str, Any]] = {}
         for raw in lines:
@@ -582,7 +1115,10 @@ class WarehouseOrdersRepository:
             return out
 
     def backfill_from_order_items(self, warehouse_id: int) -> int:
-        """Создаёт заказы из order_items без повторного списания."""
+        """Создаёт заказы из order_items без повторного списания.
+
+        Только разовый прогон (`python tools/backfill_warehouse_orders.py`), не старт web/sync.
+        """
         created = 0
         with Session(self.engine) as session:
             items = session.scalars(select(OrderItem)).all()
@@ -637,6 +1173,8 @@ class WarehouseOrdersRepository:
                     comment=posting_id,
                     counterparty_id=self._ensure_counterparty_id(session, source),
                     status=status,
+                    order_kind=ORDER_KIND_COMMISSION if source in SOURCE_COUNTERPARTY_NAMES else ORDER_KIND_SALE,
+                    vat_rate=DEFAULT_VAT_RATE,
                     created_at_ts=min((int(r.first_seen_ts) or now) for r in rows) or now,
                     updated_at_ts=now,
                 )
@@ -669,6 +1207,8 @@ class WarehouseOrdersRepository:
         return created
 
     def to_dict(self, row: WarehouseOrderRow) -> dict[str, Any]:
+        from app.warehouse_order_pricing import money_json
+
         return {
             "id": row.id,
             "number": row.number,
@@ -679,6 +1219,9 @@ class WarehouseOrdersRepository:
             "counterparty_name": row.counterparty_name,
             "comment": row.comment,
             "status": row.status,
+            "order_kind": row.order_kind,
+            "vat_rate": money_json(row.vat_rate),
+            "lines_manual": bool(row.lines_manual),
             "packing_job_id": row.packing_job_id,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
@@ -689,12 +1232,21 @@ class WarehouseOrdersRepository:
                     "product_id": ln.product_id,
                     "name": ln.name,
                     "quantity": ln.quantity,
+                    "unit_price": money_json(ln.unit_price),
+                    "unit_price_net": money_json(ln.unit_price_net),
+                    "vat_amount": money_json(ln.vat_amount),
+                    "cost": money_json(ln.cost),
+                    "commission": money_json(ln.commission),
+                    "buyer_price": money_json(ln.buyer_price),
+                    "subsidy": money_json(ln.subsidy),
                 }
                 for ln in row.lines
             ],
         }
 
     def _order_row(self, session: Session, row: WarehouseOrder, *, load_lines: bool) -> WarehouseOrderRow:
+        from app.warehouse_order_pricing import parse_money
+
         lines: list[WarehouseOrderLineRow] = []
         if load_lines:
             for it in session.scalars(
@@ -709,8 +1261,16 @@ class WarehouseOrdersRepository:
                         product_id=int(it.product_id) if it.product_id else None,
                         name=str(it.name or ""),
                         quantity=int(it.quantity),
+                        unit_price=parse_money(it.unit_price),
+                        unit_price_net=parse_money(it.unit_price_net),
+                        vat_amount=parse_money(it.vat_amount),
+                        cost=parse_money(it.cost),
+                        commission=parse_money(it.commission),
+                        buyer_price=parse_money(it.buyer_price),
+                        subsidy=parse_money(it.subsidy),
                     )
                 )
+        vat_rate = parse_money(getattr(row, "vat_rate", None)) or DEFAULT_VAT_RATE
         return WarehouseOrderRow(
             id=int(row.id),
             number=str(row.number),
@@ -724,5 +1284,14 @@ class WarehouseOrdersRepository:
             packing_job_id=int(row.packing_job_id) if row.packing_job_id else None,
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
+            order_kind=str(getattr(row, "order_kind", None) or ORDER_KIND_SALE),
+            vat_rate=vat_rate,
+            lines_manual=bool(getattr(row, "lines_manual", False)),
+            buyer_paid=float(row.buyer_paid) if row.buyer_paid is not None else None,
+            cabinet_price=float(row.cabinet_price) if row.cabinet_price is not None else None,
+            listed_price=float(row.listed_price) if row.listed_price is not None else None,
+            mp_hold=float(row.mp_hold) if row.mp_hold is not None else None,
+            mp_hold_kind=str(row.mp_hold_kind or ""),
+            mp_hold_note=str(row.mp_hold_note or ""),
             lines=lines,
         )

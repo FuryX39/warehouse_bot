@@ -59,6 +59,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
     def __init__(self, campaign_id: str, api_key: str) -> None:
         self.campaign_id = campaign_id
         self.api_key = api_key
+        self._business_id: int | None = None
 
     def is_configured(self) -> bool:
         return is_value_configured(self.campaign_id) and is_value_configured(self.api_key)
@@ -390,7 +391,8 @@ class YandexMarketAdapter(MarketplaceAdapter):
         )
         response.raise_for_status()
 
-    def classify_left_reserve(self, posting_id: str) -> str | None:
+    def fetch_order(self, posting_id: str) -> dict | None:
+        """GET /campaigns/{id}/orders/{orderId} — сумма покупателя и статус."""
         pid = str(posting_id or "").strip()
         if not pid or not self.is_configured():
             return None
@@ -406,6 +408,139 @@ class YandexMarketAdapter(MarketplaceAdapter):
             return None
         body = response.json() or {}
         order = body.get("order") or body
+        return order if isinstance(order, dict) else None
+
+    def fetch_order_stats(self, posting_id: str) -> dict | None:
+        """POST /campaigns/{id}/stats/orders — комиссии/удержания по заказу."""
+        pid = str(posting_id or "").strip()
+        if not pid or not pid.isdigit() or not self.is_configured():
+            return None
+        try:
+            response = requests.post(
+                f"{self.base_url}/campaigns/{self.campaign_id}/stats/orders",
+                headers=self._headers(),
+                json={"orders": [int(pid)]},
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("Yandex order stats failed order=%s", pid, exc_info=True)
+            return None
+        body = response.json() or {}
+        orders = ((body.get("result") or {}).get("orders")) or body.get("orders") or []
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            try:
+                if int(order.get("id")) == int(pid):
+                    return order
+            except (TypeError, ValueError):
+                continue
+        return orders[0] if orders and isinstance(orders[0], dict) else None
+
+    def fetch_business_id(self) -> int | None:
+        if self._business_id:
+            return self._business_id
+        if not self.is_configured():
+            return None
+        try:
+            response = requests.get(
+                f"{self.base_url}/campaigns/{self.campaign_id}",
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("Yandex campaign get failed", exc_info=True)
+            return None
+        body = response.json() or {}
+        campaign = body.get("campaign") if isinstance(body.get("campaign"), dict) else body
+        business = campaign.get("business") if isinstance(campaign.get("business"), dict) else {}
+        raw = business.get("id") or campaign.get("businessId") or body.get("businessId")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        self._business_id = value
+        return value
+
+    def fetch_offer_snapshots(self, offer_ids: list[str]) -> list[dict]:
+        """POST /v2/businesses/{id}/offer-mappings — категория и габариты для тарифов."""
+        ids = [str(x).strip() for x in offer_ids if str(x or "").strip()]
+        if not ids or not self.is_configured():
+            return []
+        business_id = self.fetch_business_id()
+        if not business_id:
+            return []
+        try:
+            response = requests.post(
+                f"{self.base_url}/v2/businesses/{business_id}/offer-mappings",
+                headers=self._headers(),
+                json={"offerIds": ids},
+                params={"limit": min(len(ids), 100)},
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("Yandex offer-mappings failed ids=%s", ids[:5], exc_info=True)
+            return []
+        body = response.json() or {}
+        rows = ((body.get("result") or {}).get("offerMappings")) or body.get("offerMappings") or []
+        out: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            offer = row.get("offer") if isinstance(row.get("offer"), dict) else {}
+            mapping = row.get("mapping") if isinstance(row.get("mapping"), dict) else {}
+            offer_id = str(offer.get("offerId") or row.get("offerId") or "").strip()
+            category = mapping.get("marketCategoryId") or offer.get("marketCategoryId")
+            out.append(
+                {
+                    "offerId": offer_id,
+                    "marketCategoryId": category,
+                    "weightDimensions": offer.get("weightDimensions")
+                    if isinstance(offer.get("weightDimensions"), dict)
+                    else {},
+                    "mapping": mapping,
+                    "offer": offer,
+                }
+            )
+        return out
+
+    def calculate_tariffs(self, offers: list[dict]) -> dict | None:
+        """POST /v2/tariffs/calculate — примерная стоимость услуг Маркета."""
+        if not offers or not self.is_configured():
+            return None
+        try:
+            campaign_id = int(str(self.campaign_id).strip())
+        except (TypeError, ValueError):
+            return None
+        try:
+            response = requests.post(
+                f"{self.base_url}/v2/tariffs/calculate",
+                headers=self._headers(),
+                json={
+                    "parameters": {"campaignId": campaign_id},
+                    "offers": offers,
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("Yandex tariffs calculate failed", exc_info=True)
+            return None
+        body = response.json() or {}
+        return body if isinstance(body, dict) else None
+
+    def classify_left_reserve(self, posting_id: str) -> str | None:
+        pid = str(posting_id or "").strip()
+        if not pid or not self.is_configured():
+            return None
+        order = self.fetch_order(pid)
+        if not order:
+            return None
         status = str(order.get("status") or "").strip().upper()
         substatus = str(order.get("substatus") or "").strip().upper()
         if any(substatus.startswith(p) for p in _NO_RESERVE_SUBSTATUS_PREFIXES):

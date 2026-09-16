@@ -469,6 +469,24 @@ def test_backfill_from_order_items(db_url: str) -> None:
     assert order.lines[0].quantity == 2
 
 
+def test_dashboard_startup_skips_order_backfill(db_url: str, tmp_path) -> None:
+    settings = _settings(tmp_path, db_url)
+    inventory = InventoryRepository(db_url)
+    inventory.init_schema()
+    movement = MovementRepository(db_url)
+    movement.init_schema()
+    dealer = DealerAnalysisRepository(settings.dealer_analysis_db_url, Path(settings.dealer_analysis_data_dir))
+    dealer.init_schema()
+    coordinator = StockCoordinator(
+        adapters=[],
+        inventory_repo=inventory,
+        stock_sync_enabled=False,
+    )
+    with patch.object(WarehouseOrdersRepository, "backfill_from_order_items") as mocked:
+        create_dashboard_app(settings, inventory, coordinator, movement, dealer)
+        mocked.assert_not_called()
+
+
 def test_upsert_from_sync_preserves_in_wave_status(db_url: str) -> None:
     stack = _wms_stack(db_url)
     stack["orders"].upsert_from_posting(

@@ -59,6 +59,7 @@ class CrmPriceType(_Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_cost: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class CrmCounterparty(_Base):
@@ -163,6 +164,7 @@ class CrmRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._migrate_price_type_defaults()
+        self._migrate_price_type_is_cost()
         self._seed_defaults()
 
     def _migrate_price_type_defaults(self) -> None:
@@ -182,6 +184,23 @@ class CrmRepository:
             with Session(self.engine) as session:
                 session.execute(text(sql))
                 session.commit()
+
+    def _migrate_price_type_is_cost(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "crm_price_types" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("crm_price_types")}
+        if "is_cost" in cols:
+            return
+        from app.db import add_boolean_column_sql
+
+        sql = add_boolean_column_sql(self.engine.dialect.name, "crm_price_types", "is_cost")
+        if sql is None:
+            return
+        with Session(self.engine) as session:
+            session.execute(text(sql))
+            session.commit()
 
     def _seed_defaults(self) -> None:
         with Session(self.engine) as session:
@@ -257,6 +276,7 @@ class CrmRepository:
             "name": row.name,
             "sort_order": row.sort_order,
             "is_default": bool(row.is_default),
+            "is_cost": bool(getattr(row, "is_cost", False)),
         }
 
     def save_statuses(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -367,6 +387,7 @@ class CrmRepository:
         with Session(self.engine) as session:
             existing = {p.id: p for p in session.scalars(select(CrmPriceType)).all()}
             keep_ids: set[int] = set()
+            cost_id: int | None = None
             for i, item in enumerate(items):
                 name = str(item.get("name") or "").strip()
                 if not name:
@@ -384,13 +405,20 @@ class CrmRepository:
                 else:
                     row.name = name
                     row.sort_order = i
+                row.is_cost = bool(item.get("is_cost"))
                 session.flush()
                 keep_ids.add(int(row.id))
+                if bool(row.is_cost):
+                    cost_id = int(row.id)
             for pid, row in existing.items():
                 if pid not in keep_ids:
                     if bool(row.is_default):
                         continue
                     session.delete(row)
+            session.flush()
+            if cost_id is not None:
+                for row in session.scalars(select(CrmPriceType)).all():
+                    row.is_cost = int(row.id) == cost_id
             session.commit()
             rows = session.scalars(
                 select(CrmPriceType).order_by(CrmPriceType.sort_order, CrmPriceType.name)

@@ -83,6 +83,7 @@ reports/packer_productivity*.xlsx
 
 # Local runtime data
 data/ozon_fbo_labels/
+data/order_money_cache.json
 tables_examples/
 dealer_examples/
 *.xlsx

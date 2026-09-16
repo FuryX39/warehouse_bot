@@ -1144,6 +1144,22 @@
     );
   }
 
+  function boxRow(box) {
+    box = box || {};
+    var qty = box.quantity != null && box.quantity !== "" ? box.quantity : 1;
+    return (
+      '<div class="wh-crm-component-row wh-cat-box-row">' +
+      '<input type="text" class="wh-crm-gtin-input wh-cat-box-barcode" value="' +
+      esc(box.barcode || "") +
+      '" placeholder="ШК короба" title="Штрихкод короба" />' +
+      '<label class="wh-crm-qty-label">Товаров в коробе ' +
+      '<input type="number" class="wh-crm-component-qty wh-cat-box-qty" min="1" step="1" value="' +
+      esc(qty) +
+      '" /></label>' +
+      '<button type="button" class="wh-btn wh-btn-sm wh-cat-box-remove" title="Удалить">&times;</button></div>'
+    );
+  }
+
   function componentRow(c) {
     c = c || {};
     var label = (c.component_name || c.name || "") + " (" + (c.component_sku || c.sku || "") + ")";
@@ -1183,6 +1199,7 @@
           marking_type_id: defaultMarkingId(),
           barcodes: [],
           gtins: [],
+          boxes: [],
           components: [],
         });
     load
@@ -1199,6 +1216,11 @@
             return gtinRow(gtin);
           })
           .join("");
+        var boxesHtml = (p.boxes || [])
+          .map(function (box) {
+            return boxRow(box);
+          })
+          .join("");
         var componentsHtml = kitComponents.map(componentRow).join("");
         var pricesList =
           p.prices && p.prices.length
@@ -1213,7 +1235,7 @@
             ? "≈ " + p.volume + " л"
             : "Считается из габаритов (л)";
         var pricesHtml = renderProductPriceFields(pricesList);
-        var kitSectionNum = formIsKit ? "5" : "4";
+        var kitSectionNum = formIsKit ? "6" : "5";
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whCatBackList">&larr; К списку</button>' +
@@ -1256,7 +1278,11 @@
           '<section class="wh-crm-section"><div class="wh-crm-section-head"><h4 class="wh-crm-section-title">3. Штрихкоды (Code128)</h4>' +
           '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddBarcode" title="Добавить">+</button></div>' +
           '<div id="whPrBarcodes">' + barcodesHtml + "</div></section>" +
-          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">4. Цены</h4>' +
+          '<section class="wh-crm-section"><div class="wh-crm-section-head"><h4 class="wh-crm-section-title">4. Короба</h4>' +
+          '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddBox" title="Добавить">+</button></div>' +
+          '<p class="wh-muted">Готовые грузоместа поставки: штрихкод короба и сколько штук товара внутри.</p>' +
+          '<div id="whPrBoxes">' + boxesHtml + "</div></section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">5. Цены</h4>' +
           '<div class="wh-form-row wh-cat-prices-row">' + pricesHtml + "</div></section>" +
           (formIsKit
             ? '<section class="wh-crm-section" id="whPrKitSection"><div class="wh-crm-section-head">' +
@@ -1316,6 +1342,14 @@
         root.querySelector("#whPrGtins").addEventListener("click", function (e) {
           if (e.target.classList.contains("wh-crm-gtin-remove")) {
             e.target.closest(".wh-crm-gtin-row").remove();
+          }
+        });
+        root.querySelector("#whPrAddBox").addEventListener("click", function () {
+          root.querySelector("#whPrBoxes").insertAdjacentHTML("beforeend", boxRow({ barcode: "", quantity: 1 }));
+        });
+        root.querySelector("#whPrBoxes").addEventListener("click", function (e) {
+          if (e.target.classList.contains("wh-cat-box-remove")) {
+            e.target.closest(".wh-cat-box-row").remove();
           }
         });
         if (formIsKit) {
@@ -1439,9 +1473,18 @@
       var gtin = inp.value.trim();
       if (gtin) gtins.push(gtin);
     });
+    var boxes = [];
+    root.querySelectorAll(".wh-cat-box-row").forEach(function (row) {
+      var codeEl = row.querySelector(".wh-cat-box-barcode");
+      var qtyEl = row.querySelector(".wh-cat-box-qty");
+      var code = codeEl ? String(codeEl.value || "").trim() : "";
+      if (!code) return;
+      var qty = parseInt(qtyEl ? qtyEl.value : "1", 10);
+      boxes.push({ barcode: code, quantity: qty > 0 ? qty : 1 });
+    });
     var components = [];
     if (formIsKit) {
-      root.querySelectorAll(".wh-crm-component-row").forEach(function (row) {
+      root.querySelectorAll("#whPrComponents .wh-crm-component-row").forEach(function (row) {
         var id = parseInt(row.getAttribute("data-component-id"), 10);
         var qty = parseInt(row.querySelector(".wh-crm-component-qty").value, 10) || 1;
         if (id) components.push({ component_product_id: id, quantity: Math.max(1, qty) });
@@ -1466,6 +1509,7 @@
       marking_type_id: root.querySelector("#whPrMarking").value || null,
       barcodes: barcodes,
       gtins: gtins,
+      boxes: boxes,
       components: components,
       prices: (meta.price_types || []).map(function (pt) {
         var inp = root.querySelector('[data-price-type-id="' + pt.id + '"]');
@@ -1549,13 +1593,18 @@
           '<td class="wh-cat-pt-name-cell">' +
           '<input type="text" class="wh-cat-pt-name" value="' + esc(pt.name) + '" data-id="' + esc(pt.id) + '" />' +
           "</td>" +
+          '<td><label class="wh-cat-pt-cost"><input type="checkbox" class="wh-cat-pt-is-cost" data-id="' +
+          esc(pt.id) +
+          '"' +
+          (pt.is_cost ? " checked" : "") +
+          " /> себестоимость</label></td>" +
           '<td class="wh-cat-pt-actions">' + exportBtn + " " + delBtn + "</td></tr>"
         );
       })
       .join("");
     root.querySelector("#whPtListWrap").innerHTML =
       '<table class="wh-employees-table wh-crm-table wh-cat-pt-table"><thead><tr>' +
-      "<th>Название</th><th></th></tr></thead><tbody>" + rows + "</tbody></table>";
+      "<th>Название</th><th></th><th></th></tr></thead><tbody>" + rows + "</tbody></table>";
     root.querySelectorAll(".wh-cat-pt-row").forEach(function (tr) {
       tr.addEventListener("click", function (e) {
         if (e.target.closest("input, button")) return;
@@ -1572,6 +1621,14 @@
           }
         }
         if (pt) openPriceTypeProductsModal(pt);
+      });
+    });
+    root.querySelectorAll(".wh-cat-pt-is-cost").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        if (!cb.checked) return;
+        root.querySelectorAll(".wh-cat-pt-is-cost").forEach(function (other) {
+          if (other !== cb) other.checked = false;
+        });
       });
     });
     root.querySelectorAll(".wh-cat-pt-export").forEach(function (btn) {
@@ -1651,6 +1708,9 @@
       var item = { name: name };
       var id = inp.getAttribute("data-id");
       if (id) item.id = parseInt(id, 10);
+      var row = inp.closest("tr");
+      var cost = row ? row.querySelector(".wh-cat-pt-is-cost") : null;
+      item.is_cost = !!(cost && cost.checked);
       items.push(item);
     });
     return fetchJson("/api/warehouse/crm/price-types", {
