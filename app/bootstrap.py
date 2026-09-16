@@ -17,6 +17,7 @@ from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.config import Settings, load_settings
 from app.config import dealer_analysis_data_dir_default
+from app.crm_repository import CrmRepository
 from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.movement_repository import MovementRepository
 from app.repositories import InventoryRepository
@@ -50,6 +51,9 @@ def create_inventory_stack() -> tuple[
 
     movement_repo = MovementRepository(settings.movement_db_url)
     movement_repo.init_schema()
+
+    crm_repo = CrmRepository(settings.db_url)
+    crm_repo.init_schema()
 
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
