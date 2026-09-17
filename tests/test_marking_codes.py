@@ -199,6 +199,59 @@ def test_add_and_remove_gtin(db_url: str) -> None:
     assert repo.list_product_gtin_rows()[0]["gtins"] == []
 
 
+def test_add_gtin_from_honest_sign_scan(db_url: str) -> None:
+    repo = _repo(db_url)
+    product = repo.create_product(
+        {
+            "name": "Болт",
+            "sku": "BOLT-1",
+            "code": "00001",
+            "is_kit": False,
+            "components": [],
+        }
+    )
+    assert repo.add_product_gtin(int(product.id), _cis(GTIN14, "Scan01")) == "created"
+    assert repo.list_product_gtin_rows()[0]["gtins"] == [GTIN14]
+
+
+def test_product_requires_cis_follows_marking_type(db_url: str) -> None:
+    repo = _repo(db_url)
+    types = {str(item["name"]): int(item["id"]) for item in repo.get_meta()["marking_types"]}
+    with_gtin = repo.create_product(
+        {
+            "name": "С GTIN без ЧЗ",
+            "sku": "BOLT-GTIN",
+            "code": "00011",
+            "is_kit": False,
+            "marking_type_id": types["Не подлежит маркировке"],
+            "gtins": [GTIN13],
+            "components": [],
+        }
+    )
+    marked = repo.create_product(
+        {
+            "name": "Обувь",
+            "sku": "BOOT-1",
+            "code": "00012",
+            "is_kit": False,
+            "marking_type_id": types["Обувь"],
+            "components": [],
+        }
+    )
+    unset = repo.create_product(
+        {
+            "name": "Без типа",
+            "sku": "PLAIN-1",
+            "code": "00013",
+            "is_kit": False,
+            "components": [],
+        }
+    )
+    assert repo.product_requires_cis(with_gtin.id) is False
+    assert repo.product_requires_cis(marked.id) is True
+    assert repo.product_requires_cis(unset.id) is False
+
+
 def test_gtin_excel_import(db_url: str) -> None:
     from app.marking.gtin_import import build_gtin_import_template, import_gtins_from_xlsx
 
@@ -279,3 +332,51 @@ def test_marking_http_gtin_and_scan_export(db_url: str) -> None:
     wb = load_workbook(BytesIO(exported.content))
     assert wb["Коды"].cell(2, 1).value == "BOLT-1"
     assert wb["Коды"].max_row == 3
+
+
+def test_catalog_http_add_gtin_from_cis(db_url: str) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
+    from app.warehouse_users_repository import WarehouseUserRow
+
+    repo = _repo(db_url)
+    product = repo.create_product(
+        {
+            "name": "Болт",
+            "sku": "BOLT-1",
+            "code": "00001",
+            "is_kit": False,
+            "components": [],
+        }
+    )
+    app = FastAPI()
+    fake_user = WarehouseUserRow(
+        id=1,
+        login="admin",
+        display_name="Admin",
+        group_id=None,
+        group_name="",
+        telegram_nick="",
+        is_admin=True,
+        is_active=True,
+        permissions={},
+        created_at_ts=0,
+        updated_at_ts=0,
+    )
+
+    def require_warehouse_user() -> WarehouseUserRow:
+        return fake_user
+
+    register_warehouse_catalog_routes(app, repo, require_warehouse_user)
+    client = TestClient(app)
+    added = client.post(
+        f"/api/warehouse/catalog/products/{product.id}/gtins",
+        json={"code": _cis(GTIN14, "Pack01")},
+    )
+    assert added.status_code == 200, added.text
+    payload = added.json()
+    assert payload["gtin"] == GTIN14
+    assert payload["action"] == "created"
+    assert GTIN14 in (payload["product"].get("gtins") or [])

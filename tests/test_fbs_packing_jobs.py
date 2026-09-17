@@ -24,7 +24,7 @@ from app.fbs_packing_repository import (
     LINE_PENDING,
     LINE_PRINTED,
 )
-from app.fbs_packing_service import create_yandex_packing_job
+from app.fbs_packing_service import CIS_REQUIRED_ERROR, create_yandex_packing_job
 from app.warehouse_users_repository import WarehouseUserRow
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_tasks_api_auth import TasksApiActor
@@ -599,13 +599,29 @@ def _cis(gtin14: str, serial: str = "Ab12Xy", *, with_gs: bool = True) -> str:
     return body + crypto
 
 
-def _seed_cis_job(packing: FbsPackingRepository, catalog: CatalogRepository, packer_id: int, *, require_cis: bool):
+def _marking_id(catalog: CatalogRepository, name: str) -> int:
+    for item in catalog.get_meta()["marking_types"]:
+        if str(item.get("name") or "") == name:
+            return int(item["id"])
+    raise AssertionError(f"нет типа маркировки {name}")
+
+
+def _seed_cis_job(
+    packing: FbsPackingRepository,
+    catalog: CatalogRepository,
+    packer_id: int,
+    *,
+    require_marking: bool,
+):
+    marked_type = _marking_id(catalog, "Обувь")
+    exempt_type = _marking_id(catalog, "Не подлежит маркировке")
     product = catalog.create_product(
         {
             "name": "Маркируемый",
             "sku": "SKU-CIS",
             "code": "00099",
             "is_kit": False,
+            "marking_type_id": marked_type if require_marking else exempt_type,
             "barcodes": [{"barcode": "2000000000092", "label": "", "group": ""}],
             "gtins": [GTIN13],
             "components": [],
@@ -617,6 +633,7 @@ def _seed_cis_job(packing: FbsPackingRepository, catalog: CatalogRepository, pac
             "sku": "SKU-PLAIN",
             "code": "00098",
             "is_kit": False,
+            "marking_type_id": exempt_type,
             "barcodes": [{"barcode": "PLAIN-NO-GTIN", "label": "", "group": ""}],
             "components": [],
         }
@@ -625,7 +642,7 @@ def _seed_cis_job(packing: FbsPackingRepository, catalog: CatalogRepository, pac
         marketplace="yandex",
         order_substatus="STARTED",
         build_list=False,
-        require_cis=require_cis,
+        require_cis=False,
         created_by_user_id=1,
         packer_user_ids=[packer_id],
         lines=[
@@ -670,11 +687,13 @@ def _seed_cis_job(packing: FbsPackingRepository, catalog: CatalogRepository, pac
     return job, product, plain
 
 
-def _cis_client(db_url: str, tmp_path, *, require_cis: bool = False):
+def _cis_client(db_url: str, tmp_path, *, require_marking: bool = False):
     catalog, db_url = _catalog(db_url)
     packing = _packing_repo(tmp_path, db_url)
     packer = _user(7, "packer")
-    job, product, plain = _seed_cis_job(packing, catalog, packer.id, require_cis=require_cis)
+    job, product, plain = _seed_cis_job(
+        packing, catalog, packer.id, require_marking=require_marking
+    )
 
     app = FastAPI()
 
@@ -702,7 +721,7 @@ def _cis_client(db_url: str, tmp_path, *, require_cis: bool = False):
 
 
 def test_cis_scan_allocates_one_line_even_with_batch(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="Ser001")
 
@@ -720,21 +739,30 @@ def test_cis_scan_allocates_one_line_even_with_batch(db_url: str, tmp_path) -> N
     assert packing.get_line(job.id, job.lines[1].id).status == LINE_PENDING
 
 
-def test_require_cis_rejects_plain_barcode_for_gtin_product(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=True)
+def test_marking_type_rejects_plain_barcode(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=True)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     rejected = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
     assert rejected.status_code == 400
-    assert "КИЗ" in rejected.json()["detail"]
+    assert rejected.json()["detail"] == CIS_REQUIRED_ERROR
 
     ok = client.post(f"{prefix}/scan-product", json={"barcode": _cis(GTIN14, serial="SerOk1")})
     assert ok.status_code == 200, ok.text
     assert ok.json()["line"]["has_cis"] is True
 
 
-def test_require_cis_off_allows_barcode_or_cis(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+def test_gtin_without_marking_type_allows_barcode(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    assert product.gtins
+    resp = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["line"]["has_cis"] is False
+
+
+def test_exempt_marking_allows_barcode_or_cis(db_url: str, tmp_path) -> None:
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     by_barcode = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
@@ -749,7 +777,7 @@ def test_require_cis_off_allows_barcode_or_cis(db_url: str, tmp_path) -> None:
 
 
 def test_duplicate_cis_rejected(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="DupSer")
 
@@ -766,7 +794,7 @@ def test_duplicate_cis_rejected(db_url: str, tmp_path) -> None:
 
 
 def test_cancel_print_clears_cis(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="CancelMe")
 
@@ -789,7 +817,7 @@ def test_cancel_print_clears_cis(db_url: str, tmp_path) -> None:
 
 
 def test_plain_ean_does_not_write_cis_fields(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     resp = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
@@ -806,7 +834,7 @@ def test_marking_xlsx_two_sheets(db_url: str, tmp_path) -> None:
 
     from openpyxl import load_workbook
 
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     cis = _cis(GTIN14, serial="Xlsx01")
@@ -835,8 +863,8 @@ def test_marking_xlsx_two_sheets(db_url: str, tmp_path) -> None:
     assert packing.get_line(job.id, line_id).status == LINE_DONE
 
 
-def test_require_cis_blocks_pick_sku_for_markable(db_url: str, tmp_path) -> None:
-    client, packing, job, product, plain = _cis_client(db_url, tmp_path, require_cis=True)
+def test_marking_type_blocks_pick_sku(db_url: str, tmp_path) -> None:
+    client, packing, job, product, plain = _cis_client(db_url, tmp_path, require_marking=True)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
 
     blocked = client.post(
@@ -844,6 +872,7 @@ def test_require_cis_blocks_pick_sku_for_markable(db_url: str, tmp_path) -> None
         json={"sku": "SKU-CIS", "product_id": product.id},
     )
     assert blocked.status_code == 400
+    assert blocked.json()["detail"] == CIS_REQUIRED_ERROR
 
     allowed = client.post(
         f"{prefix}/pick-sku",
@@ -884,7 +913,7 @@ def test_set_line_status_pending_to_done_and_back(db_url: str, tmp_path) -> None
 
 
 def test_set_line_status_keeps_cis_and_reopens_done_job(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="KeepCis")
 
@@ -913,7 +942,7 @@ def test_set_line_status_keeps_cis_and_reopens_done_job(db_url: str, tmp_path) -
 
 
 def test_set_line_status_printed_to_pending_keeps_cis(db_url: str, tmp_path) -> None:
-    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_cis=False)
+    client, packing, job, product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
     prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
     cis = _cis(GTIN14, serial="PrintKeep")
 

@@ -51,11 +51,6 @@
     return !el || el.checked;
   }
 
-  function requireCisChecked(root) {
-    var el = root.querySelector("#whFbsRequireCis");
-    return !!(el && el.checked);
-  }
-
   function selectedPackerIds(root) {
     var ids = [];
     root.querySelectorAll(".wh-fbs-packer-cb:checked").forEach(function (cb) {
@@ -99,7 +94,6 @@
         '<label>Первое отправление<input type="text" id="whFbsFirstPosting" placeholder="Необязательно" /></label>' +
         '<label>Последнее отправление<input type="text" id="whFbsLastPosting" placeholder="Необязательно" /></label>' +
         "</div>" +
-        '<label class="wh-fbs-check"><input type="checkbox" id="whFbsRequireCis" /> Обязательная маркировка ЧЗ</label>' +
         '<p class="wh-muted">Упаковщики</p>' +
         packerPickerHtml() +
         '<div class="wh-route-actions">' +
@@ -114,16 +108,18 @@
         '<div class="wh-route-card">' +
         "<h3>Wildberries FBS</h3>" +
         '<p class="wh-muted">Каждый заказ — одна строка задания. «Готовы к сборке» создаёт поставку WB и скачивает стикеры. ' +
-        "«Готовы к отгрузке» — выберите существующую поставку.</p>" +
+        "«Готовы к отгрузке» — отметьте одну или несколько поставок: несколько галочек дают одно объединённое задание.</p>" +
         '<div class="wh-route-form">' +
         '<label>Статус<select id="whFbsSubstatus">' +
         '<option value="STARTED">Готовы к сборке</option>' +
         '<option value="READY_TO_SHIP">Готовы к отгрузке</option>' +
         "</select></label>" +
-        '<label id="whFbsWbSupplyWrap" hidden>Поставка<select id="whFbsWbSupply"><option value="">— выберите —</option></select></label>' +
         '<label>Количество товаров<input type="number" id="whFbsItemLimit" min="1" step="1" placeholder="Все товары" /></label>' +
         "</div>" +
-        '<label class="wh-fbs-check"><input type="checkbox" id="whFbsRequireCis" /> Обязательная маркировка ЧЗ</label>' +
+        '<div id="whFbsWbSupplyWrap" hidden>' +
+        '<p class="wh-muted">Поставки. Несколько галочек — одно объединённое задание.</p>' +
+        '<div class="wh-fbs-packers" id="whFbsWbSupplyList"></div>' +
+        "</div>" +
         '<p class="wh-muted">Упаковщики</p>' +
         packerPickerHtml() +
         '<div class="wh-route-actions">' +
@@ -146,7 +142,6 @@
       '<label>Количество товаров<input type="number" id="whFbsYandexItemLimit" min="1" step="1" placeholder="Все товары" /></label>' +
       "</div>" +
       '<label class="wh-fbs-check"><input type="checkbox" id="whFbsBuildList" checked /> Сформировать список</label>' +
-      '<label class="wh-fbs-check"><input type="checkbox" id="whFbsRequireCis" /> Обязательная маркировка ЧЗ</label>' +
       '<p class="wh-muted">Упаковщики</p>' +
       packerPickerHtml() +
       '<div class="wh-route-actions">' +
@@ -196,7 +191,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Статус</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th>ЧЗ</th><th></th>" +
+      "<th>№</th><th>Статус</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>" +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -224,7 +219,11 @@
             esc(jobMarketplaceLabel(job)) +
             " · " +
             esc(jobSubstatusLabel(job)) +
-            (job.supply_id ? " · " + esc(job.supply_id) : "") +
+            (job.sheet_title && !job.sheet_url
+              ? " · " + esc(job.sheet_title)
+              : job.supply_id
+                ? " · " + esc(job.supply_id)
+                : "") +
             "</td><td>" +
             esc(job.line_done) +
             " / " +
@@ -235,8 +234,6 @@
             esc((job.packer_names || []).join(", ") || "—") +
             "</td><td>" +
             sheet +
-            "</td><td>" +
-            (job.require_cis ? "да" : "—") +
             "</td><td>" +
             marking +
             " " +
@@ -293,24 +290,46 @@
     if (show) loadWbSupplies(root);
   }
 
+  function selectedWbSupplyIds(root) {
+    var ids = [];
+    root.querySelectorAll(".wh-fbs-wb-supply-cb:checked").forEach(function (cb) {
+      var id = String(cb.value || "").trim();
+      if (id) ids.push(id);
+    });
+    return ids;
+  }
+
   function loadWbSupplies(root) {
-    var select = root.querySelector("#whFbsWbSupply");
-    if (!select) return;
+    var list = root.querySelector("#whFbsWbSupplyList");
+    if (!list) return;
+    var prev = selectedWbSupplyIds(root);
     shell()
       .fetchJson("/api/warehouse/fbs-packing/wb/supplies")
       .then(function (data) {
-        var prev = String(select.value || "");
-        select.innerHTML = '<option value="">— выберите поставку —</option>';
-        (data.supplies || []).forEach(function (item) {
-          var opt = document.createElement("option");
-          opt.value = String(item.id || "");
-          opt.textContent = (item.name || item.id || "") + " (" + item.id + ")";
-          select.appendChild(opt);
-        });
-        if (prev) select.value = prev;
+        var supplies = data.supplies || [];
+        if (!supplies.length) {
+          list.innerHTML = '<p class="wh-muted">Нет открытых поставок.</p>';
+          return;
+        }
+        list.innerHTML = supplies
+          .map(function (item) {
+            var id = String(item.id || "");
+            var checked = prev.indexOf(id) >= 0 ? " checked" : "";
+            return (
+              '<label class="wh-fbs-packer-option">' +
+              '<input type="checkbox" class="wh-fbs-wb-supply-cb" value="' +
+              esc(id) +
+              '"' +
+              checked +
+              " /> " +
+              esc((item.name || item.id || "") + " (" + id + ")") +
+              "</label>"
+            );
+          })
+          .join("");
       })
       .catch(function () {
-        select.innerHTML = '<option value="">Не удалось загрузить поставки</option>';
+        list.innerHTML = '<p class="wh-muted">Не удалось загрузить поставки.</p>';
       });
   }
 
@@ -442,21 +461,26 @@
       var wbLimitEl = root.querySelector("#whFbsItemLimit");
       var wbLimit = wbLimitEl ? String(wbLimitEl.value || "").trim() : "";
       var substatus = wbSubstatus(root);
-      var supplyEl = root.querySelector("#whFbsWbSupply");
-      var supplyId = supplyEl ? String(supplyEl.value || "").trim() : "";
+      var supplyIds = selectedWbSupplyIds(root);
       if (asForm) {
         var wbForm = new FormData();
         wbForm.append("marketplace", "wildberries");
         wbForm.append("order_substatus", substatus);
         if (wbLimit) wbForm.append("item_limit", wbLimit);
-        if (supplyId) wbForm.append("supply_id", supplyId);
+        supplyIds.forEach(function (id) {
+          wbForm.append("supply_ids", id);
+        });
+        if (supplyIds.length === 1) wbForm.append("supply_id", supplyIds[0]);
         return wbForm;
       }
       var wbParams = new URLSearchParams();
       wbParams.set("marketplace", "wildberries");
       wbParams.set("order_substatus", substatus);
       if (wbLimit) wbParams.set("item_limit", wbLimit);
-      if (supplyId) wbParams.set("supply_id", supplyId);
+      supplyIds.forEach(function (id) {
+        wbParams.append("supply_ids", id);
+      });
+      if (supplyIds.length === 1) wbParams.set("supply_id", supplyIds[0]);
       return "?" + wbParams.toString();
     }
     if (activeMarketplace === "yandex") {
@@ -543,20 +567,19 @@
       marketplace: packingMarketplaceParam(),
       order_substatus: substatusEl ? String(substatusEl.value || "STARTED") : "STARTED",
       build_list: buildListChecked(root),
-      require_cis: requireCisChecked(root),
       packer_user_ids: packers,
     };
     if (activeMarketplace === "wildberries") {
       body.build_list = false;
-      var supplyEl = root.querySelector("#whFbsWbSupply");
-      var supplyId = supplyEl ? String(supplyEl.value || "").trim() : "";
+      var supplyIds = selectedWbSupplyIds(root);
       if (body.order_substatus === "READY_TO_SHIP") {
-        if (!supplyId) {
+        if (!supplyIds.length) {
           setBusy(root, false);
-          setMessage(root, "Выберите поставку WB для «готовы к отгрузке».", true);
+          setMessage(root, "Выберите хотя бы одну поставку WB для «готовы к отгрузке».", true);
           return;
         }
-        body.supply_id = supplyId;
+        body.supply_ids = supplyIds;
+        body.supply_id = supplyIds[0];
       }
     }
     if (activeMarketplace === "ozon") {

@@ -20,6 +20,42 @@ WB_FBS_SUBSTATUS_OPTIONS = {
 }
 
 
+def normalize_wb_supply_ids(*sources: object) -> list[str]:
+    """Один или несколько WB-GI-… без дублей, порядок как в запросе."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if value is None:
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                add(item)
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        if any(ch in text for ch in ",;\n\r\t"):
+            for part in text.replace(",", " ").replace(";", " ").split():
+                add(part)
+            return
+        if text in seen:
+            return
+        seen.add(text)
+        out.append(text)
+
+    for src in sources:
+        add(src)
+    return out
+
+
+def merged_wb_supply_title(supply_ids: list[str]) -> str:
+    ids = [str(x).strip() for x in supply_ids if str(x).strip()]
+    if len(ids) < 2:
+        return ""
+    return f"Объединено: {' + '.join(ids)}"[:256]
+
+
 def normalize_wb_fbs_substatus(value: object) -> str:
     substatus = str(value or "STARTED").strip().upper()
     if substatus not in WB_FBS_SUBSTATUS_OPTIONS:
@@ -92,29 +128,40 @@ def load_wb_fbs_list_rows(
     *,
     substatus: str,
     supply_id: str = "",
+    supply_ids: list[str] | None = None,
     max_units: int | None = None,
 ) -> tuple[list[WbFbsListRow], list[dict], list[str], int]:
     """Список строк для превью (без PDF)."""
     warnings: list[str] = []
     substatus = normalize_wb_fbs_substatus(substatus)
     orders: list[dict] = []
+    supplies = normalize_wb_supply_ids(supply_ids, supply_id)
     if substatus == "STARTED":
         orders = adapter.fetch_new_assembly_orders()
     else:
-        sid = str(supply_id or "").strip()
-        if not sid:
+        if not supplies:
             raise ValueError("Выберите поставку WB для «готовы к отгрузке»")
-        order_ids = adapter.fetch_supply_order_ids(sid)
-        if not order_ids:
-            return [], [], ["В поставке нет заказов"], 0
-        orders = adapter.fetch_orders_by_ids(order_ids)
-        found_ids = {_order_id(o) for o in orders}
-        for oid in order_ids:
-            if int(oid) not in found_ids:
-                warnings.append(f"Заказ WB {oid} не найден в API")
+        seen_oids: set[int] = set()
+        for sid in supplies:
+            order_ids = adapter.fetch_supply_order_ids(sid)
+            if not order_ids:
+                warnings.append(f"{sid}: в поставке нет заказов")
+                continue
+            fetched = adapter.fetch_orders_by_ids(order_ids)
+            found_ids = {_order_id(o) for o in fetched}
+            for oid in order_ids:
+                if int(oid) not in found_ids:
+                    warnings.append(f"Заказ WB {oid} не найден в API")
+            for order in fetched:
+                oid = _order_id(order)
+                if oid in seen_oids:
+                    continue
+                seen_oids.add(oid)
+                orders.append(order)
     available = len(orders)
     if max_units is not None and max_units > 0:
         orders = orders[: int(max_units)]
+    title_supply = supplies[0] if len(supplies) == 1 else ""
     rows = [
         WbFbsListRow(
             seq=index,
@@ -122,7 +169,7 @@ def load_wb_fbs_list_rows(
             sku=_order_sku(order),
             quantity=max(1, int(order.get("quantity") or 1)),
             status=substatus,
-            supply_id=str(supply_id or ""),
+            supply_id=title_supply,
         )
         for index, order in enumerate(orders, start=1)
     ]

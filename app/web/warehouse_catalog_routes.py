@@ -500,6 +500,39 @@ def register_warehouse_catalog_routes(
             "product": catalog_repo.product_to_dict(row),
         }
 
+    @app.post("/api/warehouse/catalog/products/{product_id}/gtins")
+    async def api_catalog_add_gtin(
+        product_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        from app.marking.cis import gtin14_from_user_input
+
+        payload = body if isinstance(body, dict) else {}
+        raw = str(
+            payload.get("code")
+            or payload.get("gtin")
+            or payload.get("barcode")
+            or payload.get("cis")
+            or ""
+        )
+        try:
+            gtin = gtin14_from_user_input(raw)
+            action = await asyncio.to_thread(catalog_repo.add_product_gtin, product_id, gtin)
+        except ValueError as exc:
+            msg = str(exc)
+            status = 404 if "не найден" in msg.casefold() else 400
+            raise HTTPException(status_code=status, detail=msg) from exc
+        row = catalog_repo.get_product(product_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        return {
+            "ok": True,
+            "action": action,
+            "gtin": gtin,
+            "product": catalog_repo.product_to_dict(row),
+        }
+
     @app.get("/api/warehouse/catalog/products/{product_id}/barcode-label")
     async def api_catalog_barcode_label(
         product_id: int,

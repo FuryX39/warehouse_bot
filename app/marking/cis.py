@@ -164,6 +164,19 @@ def parse_cis(raw: str) -> CisRecord:
     )
 
 
+def gtin14_from_user_input(value: str) -> str:
+    """GTIN-14 из Data Matrix Честного знака или из цифр GTIN/EAN."""
+    from app.marking.gtin import normalize_gtin14
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    rec = parse_cis(text)
+    if rec.ok:
+        return rec.gtin
+    return normalize_gtin14(text)
+
+
 def parse_cis_list(lines: list[str] | str) -> list[CisRecord]:
     if isinstance(lines, str):
         lines = split_cis_input(lines)

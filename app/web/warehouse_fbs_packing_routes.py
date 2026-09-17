@@ -7,7 +7,7 @@ import base64
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.catalog_repository import CatalogRepository
@@ -20,13 +20,13 @@ from app.warehouse_wave import (
     release_packing_job_orders,
 )
 from app.fbs_packing_service import (
+    CIS_REQUIRED_ERROR,
     _bool,
     build_packing_marking_xlsx,
     create_ozon_packing_job,
     create_wb_packing_job,
     create_yandex_packing_job,
     list_rows_payload,
-    product_has_marking_gtin,
     resolve_packing_scan,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
@@ -41,6 +41,7 @@ from app.wb_fbs_labels import (
     list_rows_payload as wb_list_rows_payload,
     load_wb_fbs_list_rows,
     normalize_wb_fbs_substatus,
+    normalize_wb_supply_ids,
 )
 from app.ozon_fbs_labels import (
     get_configured_ozon_adapter,
@@ -145,6 +146,9 @@ def register_warehouse_fbs_packing_routes(
             return [str(x).strip() for x in raw if str(x).strip()]
         return []
 
+    def _wb_supply_ids(*sources: object) -> list[str]:
+        return normalize_wb_supply_ids(*sources)
+
     def _after_job_created(job) -> None:
         attach_packing_job_to_orders(orders_repo, job, _wave_wh())
     if include_manager:
@@ -161,6 +165,7 @@ def register_warehouse_fbs_packing_routes(
             build_list: str = "1",
             marketplace: str = "yandex",
             supply_id: str = "",
+            supply_ids: list[str] = Query(default=[]),
             first_posting: str = "",
             last_posting: str = "",
             _: WarehouseUserRow | None = Depends(require_fbs_access),
@@ -177,12 +182,14 @@ def register_warehouse_fbs_packing_routes(
                         status_code=400,
                         detail="Wildberries API не настроен (WB_API_TOKEN)",
                     )
+                supplies = _wb_supply_ids(supply_ids, supply_id)
 
                 def _run_wb():
                     return load_wb_fbs_list_rows(
                         adapter,
                         substatus=order_substatus,
                         supply_id=supply_id,
+                        supply_ids=supplies,
                         max_units=item_limit,
                     )
 
@@ -341,7 +348,7 @@ def register_warehouse_fbs_packing_routes(
                     substatus = normalize_wb_fbs_substatus(payload.get("order_substatus"))
                 except ValueError as exc:
                     raise _http_value_error(exc) from exc
-                supply_id = str(payload.get("supply_id") or "").strip()
+                supplies = _wb_supply_ids(payload.get("supply_ids"), payload.get("supply_id"))
 
                 def _run_wb():
                     return create_wb_packing_job(
@@ -353,7 +360,8 @@ def register_warehouse_fbs_packing_routes(
                         item_limit=limit,
                         packer_user_ids=raw_ids,
                         created_by_user_id=int(user.id) if user else None,
-                        supply_id=supply_id,
+                        supply_id=supplies[0] if supplies else "",
+                        supply_ids=supplies,
                         posting_ids=_posting_ids(payload),
                     )
 
@@ -637,12 +645,8 @@ def _register_packer_prefix(
         if job is None:
             raise ValueError("Задание не найдено")
         resolved = resolve_packing_scan(catalog_repo, barcode)
-        if (
-            job.require_cis
-            and not resolved.is_cis
-            and product_has_marking_gtin(catalog_repo, resolved.product_id)
-        ):
-            raise ValueError("Нужен КИЗ (Data Matrix), обычный штрихкод не принимается")
+        if not resolved.is_cis and catalog_repo.product_requires_cis(resolved.product_id):
+            raise ValueError(CIS_REQUIRED_ERROR)
         use_batch = bool(batch) and not resolved.is_cis
         return _allocate_response(
             job_id,
@@ -727,8 +731,14 @@ def _register_packer_prefix(
             job = packing_repo.get_job(job_id)
             if job is None:
                 raise ValueError("Задание не найдено")
-            if job.require_cis and product_has_marking_gtin(catalog_repo, product_id):
-                raise ValueError("Для маркируемого товара нужен пик КИЗ, не ручной выбор")
+            pid = product_id
+            if pid is None and sku.strip():
+                found = catalog_repo.lookup_products_by_skus([sku])
+                hit = found.get(sku.strip().casefold())
+                if hit and hit.get("id"):
+                    pid = int(hit["id"])
+            if catalog_repo.product_requires_cis(pid):
+                raise ValueError(CIS_REQUIRED_ERROR)
             return await asyncio.to_thread(
                 _allocate_response,
                 job_id,

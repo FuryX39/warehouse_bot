@@ -16,7 +16,11 @@ from app.config import Settings
 from app.crm_repository import CrmRepository
 from app.fbs_packing_repository import FbsPackingRepository
 from app.fbs_packing_service import create_wb_packing_job
-from app.wb_fbs_labels import png_bytes_to_label_pdf
+from app.wb_fbs_labels import (
+    merged_wb_supply_title,
+    normalize_wb_supply_ids,
+    png_bytes_to_label_pdf,
+)
 from app.warehouse_users_repository import WarehouseUserRow
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_tasks_api_auth import TasksApiActor
@@ -38,6 +42,13 @@ def _pdf(text: str) -> bytes:
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+def test_normalize_wb_supply_ids() -> None:
+    assert normalize_wb_supply_ids("WB-GI-A", ["WB-GI-B", "WB-GI-A"]) == ["WB-GI-A", "WB-GI-B"]
+    assert normalize_wb_supply_ids("WB-GI-A, WB-GI-B") == ["WB-GI-A", "WB-GI-B"]
+    assert merged_wb_supply_title(["WB-GI-A"]) == ""
+    assert merged_wb_supply_title(["WB-GI-A", "WB-GI-B"]) == "Объединено: WB-GI-A + WB-GI-B"
 
 
 def test_png_bytes_to_label_pdf() -> None:
@@ -83,11 +94,21 @@ class FakeWbAdapter(WildberriesAdapter):
         return out
 
     def fetch_supply_order_ids(self, supply_id: str) -> list[int]:
-        assert supply_id == self.supply_id
-        return [9001]
+        mapping = {
+            self.supply_id: [9001],
+            "WB-GI-A": [9001],
+            "WB-GI-B": [9002],
+        }
+        if supply_id not in mapping:
+            raise AssertionError(f"unexpected supply {supply_id}")
+        return list(mapping[supply_id])
 
     def list_open_supplies(self) -> list[dict]:
-        return [{"id": self.supply_id, "name": "Test supply", "done": False}]
+        return [
+            {"id": self.supply_id, "name": "Test supply", "done": False},
+            {"id": "WB-GI-A", "name": "Supply A", "done": False},
+            {"id": "WB-GI-B", "name": "Supply B", "done": False},
+        ]
 
 
 def _catalog(db_url: str) -> tuple[CatalogRepository, str]:
@@ -129,6 +150,39 @@ def test_create_wb_job_started(db_url: str, tmp_path) -> None:
     assert job.supply_id == "WB-GI-TEST"
     assert all(line.place_total == 1 for line in job.lines)
     assert all(packing.read_line_pdf(job.id, line.id).startswith(b"%PDF") for line in job.lines)
+
+
+def test_create_wb_job_merged_ready_to_ship(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
+    catalog.create_product(
+        {
+            "name": "WB товар",
+            "sku": "SKU-WB",
+            "code": "00011",
+            "is_kit": False,
+            "barcodes": [{"barcode": "WB-SKU", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    packing = FbsPackingRepository(db_url, files_data_dir=tmp_path / "wb_packing_merged")
+    packing.init_schema()
+    adapter = FakeWbAdapter()
+
+    job = create_wb_packing_job(
+        adapter=adapter,
+        catalog=catalog,
+        packing_repo=packing,
+        order_substatus="READY_TO_SHIP",
+        item_limit=None,
+        packer_user_ids=[7],
+        created_by_user_id=1,
+        supply_ids=["WB-GI-A", "WB-GI-B"],
+    )
+
+    assert job.line_total == 2
+    assert {line.order_id for line in job.lines} == {"9001", "9002"}
+    assert job.supply_id == "WB-GI-A"
+    assert job.sheet_title == "Объединено: WB-GI-A + WB-GI-B"
 
 
 def test_wb_preview_and_create_routes(db_url: str, tmp_path) -> None:
@@ -197,3 +251,29 @@ def test_wb_preview_and_create_routes(db_url: str, tmp_path) -> None:
     assert created.status_code == 200, created.text
     assert created.json()["job"]["marketplace"] == "wildberries"
     assert created.json()["job"]["line_total"] == 1
+
+    preview_merged = client.get(
+        "/api/warehouse/fbs-packing/preview",
+        params={
+            "marketplace": "wildberries",
+            "order_substatus": "READY_TO_SHIP",
+            "supply_ids": ["WB-GI-A", "WB-GI-B"],
+        },
+    )
+    assert preview_merged.status_code == 200, preview_merged.text
+    assert preview_merged.json()["count"] == 2
+
+    created_merged = client.post(
+        "/api/warehouse/fbs-packing/jobs",
+        json={
+            "marketplace": "wildberries",
+            "order_substatus": "READY_TO_SHIP",
+            "supply_ids": ["WB-GI-A", "WB-GI-B"],
+            "packer_user_ids": [7],
+        },
+    )
+    assert created_merged.status_code == 200, created_merged.text
+    merged_job = created_merged.json()["job"]
+    assert merged_job["line_total"] == 2
+    assert merged_job["supply_id"] == "WB-GI-A"
+    assert merged_job["sheet_title"] == "Объединено: WB-GI-A + WB-GI-B"

@@ -38,6 +38,20 @@ _DEFAULT_MARKING_TYPES = (
 )
 _CODE128_RE = re.compile(r"^[\x20-\x7E]+$")
 CATALOG_LIST_PAGE_SIZE = 50
+_NOT_SUBJECT_TO_MARKING_NAMES = frozenset(
+    {
+        "не подлежит маркировке",
+        "не подлежит маркировки",
+    }
+)
+
+
+def marking_type_requires_cis(name: str | None) -> bool:
+    """ЧЗ обязателен, если тип маркировки задан и это не «не подлежит»."""
+    text = str(name or "").strip()
+    if not text:
+        return False
+    return text.casefold() not in _NOT_SUBJECT_TO_MARKING_NAMES
 
 
 class _Base(DeclarativeBase):
@@ -1794,13 +1808,13 @@ class CatalogRepository:
             raise ValueError(f"Штрихкод короба «{code}» уже используется как штучный штрихкод")
 
     def _normalize_gtins(self, raw: list) -> list[str]:
-        from app.marking.gtin import normalize_gtin14
+        from app.marking.cis import gtin14_from_user_input
 
         out: list[str] = []
         seen: set[str] = set()
         for item in raw:
             value = item.get("gtin") if isinstance(item, dict) else item
-            gtin = normalize_gtin14(str(value or ""))
+            gtin = gtin14_from_user_input(str(value or ""))
             if not gtin:
                 continue
             if gtin in seen:
@@ -1884,10 +1898,22 @@ class CatalogRepository:
                 for row in products
             ]
 
-    def add_product_gtin(self, product_id: int, gtin: str) -> str:
-        from app.marking.gtin import normalize_gtin14
+    def product_requires_cis(self, product_id: int | None) -> bool:
+        """Сканирование КИЗ обязательно по типу маркировки, не по наличию GTIN."""
+        if not product_id:
+            return False
+        with Session(self.engine) as session:
+            row = session.get(CatalogProduct, int(product_id))
+            if row is None or not row.marking_type_id:
+                return False
+            marking = session.get(CatalogMarkingType, int(row.marking_type_id))
+            name = str(marking.name or "") if marking is not None else ""
+            return marking_type_requires_cis(name)
 
-        value = normalize_gtin14(gtin)
+    def add_product_gtin(self, product_id: int, gtin: str) -> str:
+        from app.marking.cis import gtin14_from_user_input
+
+        value = gtin14_from_user_input(gtin)
         if not value:
             raise ValueError("Укажите GTIN")
         with Session(self.engine) as session:

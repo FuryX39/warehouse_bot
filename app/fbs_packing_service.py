@@ -27,14 +27,19 @@ from app.yandex_fbs_labels import (
     normalize_yandex_fbs_substatus,
 )
 from app.wb_fbs_labels import (
+    WbFbsListRow,
     collect_wb_unit_labels,
     load_wb_fbs_list_rows,
+    merged_wb_supply_title,
     normalize_wb_fbs_substatus,
+    normalize_wb_supply_ids,
 )
-from app.ozon_fbs_labels import collect_ozon_unit_labels, load_ozon_fbs_list_rows
+from app.ozon_fbs_labels import OzonFbsListRow, collect_ozon_unit_labels, load_ozon_fbs_list_rows
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.ozon import OzonAdapter
+
+CIS_REQUIRED_ERROR = "Отсканируйте маркировку честный знак в программе для упаковщика"
 
 
 def _bool(value: object, default: bool = True) -> bool:
@@ -116,15 +121,6 @@ class PackingScanResolve:
     @property
     def is_cis(self) -> bool:
         return bool(self.cis_key)
-
-
-def product_has_marking_gtin(catalog: CatalogRepository, product_id: int | None) -> bool:
-    """Товар маркируемый, если есть в GTIN-индексе (явный GTIN или валидный EAN как GTIN-14)."""
-    if not product_id:
-        return False
-    index, _conflicts = build_gtin_index(catalog)
-    want = int(product_id)
-    return any(ref.product_id == want for ref in index.values())
 
 
 def resolve_packing_scan(catalog: CatalogRepository, raw: str) -> PackingScanResolve:
@@ -294,13 +290,16 @@ def create_wb_packing_job(
     created_by_user_id: int | None,
     require_cis: bool = False,
     supply_id: str = "",
+    supply_ids: Any = None,
     posting_ids: Any = None,
 ) -> FbsPackingJobRow:
     substatus = normalize_wb_fbs_substatus(order_substatus)
+    supplies = normalize_wb_supply_ids(supply_ids, supply_id)
     list_rows, selected_orders, warnings, _available = load_wb_fbs_list_rows(
         adapter,
         substatus=substatus,
         supply_id=supply_id,
+        supply_ids=supplies,
         max_units=item_limit,
     )
     if not list_rows:
@@ -315,7 +314,7 @@ def create_wb_packing_job(
         adapter,
         selected_orders,
         substatus=substatus,
-        supply_id=supply_id if substatus == "READY_TO_SHIP" else "",
+        supply_id=supplies[0] if supplies else supply_id if substatus == "READY_TO_SHIP" else "",
     )
     warnings.extend(label_warnings)
     units_with_pdf = [unit for unit in units if unit.pdf]
@@ -357,6 +356,7 @@ def create_wb_packing_job(
         build_list=False,
         require_cis=bool(require_cis),
         supply_id=effective_supply,
+        sheet_title=merged_wb_supply_title(supplies) if substatus == "READY_TO_SHIP" else "",
         created_by_user_id=created_by_user_id,
         packer_user_ids=packer_user_ids,
         warnings=warnings,
