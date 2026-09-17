@@ -162,3 +162,77 @@ def test_box_quantity_must_be_positive(db_url: str) -> None:
             code="00101",
             boxes=[{"barcode": "BOX-ZERO", "quantity": 0}],
         )
+
+
+def test_add_product_box_creates_updates_and_rejects_clash(db_url: str) -> None:
+    repo = _repo(db_url)
+    product = _product(repo, sku="ADD-BOX", code="00121")
+    other = _product(
+        repo,
+        sku="OTHER-BOX",
+        code="00122",
+        barcodes=[{"barcode": "UNIT-ADD", "label": "", "group": ""}],
+        boxes=[{"barcode": "BOX-OTHER", "quantity": 6}],
+    )
+    assert repo.add_product_box(int(product.id), "BOX-10", 10) == ("created", "BOX-10", 10)
+    assert repo.add_product_box(int(product.id), "BOX-10", 10) == ("exists", "BOX-10", 10)
+    assert repo.add_product_box(int(product.id), "BOX-10", 12) == ("updated", "BOX-10", 12)
+    row = repo.get_product(int(product.id))
+    assert row is not None
+    assert row.boxes == [{"barcode": "BOX-10", "quantity": 12}]
+    with pytest.raises(ValueError, match="Укажите штрихкод короба"):
+        repo.add_product_box(int(product.id), "  ", 4)
+    with pytest.raises(ValueError, match="Укажите количество"):
+        repo.add_product_box(int(product.id), "BOX-NEW", None)
+    with pytest.raises(ValueError, match="уже используется"):
+        repo.add_product_box(int(product.id), "BOX-OTHER", 8)
+    with pytest.raises(ValueError, match="штучный"):
+        repo.add_product_box(int(other.id), "UNIT-ADD", 8)
+    with pytest.raises(ValueError, match="не найден"):
+        repo.add_product_box(9_999_999, "BOX-MISS", 2)
+
+
+def test_catalog_http_add_box(db_url: str) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.web.warehouse_catalog_routes import register_warehouse_catalog_routes
+    from app.warehouse_users_repository import WarehouseUserRow
+
+    repo = _repo(db_url)
+    product = _product(repo, sku="HTTP-BOX", code="00131")
+    app = FastAPI()
+    fake_user = WarehouseUserRow(
+        id=1,
+        login="admin",
+        display_name="Admin",
+        group_id=None,
+        group_name="",
+        telegram_nick="",
+        is_admin=True,
+        is_active=True,
+        permissions={},
+        created_at_ts=0,
+        updated_at_ts=0,
+    )
+
+    def require_warehouse_user() -> WarehouseUserRow:
+        return fake_user
+
+    register_warehouse_catalog_routes(app, repo, require_warehouse_user)
+    client = TestClient(app)
+    missing = client.post(
+        f"/api/warehouse/catalog/products/{product.id}/boxes",
+        json={"barcode": "BOX-HTTP"},
+    )
+    assert missing.status_code == 400, missing.text
+    added = client.post(
+        f"/api/warehouse/catalog/products/{product.id}/boxes",
+        json={"barcode": "BOX-HTTP", "quantity": 8},
+    )
+    assert added.status_code == 200, added.text
+    payload = added.json()
+    assert payload["action"] == "created"
+    assert payload["barcode"] == "BOX-HTTP"
+    assert payload["quantity"] == 8
+    assert payload["product"].get("boxes") == [{"barcode": "BOX-HTTP", "quantity": 8}]

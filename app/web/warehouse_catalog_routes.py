@@ -533,6 +533,39 @@ def register_warehouse_catalog_routes(
             "product": catalog_repo.product_to_dict(row),
         }
 
+    @app.post("/api/warehouse/catalog/products/{product_id}/boxes")
+    async def api_catalog_add_box(
+        product_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        payload = body if isinstance(body, dict) else {}
+        barcode = str(
+            payload.get("barcode")
+            or payload.get("code")
+            or payload.get("box")
+            or ""
+        )
+        quantity = payload.get("quantity")
+        try:
+            action, barcode, quantity = await asyncio.to_thread(
+                catalog_repo.add_product_box, product_id, barcode, quantity
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            status = 404 if "не найден" in msg.casefold() else 400
+            raise HTTPException(status_code=status, detail=msg) from exc
+        row = catalog_repo.get_product(product_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Товар не найден")
+        return {
+            "ok": True,
+            "action": action,
+            "barcode": barcode,
+            "quantity": quantity,
+            "product": catalog_repo.product_to_dict(row),
+        }
+
     @app.get("/api/warehouse/catalog/products/{product_id}/barcode-label")
     async def api_catalog_barcode_label(
         product_id: int,

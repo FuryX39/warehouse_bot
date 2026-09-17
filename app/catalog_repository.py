@@ -1943,6 +1943,57 @@ class CatalogRepository:
             session.commit()
             return "created"
 
+    def add_product_box(self, product_id: int, barcode: str, quantity: object) -> tuple[str, str, int]:
+        code_raw = str(barcode or "").strip()
+        if not code_raw:
+            raise ValueError("Укажите штрихкод короба")
+        if quantity is None or (isinstance(quantity, str) and not str(quantity).strip()):
+            raise ValueError("Укажите количество в коробе")
+        item = self._normalize_boxes([{"barcode": code_raw, "quantity": quantity}])[0]
+        code = str(item["barcode"])
+        qty = int(item["quantity"])
+        with Session(self.engine) as session:
+            if session.get(CatalogProduct, int(product_id)) is None:
+                raise ValueError("Товар не найден")
+            existing = session.scalar(
+                select(CatalogProductBox).where(
+                    CatalogProductBox.product_id == int(product_id),
+                    CatalogProductBox.barcode == code,
+                )
+            )
+            if existing is not None:
+                if int(existing.quantity) == qty:
+                    return "exists", code, qty
+                existing.quantity = qty
+                session.commit()
+                return "updated", code, qty
+            unit_same = session.scalar(
+                select(CatalogProductBarcode.id).where(
+                    CatalogProductBarcode.product_id == int(product_id),
+                    CatalogProductBarcode.barcode == code,
+                )
+            )
+            if unit_same is not None:
+                raise ValueError(
+                    f"Штрихкод короба «{code}» уже используется как штучный штрихкод"
+                )
+            self._validate_boxes_unique(session, [item], exclude_product_id=int(product_id))
+            max_order = session.scalar(
+                select(func.max(CatalogProductBox.sort_order)).where(
+                    CatalogProductBox.product_id == int(product_id)
+                )
+            )
+            session.add(
+                CatalogProductBox(
+                    product_id=int(product_id),
+                    barcode=code,
+                    quantity=qty,
+                    sort_order=int(max_order or -1) + 1,
+                )
+            )
+            session.commit()
+            return "created", code, qty
+
     def remove_product_gtin(self, product_id: int, gtin: str) -> bool:
         from app.marking.gtin import normalize_gtin14
 
