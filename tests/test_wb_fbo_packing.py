@@ -221,6 +221,8 @@ def test_preview_create_and_scan_routes(db_url: str, tmp_path) -> None:
     assert scanned.json()["line"]["sku"] == "SS743"
     assert scanned.json()["pdf_base64"]
     assert scanned.json()["job"]["line_done"] == 1
+    assert scanned.json()["qty_warning"] == ""
+    assert scanned.json()["line"]["qty_warning"] == ""
 
     batch = client.post(
         f"/api/v1/fbo-packing/jobs/{job_id}/scan-product",
@@ -369,3 +371,159 @@ def test_manager_can_cancel_done_fbo_job(db_url: str, tmp_path) -> None:
     mine = client.get("/api/v1/fbo-packing/my")
     assert mine.status_code == 200
     assert all(item["id"] != job_id for item in mine.json()["jobs"])
+
+
+def test_fbo_nonstandard_box_qty_warning_text() -> None:
+    from app.wb_fbo_packing_service import fbo_nonstandard_box_qty_warning
+
+    assert fbo_nonstandard_box_qty_warning({100}, item_qty=100, box_number="413 0001") == ""
+    assert (
+        fbo_nonstandard_box_qty_warning({100}, item_qty=37, box_number="413 0002")
+        == "В коробе номер 413 0002 находится 37 товара"
+    )
+    assert fbo_nonstandard_box_qty_warning(set(), item_qty=8, box_number="1") == ""
+    assert fbo_nonstandard_box_qty_warning({10, 8}, item_qty=8, box_number="x") == ""
+
+
+def _fbo_http_client(db_url: str, tmp_path, catalog: CatalogRepository, folder: str):
+    packing = WbFboPackingRepository(db_url, files_data_dir=tmp_path / folder)
+    packing.init_schema()
+    packer = _packer()
+    adapter = FakeFbwAdapter()
+    app = FastAPI()
+    register_warehouse_wb_fbo_routes(
+        app,
+        packing,
+        catalog,
+        SimpleNamespace(list_assignee_picker=lambda: []),
+        SimpleNamespace(adapters=[adapter]),
+        lambda: packer,
+        lambda: TasksApiActor(user=packer, via_api_token=False),
+        include_manager=True,
+        packer_prefixes=("/api/v1/fbo-packing",),
+    )
+    return TestClient(app), packing
+
+
+def _set_catalog_boxes(catalog: CatalogRepository, boxes: list[dict]) -> None:
+    product = catalog.find_product_by_barcode("4673746970515")
+    assert product is not None
+    updated = catalog.update_product(
+        int(product.id),
+        {
+            "name": product.name,
+            "sku": product.sku,
+            "code": product.code,
+            "is_kit": False,
+            "boxes": boxes,
+        },
+    )
+    assert updated is not None
+
+
+def test_scan_warns_when_box_qty_is_not_catalog_standard(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    _set_catalog_boxes(catalog, [{"barcode": "BOX-STD-10", "quantity": 10}])
+    client, packing = _fbo_http_client(db_url, tmp_path, catalog, "wb_fbo_qty_warn")
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo/jobs",
+        data={
+            "supply_id": "41357389",
+            "pallet_count": "1",
+            "city": "",
+            "packer_user_ids": "[7]",
+        },
+        files={"qr": ("qr.pdf", _pdf("WB-GI-277689956"), "application/pdf")},
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    lines = packing.get_job(job_id, include_lines=True).lines
+    assert [line.item_qty for line in lines] == [10, 8]
+
+    first = client.post(
+        f"/api/v1/fbo-packing/jobs/{job_id}/scan-product",
+        json={"barcode": "4673746970515", "batch": False, "auto_close": True},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["line"]["quantity"] == 10
+    assert first.json()["qty_warning"] == ""
+    assert first.json()["qty_warnings"] == []
+    assert first.json()["line"]["qty_warning"] == ""
+
+    second = client.post(
+        f"/api/v1/fbo-packing/jobs/{job_id}/scan-product",
+        json={"barcode": "4673746970515", "batch": False, "auto_close": True},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["line"]["quantity"] == 8
+    box_no = second.json()["line"]["box_id"]
+    assert box_no
+    warning = f"В коробе номер {box_no} находится 8 товара"
+    assert second.json()["qty_warning"] == warning
+    assert second.json()["qty_warnings"] == [warning]
+    assert second.json()["line"]["qty_warning"] == warning
+    job_line = next(
+        item for item in second.json()["job"]["lines"] if item["id"] == second.json()["line"]["id"]
+    )
+    assert job_line["qty_warning"] == warning
+
+
+def test_batch_scan_warns_only_nonstandard_boxes(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    _set_catalog_boxes(catalog, [{"barcode": "BOX-STD-10B", "quantity": 10}])
+    client, _packing = _fbo_http_client(db_url, tmp_path, catalog, "wb_fbo_qty_batch")
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo/jobs",
+        data={
+            "supply_id": "41357389",
+            "pallet_count": "1",
+            "city": "",
+            "packer_user_ids": "[7]",
+        },
+        files={"qr": ("qr.pdf", _pdf("WB-GI-277689956"), "application/pdf")},
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    scanned = client.post(
+        f"/api/v1/fbo-packing/jobs/{job_id}/scan-product",
+        json={"barcode": "4673746970515", "batch": True, "auto_close": True},
+    )
+    assert scanned.status_code == 200, scanned.text
+    lines = scanned.json()["lines"]
+    assert [item["quantity"] for item in lines] == [10, 8]
+    assert lines[0]["qty_warning"] == ""
+    leftover = lines[1]
+    warning = f"В коробе номер {leftover['box_id']} находится 8 товара"
+    assert leftover["qty_warning"] == warning
+    assert scanned.json()["qty_warnings"] == [warning]
+
+
+def test_scan_no_warning_when_all_catalog_box_sizes_match(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    _set_catalog_boxes(
+        catalog,
+        [
+            {"barcode": "BOX-STD-10C", "quantity": 10},
+            {"barcode": "BOX-STD-8C", "quantity": 8},
+        ],
+    )
+    client, _packing = _fbo_http_client(db_url, tmp_path, catalog, "wb_fbo_qty_both")
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo/jobs",
+        data={
+            "supply_id": "41357389",
+            "pallet_count": "1",
+            "city": "",
+            "packer_user_ids": "[7]",
+        },
+        files={"qr": ("qr.pdf", _pdf("WB-GI-277689956"), "application/pdf")},
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    scanned = client.post(
+        f"/api/v1/fbo-packing/jobs/{job_id}/scan-product",
+        json={"barcode": "4673746970515", "batch": True, "auto_close": True},
+    )
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["qty_warnings"] == []
+    assert all(not item["qty_warning"] for item in scanned.json()["lines"])

@@ -68,6 +68,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
             {"id": "fbs", "title": "FBS"},
             {"id": "ozon-fbo-supplies", "title": "Поставки FBO Ozon"},
             {"id": "wb-fbo-supplies", "title": "Поставки FBO WB"},
+            {"id": "wb-fbo-new", "title": "FBO WB new"},
             {"id": "ozon-fbo-packing", "title": "Сборка FBO Ozon"},
             {"id": "stock-sync", "title": "Синхронизация остатков"},
             {"id": "pick-lists", "title": "Листы подбора"},
@@ -165,12 +166,14 @@ def normalize_permissions(raw: dict[str, Any] | None) -> dict[str, list[str]]:
         if isinstance(val, list):
             out[section_id] = [str(x) for x in val if str(x).strip()]
     marketplace_items = out.get("marketplaces")
-    if (
-        marketplace_items
-        and "ozon-fbo-supplies" in marketplace_items
-        and "wb-fbo-supplies" not in marketplace_items
-    ):
-        out["marketplaces"] = [*marketplace_items, "wb-fbo-supplies"]
+    if marketplace_items:
+        extra = []
+        if "ozon-fbo-supplies" in marketplace_items and "wb-fbo-supplies" not in marketplace_items:
+            extra.append("wb-fbo-supplies")
+        if "wb-fbo-supplies" in marketplace_items and "wb-fbo-new" not in marketplace_items:
+            extra.append("wb-fbo-new")
+        if extra:
+            out["marketplaces"] = [*marketplace_items, *extra]
     return out
 
 

@@ -155,6 +155,58 @@ def create_wb_fbo_packing_job(
     )
 
 
+def fbo_nonstandard_box_qty_warning(
+    standard_qtys: set[int],
+    *,
+    item_qty: int,
+    box_number: str,
+) -> str:
+    """Текст для упаковщика, если в коробе нестандартное число штук.
+
+    Стандарт — количества из раздела «Короба» карточки товара.
+    Если в карточке коробов нет, предупреждение не показываем.
+    """
+    if not standard_qtys:
+        return ""
+    try:
+        qty = int(item_qty)
+    except (TypeError, ValueError):
+        return ""
+    if qty in standard_qtys:
+        return ""
+    number = str(box_number or "").strip() or "?"
+    return f"В коробе номер {number} находится {qty} товара"
+
+
+def attach_fbo_box_qty_warnings(catalog: CatalogRepository, payload: dict[str, Any]) -> None:
+    """Пишет ``qty_warning`` в строки задания FBO (не в remaining_groups)."""
+    buckets: list[dict[str, Any]] = []
+    for key in ("lines", "active_lines"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            buckets.extend(item for item in rows if isinstance(item, dict))
+    active = payload.get("active_line")
+    if isinstance(active, dict):
+        buckets.append(active)
+    pids = [int(item["product_id"]) for item in buckets if item.get("product_id")]
+    qty_map = catalog.product_box_quantities_by_id(pids) if pids else {}
+    for item in buckets:
+        pid = item.get("product_id")
+        standard = qty_map.get(int(pid), set()) if pid else set()
+        box_number = str(
+            item.get("box_id") or item.get("order_display") or item.get("seq") or ""
+        ).strip()
+        try:
+            qty = int(item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        item["qty_warning"] = fbo_nonstandard_box_qty_warning(
+            standard,
+            item_qty=qty,
+            box_number=box_number,
+        )
+
+
 def resolve_fbo_scan(
     catalog: CatalogRepository,
     packing_repo: WbFboPackingRepository,

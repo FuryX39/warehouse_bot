@@ -127,7 +127,9 @@ from app.web.warehouse_reports_routes import register_warehouse_reports_routes
 from app.web.warehouse_marking_routes import register_warehouse_marking_routes
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_wb_fbo_routes import register_warehouse_wb_fbo_routes
+from app.web.warehouse_wb_fbo_sheet_routes import register_warehouse_wb_fbo_sheet_routes
 from app.wb_fbo_packing_repository import WbFboPackingRepository
+from app.wb_fbo_sheet_repository import WbFboSheetRepository
 from app.web.warehouse_tools_routes import register_warehouse_tools_routes
 
 _FBS_SHIP_DISABLED_DETAIL = (
@@ -331,6 +333,10 @@ def create_dashboard_app(
     wb_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_packing"
     wb_fbo_repo = WbFboPackingRepository(settings.db_url, files_data_dir=wb_fbo_files_dir)
     wb_fbo_repo.init_schema()
+
+    wb_fbo_sheet_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_sheet"
+    wb_fbo_sheet_repo = WbFboSheetRepository(settings.db_url, files_data_dir=wb_fbo_sheet_dir)
+    wb_fbo_sheet_repo.init_schema()
 
     ozon_fbo_repo = OzonFboSupplyRepository(settings.db_url, catalog_repo, warehouse_users_repo)
     ozon_fbo_repo.init_schema()
@@ -705,6 +711,16 @@ def create_dashboard_app(
         catalog_repo,
         warehouse_users_repo,
         coordinator,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=True,
+        packer_prefixes=(),
+    )
+    register_warehouse_wb_fbo_sheet_routes(
+        app,
+        wb_fbo_sheet_repo,
+        catalog_repo,
+        warehouse_users_repo,
         require_warehouse_user,
         require_tasks_access,
         include_manager=True,

@@ -16,6 +16,7 @@ from app.fbs_labels_common import build_labels_zip
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.wb_fbo_packing_repository import WbFboPackingRepository
 from app.wb_fbo_packing_service import (
+    attach_fbo_box_qty_warnings,
     create_wb_fbo_packing_job,
     lookup_fbo_pick,
     preview_wb_fbo_supply,
@@ -257,6 +258,7 @@ def register_warehouse_wb_fbo_routes(
             item["barcode"] = barcodes.get(int(pid), "") if pid else ""
         payload = packing_repo.job_to_dict(job, include_lines=True)
         payload["remaining_groups"] = remaining
+        attach_fbo_box_qty_warnings(catalog_repo, payload)
         _attach_catalog_images(catalog_repo, payload)
         return payload
 
@@ -345,12 +347,26 @@ def _register_packer_prefix(
                 pdf = packing_repo.read_line_pdf(job_id, line.id)
                 pdfs_b64.append(base64.b64encode(pdf).decode("ascii"))
         job = packer_job_payload(job_id)
+        by_id = {
+            int(item["id"]): item
+            for item in (job.get("lines") or [])
+            if isinstance(item, dict) and item.get("id") is not None
+        }
+        line_dicts: list[dict[str, Any]] = []
+        for line in lines:
+            item = packing_repo.line_to_dict(line)
+            src = by_id.get(int(item["id"]))
+            item["qty_warning"] = str((src or {}).get("qty_warning") or "")
+            line_dicts.append(item)
+        qty_warnings = [item["qty_warning"] for item in line_dicts if item.get("qty_warning")]
         return {
-            "line": packing_repo.line_to_dict(lines[0]),
-            "lines": [packing_repo.line_to_dict(line) for line in lines],
+            "line": line_dicts[0],
+            "lines": line_dicts,
             "job": job,
             "pdf_base64": pdfs_b64[0] if pdfs_b64 else "",
             "pdfs_base64": pdfs_b64,
+            "qty_warning": "\n".join(qty_warnings),
+            "qty_warnings": qty_warnings,
         }
 
     @app.post(f"{prefix}/jobs/{{job_id}}/scan-product", name=f"wb_fbo_scan_product_{tag}")

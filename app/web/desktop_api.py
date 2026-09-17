@@ -21,6 +21,7 @@ from app.config import Settings, resolve_warehouse_admin_credentials
 from app.crm_repository import CrmRepository
 from app.fbs_packing_repository import FbsPackingRepository
 from app.wb_fbo_packing_repository import WbFboPackingRepository
+from app.wb_fbo_sheet_repository import WbFboSheetRepository
 from app.storage_warehouse_repository import StorageWarehouseRepository
 from app.warehouse_receipts_repository import WarehouseReceiptsRepository
 from app.warehouse_schedule_repository import WarehouseScheduleRepository
@@ -32,6 +33,7 @@ from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepos
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_wb_fbo_routes import register_warehouse_wb_fbo_routes
+from app.web.warehouse_wb_fbo_sheet_routes import register_warehouse_wb_fbo_sheet_routes
 from app.web.warehouse_tasks_api_auth import make_require_tasks_access
 from app.web.warehouse_tasks_routes import register_warehouse_tasks_routes
 
@@ -124,6 +126,10 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     wb_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_packing"
     wb_fbo_repo = WbFboPackingRepository(settings.db_url, files_data_dir=wb_fbo_files_dir)
     wb_fbo_repo.init_schema()
+
+    wb_fbo_sheet_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_sheet"
+    wb_fbo_sheet_repo = WbFboSheetRepository(settings.db_url, files_data_dir=wb_fbo_sheet_dir)
+    wb_fbo_sheet_repo.init_schema()
 
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
@@ -270,5 +276,15 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
         require_tasks_access,
         include_manager=False,
         packer_prefixes=("/api/v1/fbo-packing",),
+    )
+    register_warehouse_wb_fbo_sheet_routes(
+        app,
+        wb_fbo_sheet_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=False,
+        packer_prefixes=("/api/v1/fbo-sheet-packing",),
     )
     return app
