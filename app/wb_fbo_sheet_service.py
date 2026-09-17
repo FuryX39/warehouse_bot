@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.catalog_repository import CatalogProduct, CatalogRepository
+from app.shelf_life import expiry_from_production
 from app.wb_fbo_packing_service import fbo_nonstandard_box_qty_warning
 from app.wb_fbo_sheet_repository import (
     WbFboSheetBoxRow,
@@ -166,9 +167,11 @@ def resolve_sheet_scan(
                     break
     if goods is None:
         raise ValueError("Штрихкод не найден в задании")
+    product_payload = packing_repo.product_to_dict(goods)
+    attach_sheet_images(catalog, {"products": [product_payload]})
     return {
         "kind": "product",
-        "product": packing_repo.product_to_dict(goods),
+        "product": product_payload,
         "suggested_qty": suggested_qty,
         "remaining": max(0, goods.qty_plan - goods.qty_assigned),
     }
@@ -188,7 +191,11 @@ def _boxes_for_job(boxes) -> list[dict[str, Any]]:
             order.append(key)
         if item.product_barcode and int(item.qty or 0) > 0:
             grouped[key]["items"].append(
-                {"product_barcode": item.product_barcode, "qty": int(item.qty)}
+                {
+                    "product_barcode": item.product_barcode,
+                    "qty": int(item.qty),
+                    "expiry": str(item.expiry or ""),
+                }
             )
     return [grouped[key] for key in order]
 
@@ -255,6 +262,29 @@ def qty_warning_for_box(
     )
 
 
+def expiry_for_assignment(
+    catalog: CatalogRepository,
+    *,
+    product_id: int | None,
+    production_date: object,
+    existing_expiry: str = "",
+) -> str:
+    if not product_id:
+        return ""
+    has_life, years = catalog.shelf_life_by_product_ids([int(product_id)]).get(
+        int(product_id), (False, 0)
+    )
+    if not has_life:
+        return ""
+    text = str(production_date or "").strip()
+    if text:
+        return expiry_from_production(text, years=years)
+    kept = str(existing_expiry or "").strip()
+    if kept:
+        return kept
+    raise ValueError("Укажите дату производства")
+
+
 def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> None:
     buckets: list[dict[str, Any]] = []
     for key in ("products", "remaining_groups", "boxes"):
@@ -269,7 +299,14 @@ def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> 
                     buckets.extend(row for row in nested if isinstance(row, dict))
     pids = [int(item["product_id"]) for item in buckets if item.get("product_id")]
     urls = catalog.image_urls_by_product_ids(pids) if pids else {}
+    shelf = catalog.shelf_life_by_product_ids(pids) if pids else {}
     for item in buckets:
         pid = item.get("product_id")
-        if pid:
-            item["image_url"] = urls.get(int(pid), "") or item.get("image_url") or ""
+        if not pid:
+            item.setdefault("has_shelf_life", False)
+            item.setdefault("shelf_life_years", 0)
+            continue
+        item["image_url"] = urls.get(int(pid), "") or item.get("image_url") or ""
+        has_life, years = shelf.get(int(pid), (False, 0))
+        item["has_shelf_life"] = bool(has_life)
+        item["shelf_life_years"] = int(years) if has_life else 0

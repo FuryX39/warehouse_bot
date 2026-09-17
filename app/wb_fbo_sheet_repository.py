@@ -109,6 +109,7 @@ class WbFboSheetBoxItem(_Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     product_barcode: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     item_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expiry: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     assigned_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assigned_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -144,6 +145,7 @@ class WbFboSheetBoxItemRow:
     sku: str = ""
     product_name: str = ""
     product_id: int | None = None
+    expiry: str = ""
 
 
 @dataclass
@@ -202,7 +204,34 @@ class WbFboSheetRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_box_item_expiry()
         self._backfill_box_items()
+
+    def _migrate_box_item_expiry(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "wb_fbo_sheet_box_items" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("wb_fbo_sheet_box_items")}
+        if "expiry" in cols:
+            return
+        dialect = self.engine.dialect.name
+        with Session(self.engine) as session:
+            if dialect == "postgresql":
+                session.execute(
+                    text(
+                        "ALTER TABLE wb_fbo_sheet_box_items "
+                        "ADD COLUMN IF NOT EXISTS expiry VARCHAR(32) NOT NULL DEFAULT ''"
+                    )
+                )
+            else:
+                session.execute(
+                    text(
+                        "ALTER TABLE wb_fbo_sheet_box_items "
+                        "ADD COLUMN expiry VARCHAR(32) NOT NULL DEFAULT ''"
+                    )
+                )
+            session.commit()
 
     def _backfill_box_items(self) -> None:
         with Session(self.engine) as session:
@@ -297,6 +326,7 @@ class WbFboSheetRepository:
             sku=product.sku if product else "",
             product_name=product.name if product else "",
             product_id=product.product_id if product else None,
+            expiry=str(row.expiry or ""),
         )
 
     def _box_row(
@@ -323,6 +353,7 @@ class WbFboSheetRepository:
                         sku=product.sku if product else "",
                         product_name=product.name if product else "",
                         product_id=product.product_id if product else None,
+                        expiry="",
                     )
                 ]
         barcodes = [item.product_barcode for item in item_rows if item.product_barcode]
@@ -532,6 +563,7 @@ class WbFboSheetRepository:
                             seq=item_seq,
                             product_barcode=str(line.get("product_barcode") or "").strip(),
                             item_qty=int(line.get("qty") or 0),
+                            expiry=str(line.get("expiry") or ""),
                             assigned_at_ts=now if status == BOX_ASSIGNED else None,
                         )
                     )
@@ -703,10 +735,12 @@ class WbFboSheetRepository:
         box_id: int,
         product_barcode: str,
         item_qty: int,
+        expiry: str = "",
     ) -> WbFboSheetBoxRow:
         now = int(time.time())
         qty = int(item_qty)
         barcode = str(product_barcode or "").strip()
+        expiry_text = str(expiry or "").strip()
         if qty <= 0:
             raise ValueError("Количество должно быть больше 0")
         if not barcode:
@@ -742,6 +776,8 @@ class WbFboSheetRepository:
                 existing.item_qty = int(existing.item_qty or 0) + qty
                 existing.assigned_at_ts = now
                 existing.assigned_by_user_id = int(user_id)
+                if expiry_text:
+                    existing.expiry = expiry_text
             else:
                 next_seq = int(
                     session.scalar(
@@ -758,6 +794,7 @@ class WbFboSheetRepository:
                         seq=next_seq + 1,
                         product_barcode=str(product.barcode),
                         item_qty=qty,
+                        expiry=expiry_text,
                         assigned_at_ts=now,
                         assigned_by_user_id=int(user_id),
                     )
@@ -815,6 +852,7 @@ class WbFboSheetRepository:
                 "product_id": item.product_id,
                 "quantity": item.item_qty,
                 "item_qty": item.item_qty,
+                "expiry": item.expiry,
             }
             for item in row.items
         ]
@@ -846,6 +884,7 @@ class WbFboSheetRepository:
                             "box_id": box.box_human_id,
                             "product_barcode": item.product_barcode,
                             "item_qty": item.item_qty,
+                            "expiry": item.expiry,
                         }
                     )
                 continue
@@ -855,6 +894,7 @@ class WbFboSheetRepository:
                         "box_id": box.box_human_id,
                         "product_barcode": box.product_barcode,
                         "item_qty": box.item_qty,
+                        "expiry": "",
                     }
                 )
         return rows

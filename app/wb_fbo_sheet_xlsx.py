@@ -234,12 +234,26 @@ def _assignment_lines(assignments: list[dict[str, Any]]) -> list[dict[str, Any]]
                 barcode = cell_text(line.get("product_barcode"))
                 qty = int(line.get("item_qty") or line.get("quantity") or line.get("qty") or 0)
                 if box_id and barcode and qty > 0:
-                    lines.append({"box_id": box_id, "product_barcode": barcode, "item_qty": qty})
+                    lines.append(
+                        {
+                            "box_id": box_id,
+                            "product_barcode": barcode,
+                            "item_qty": qty,
+                            "expiry": cell_text(line.get("expiry")),
+                        }
+                    )
             continue
         barcode = cell_text(item.get("product_barcode"))
         qty = int(item.get("item_qty") or item.get("quantity") or item.get("qty") or 0)
         if box_id and barcode and qty > 0:
-            lines.append({"box_id": box_id, "product_barcode": barcode, "item_qty": qty})
+            lines.append(
+                {
+                    "box_id": box_id,
+                    "product_barcode": barcode,
+                    "item_qty": qty,
+                    "expiry": cell_text(item.get("expiry")),
+                }
+            )
     return lines
 
 
@@ -260,10 +274,14 @@ def _group_assignment_lines(lines: list[dict[str, Any]]) -> dict[str, list[dict[
                 "box_id": box_id,
                 "product_barcode": barcode,
                 "item_qty": int(line.get("item_qty") or 0),
+                "expiry": cell_text(line.get("expiry")),
             }
             order.setdefault(key, []).append(bkey)
         else:
             bucket[bkey]["item_qty"] = int(bucket[bkey]["item_qty"]) + int(line.get("item_qty") or 0)
+            expiry = cell_text(line.get("expiry"))
+            if expiry:
+                bucket[bkey]["expiry"] = expiry
     for key, barcodes in order.items():
         grouped[key] = [merged[key][bkey] for bkey in barcodes]
     return grouped
@@ -278,7 +296,15 @@ def _copy_row(ws, src: int, dest: int) -> None:
         dest_cell.number_format = src_cell.number_format
 
 
-def _write_product_qty(ws, row_idx: int, barcode_col: int, qty_col: int, item: dict[str, Any]) -> None:
+def _write_product_qty(
+    ws,
+    row_idx: int,
+    barcode_col: int,
+    qty_col: int,
+    item: dict[str, Any],
+    *,
+    expiry_col: int | None = None,
+) -> None:
     barcode = cell_text(item.get("product_barcode"))
     qty = int(item.get("item_qty") or item.get("quantity") or item.get("qty") or 0)
     barcode_cell = ws.cell(row_idx, barcode_col)
@@ -286,13 +312,17 @@ def _write_product_qty(ws, row_idx: int, barcode_col: int, qty_col: int, item: d
     barcode_cell.number_format = "@"
     barcode_cell.value = barcode
     qty_cell.value = qty if barcode and qty > 0 else 0
+    if expiry_col:
+        expiry_cell = ws.cell(row_idx, expiry_col)
+        expiry_cell.number_format = "@"
+        expiry_cell.value = cell_text(item.get("expiry")) if barcode else ""
 
 
 def fill_boxes_xlsx(
     original: bytes,
     assignments: list[dict[str, Any]],
 ) -> bytes:
-    """Пишет «Баркод товара» и «Кол-во товаров» в исходный шаблон WB.
+    """Пишет «Баркод товара», «Кол-во товаров» и «Срок годности» в исходный шаблон WB.
 
     Несколько артикулов на одно грузоместо — отдельные строки с тем же «ШК короба».
     """
@@ -311,6 +341,7 @@ def fill_boxes_xlsx(
     barcode_col = cols["product_barcode"] + 1
     qty_col = cols["qty"] + 1
     box_col = cols["box_id"] + 1
+    expiry_col = cols["expiry"] + 1 if "expiry" in cols else None
     extras: list[tuple[int, list[dict[str, Any]]]] = []
     max_row = int(ws.max_row or 1)
     for row_idx in range(2, max_row + 1):
@@ -319,7 +350,7 @@ def fill_boxes_xlsx(
         lines = grouped.get(key)
         if not lines:
             continue
-        _write_product_qty(ws, row_idx, barcode_col, qty_col, lines[0])
+        _write_product_qty(ws, row_idx, barcode_col, qty_col, lines[0], expiry_col=expiry_col)
         if len(lines) > 1:
             extras.append((row_idx, lines[1:]))
     for row_idx, rest in reversed(extras):
@@ -327,7 +358,7 @@ def fill_boxes_xlsx(
         for offset, line in enumerate(rest):
             dest = row_idx + 1 + offset
             _copy_row(ws, row_idx, dest)
-            _write_product_qty(ws, dest, barcode_col, qty_col, line)
+            _write_product_qty(ws, dest, barcode_col, qty_col, line, expiry_col=expiry_col)
     buf = io.BytesIO()
     wb.save(buf)
     wb.close()

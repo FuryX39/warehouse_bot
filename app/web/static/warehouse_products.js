@@ -140,6 +140,19 @@
     sync();
   }
 
+  function bindShelfLife(root) {
+    var cb = root.querySelector("#whPrHasShelfLife");
+    var yearsRow = root.querySelector("#whPrShelfLifeYearsRow");
+    var yearsEl = root.querySelector("#whPrShelfLifeYears");
+    if (!cb || !yearsRow || !yearsEl) return;
+    function sync() {
+      yearsRow.hidden = !cb.checked;
+      if (!cb.checked) yearsEl.value = "";
+    }
+    cb.addEventListener("change", sync);
+    sync();
+  }
+
   function buildSelectOptions(items, selectedId) {
     var html = '<option value="">—</option>';
     (items || []).forEach(function (it) {
@@ -1197,6 +1210,8 @@
           volume: "",
           volume_manual: false,
           marking_type_id: defaultMarkingId(),
+          has_shelf_life: false,
+          shelf_life_years: 0,
           barcodes: [],
           gtins: [],
           boxes: [],
@@ -1268,6 +1283,16 @@
           '" placeholder="' +
           esc(volumePlaceholder) +
           '" inputmode="decimal" /></div>' +
+          "</div>" +
+          '<div class="wh-form-checks">' +
+          '<label><input type="checkbox" id="whPrHasShelfLife"' +
+          (p.has_shelf_life ? " checked" : "") +
+          ' /> Имеет срок годности</label>' +
+          "</div>" +
+          '<div class="wh-form-row" id="whPrShelfLifeYearsRow">' +
+          '<div><label>Срок годности, лет</label><input type="number" id="whPrShelfLifeYears" min="1" step="1" value="' +
+          esc(p.has_shelf_life && p.shelf_life_years ? p.shelf_life_years : "") +
+          '" /></div>' +
           "</div></section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">2. Маркировка</h4>' +
           '<div class="wh-form-row"><div><label>Тип маркировки</label><select id="whPrMarking" data-prev="' + esc(p.marking_type_id || "") + '">' + buildSelectOptions(meta.marking_types, p.marking_type_id) + "</select></div></div>" +
@@ -1307,6 +1332,7 @@
           });
         });
         bindVolumeHints(root);
+        bindShelfLife(root);
 
         root.querySelector("#whCatBackList").addEventListener("click", function () {
           editingId = null;
@@ -1507,6 +1533,8 @@
       length_mm: root.querySelector("#whPrLength").value.trim(),
       volume: root.querySelector("#whPrVolume").value.trim(),
       marking_type_id: root.querySelector("#whPrMarking").value || null,
+      has_shelf_life: !!(root.querySelector("#whPrHasShelfLife") && root.querySelector("#whPrHasShelfLife").checked),
+      shelf_life_years: parseInt((root.querySelector("#whPrShelfLifeYears") || {}).value || "0", 10) || 0,
       barcodes: barcodes,
       gtins: gtins,
       boxes: boxes,

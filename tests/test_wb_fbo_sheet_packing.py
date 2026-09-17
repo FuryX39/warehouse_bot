@@ -93,6 +93,7 @@ def test_fill_boxes_xlsx_writes_product_and_qty() -> None:
     parsed = parse_boxes_xlsx(filled)
     assert parsed[0].product_barcode == "4673746970607"
     assert parsed[0].qty == 100
+    assert parsed[0].expiry == ""
     assert parsed[1].product_barcode == ""
     assert parsed[1].qty == 0
     assert parsed[0].package_code == boxes[0].package_code
@@ -243,6 +244,7 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     by_id = {item.box_id: item for item in parsed}
     assert by_id[first_box].product_barcode == "4673746970607"
     assert by_id[first_box].qty == 100
+    assert by_id[first_box].expiry == ""
     assert by_id[second_box].qty == 37
     empty = [item for item in parsed if not item.product_barcode]
     assert len(empty) == 48
@@ -318,6 +320,134 @@ def test_fill_boxes_xlsx_mixed_articles_same_cargo() -> None:
     }
     assert same[0].package_code == same[1].package_code == boxes[0].package_code
     assert len(parsed) == 4
+
+
+def test_fill_boxes_xlsx_writes_expiry() -> None:
+    original = _boxes_xlsx(count=2)
+    boxes = parse_boxes_xlsx(original)
+    filled = fill_boxes_xlsx(
+        original,
+        [
+            {
+                "box_id": boxes[0].box_id,
+                "product_barcode": "4673746970607",
+                "item_qty": 10,
+                "expiry": "17.09.2029",
+            }
+        ],
+    )
+    parsed = parse_boxes_xlsx(filled)
+    assert parsed[0].expiry == "17.09.2029"
+    assert parsed[1].expiry == ""
+
+
+def _enable_shelf_life(catalog: CatalogRepository, barcode: str, *, years: int = 3) -> None:
+    product = catalog.find_product_by_barcode(barcode)
+    assert product is not None
+    catalog.update_product(
+        product.id,
+        {
+            "name": product.name,
+            "sku": product.sku,
+            "code": product.code,
+            "is_kit": False,
+            "has_shelf_life": True,
+            "shelf_life_years": years,
+            "components": [],
+        },
+    )
+
+
+def test_assign_ignores_production_date_without_shelf_life(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+            "production_date": "2026-09-17",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["items"][0]["expiry"] == ""
+    downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
+    parsed = parse_boxes_xlsx(downloaded.content)
+    row = next(item for item in parsed if item.box_id == cargo_id)
+    assert row.expiry == ""
+    assert packing.get_job(job_id) is not None
+
+
+def test_assign_requires_and_writes_expiry_when_shelf_life(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    _enable_shelf_life(catalog, "4673746970607", years=3)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+    missing = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert missing.status_code == 400, missing.text
+    assert "дату производства" in missing.json()["detail"]
+    resolved = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": "4673746970607"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["product"]["has_shelf_life"] is True
+    assert resolved.json()["product"]["shelf_life_years"] == 3
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+            "production_date": "17.09.2026",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["items"][0]["expiry"] == "17.09.2029"
+    downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
+    parsed = parse_boxes_xlsx(downloaded.content)
+    row = next(item for item in parsed if item.box_id == cargo_id)
+    assert row.expiry == "17.09.2029"
+    assert packing.get_job(job_id, include_lines=True).pcs_assigned == 10
 
 
 def test_assign_multiple_skus_to_one_cargo_place(db_url: str, tmp_path) -> None:

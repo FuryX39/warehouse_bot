@@ -15,6 +15,7 @@ from app.wb_fbo_sheet_repository import BOX_ASSIGNED, WbFboSheetRepository
 from app.wb_fbo_sheet_service import (
     attach_sheet_images,
     create_wb_fbo_sheet_job,
+    expiry_for_assignment,
     find_box_by_scan,
     pdf_for_boxes,
     qty_warning_for_box,
@@ -308,6 +309,7 @@ def _register_sheet_packer_prefix(
         payload = body if isinstance(body, dict) else {}
         barcode = str(payload.get("barcode") or payload.get("box_code") or "")
         product_barcode = str(payload.get("product_barcode") or "")
+        production_date = str(payload.get("production_date") or "")
         try:
             qty = int(payload.get("quantity") or payload.get("qty") or 0)
         except (TypeError, ValueError) as exc:
@@ -321,12 +323,35 @@ def _register_sheet_packer_prefix(
             if found is None:
                 raise ValueError("Сначала выберите товар, затем пикните грузоместо")
             box_id = int(found.id)
+            product = next(
+                (
+                    item
+                    for item in job.products
+                    if str(item.barcode or "").casefold() == product_barcode.strip().casefold()
+                ),
+                None,
+            )
+            existing = next(
+                (
+                    item
+                    for item in found.items
+                    if str(item.product_barcode or "").casefold() == product_barcode.strip().casefold()
+                ),
+                None,
+            )
+            expiry = expiry_for_assignment(
+                catalog_repo,
+                product_id=product.product_id if product else None,
+                production_date=production_date,
+                existing_expiry=existing.expiry if existing else "",
+            )
             assigned = packing_repo.assign_box(
                 job_id,
                 user_id,
                 box_id=box_id,
                 product_barcode=product_barcode,
                 item_qty=qty,
+                expiry=expiry,
             )
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:

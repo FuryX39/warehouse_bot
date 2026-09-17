@@ -121,6 +121,8 @@ class CatalogProduct(_Base):
     marking_type_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("catalog_marking_types.id"), nullable=True
     )
+    has_shelf_life: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    shelf_life_years: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -237,6 +239,8 @@ class CatalogProductRow:
     marking_type_id: Optional[int]
     marking_type_name: str
     volume_manual: bool = False
+    has_shelf_life: bool = False
+    shelf_life_years: int = 0
     barcodes: list[dict[str, str]] = field(default_factory=list)
     gtins: list[str] = field(default_factory=list)
     boxes: list[dict[str, Any]] = field(default_factory=list)
@@ -379,6 +383,7 @@ class CatalogRepository:
         self._migrate_barcode_label()
         self._migrate_barcode_group()
         self._migrate_product_dimensions()
+        self._migrate_product_shelf_life()
         self._cleanup_orphan_product_rows()
         self._seed_defaults()
 
@@ -497,6 +502,46 @@ class CatalogRepository:
                         "ADD COLUMN volume_manual BOOLEAN NOT NULL DEFAULT 0"
                     )
                 session.execute(text(sql))
+            session.commit()
+
+    def _migrate_product_shelf_life(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_products" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_products")}
+        dialect = self.engine.dialect.name
+        with Session(self.engine) as session:
+            if "has_shelf_life" not in cols:
+                if dialect == "postgresql":
+                    session.execute(
+                        text(
+                            "ALTER TABLE catalog_products "
+                            "ADD COLUMN IF NOT EXISTS has_shelf_life BOOLEAN NOT NULL DEFAULT FALSE"
+                        )
+                    )
+                else:
+                    session.execute(
+                        text(
+                            "ALTER TABLE catalog_products "
+                            "ADD COLUMN has_shelf_life BOOLEAN NOT NULL DEFAULT FALSE"
+                        )
+                    )
+            if "shelf_life_years" not in cols:
+                if dialect == "postgresql":
+                    session.execute(
+                        text(
+                            "ALTER TABLE catalog_products "
+                            "ADD COLUMN IF NOT EXISTS shelf_life_years INTEGER NOT NULL DEFAULT 0"
+                        )
+                    )
+                else:
+                    session.execute(
+                        text(
+                            "ALTER TABLE catalog_products "
+                            "ADD COLUMN shelf_life_years INTEGER NOT NULL DEFAULT 0"
+                        )
+                    )
             session.commit()
 
     def _migrate_product_group_cost(self) -> None:
@@ -1694,6 +1739,14 @@ class CatalogRepository:
             volume_manual=row.volume_manual,
         )
         row.marking_type_id = _opt_int(data.get("marking_type_id"))
+        row.has_shelf_life = _truthy(data.get("has_shelf_life"))
+        if row.has_shelf_life:
+            years = _opt_int(data.get("shelf_life_years")) or 0
+            if years < 1:
+                raise ValueError("Укажите срок годности в годах")
+            row.shelf_life_years = years
+        else:
+            row.shelf_life_years = 0
 
     def _normalize_barcodes(self, raw: list) -> list[dict[str, str]]:
         out: list[dict[str, str]] = []
@@ -2243,6 +2296,8 @@ class CatalogRepository:
             components=components,
             prices=prices,
             barcode_count=barcode_count,
+            has_shelf_life=bool(row.has_shelf_life),
+            shelf_life_years=int(row.shelf_life_years or 0),
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
         )
@@ -2270,6 +2325,8 @@ class CatalogRepository:
             "volume_manual": row.volume_manual,
             "marking_type_id": row.marking_type_id,
             "marking_type_name": row.marking_type_name,
+            "has_shelf_life": bool(row.has_shelf_life),
+            "shelf_life_years": int(row.shelf_life_years or 0),
             "barcode_count": row.barcode_count,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
@@ -2358,6 +2415,23 @@ class CatalogRepository:
             else:
                 row.price = price
 
+    def shelf_life_by_product_ids(self, product_ids: list[int]) -> dict[int, tuple[bool, int]]:
+        ids = sorted({int(x) for x in product_ids if int(x) > 0})
+        if not ids:
+            return {}
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(
+                    CatalogProduct.id,
+                    CatalogProduct.has_shelf_life,
+                    CatalogProduct.shelf_life_years,
+                ).where(CatalogProduct.id.in_(ids))
+            ).all()
+            return {
+                int(pid): (bool(has_life), int(years or 0))
+                for pid, has_life, years in rows
+            }
+
     def get_product_group_unit_costs(self, product_ids: list[int]) -> dict[int, float]:
         ids = sorted({int(x) for x in product_ids if int(x) > 0})
         if not ids:
@@ -2381,6 +2455,15 @@ def _opt_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().casefold()
+    return text in {"1", "true", "yes", "on"}
 
 
 def _group_cost_api_value(raw: str) -> float | None:
