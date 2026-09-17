@@ -198,6 +198,7 @@ class WarehouseShipmentsRepository:
             qty_by_sku: dict[str, int] = {}
             external_ids: list[str] = []
             source_for_journal = ""
+            wave_origin = str(ship.origin or "") == "wave"
             for lk in links:
                 order = session.get(WarehouseOrder, int(lk.order_id))
                 if order is None or order.status in (ORDER_SHIPPED, ORDER_CANCELLED):
@@ -208,41 +209,54 @@ class WarehouseShipmentsRepository:
                     ).all()
                 )
                 ok = True
+                decrements: list[tuple[str, int, int]] = []
                 for ln in order_lines:
                     if int(ln.quantity) <= 0:
                         continue
-                    have = self.storage_repo.get_stock(int(order.warehouse_id), str(ln.sku))
-                    # MAIN specifically
                     bin_id = self.storage_repo.get_default_bin_id(int(order.warehouse_id))
                     have = self.storage_repo.get_stock(
                         int(order.warehouse_id), str(ln.sku), bin_id=bin_id
                     )
-                    if have < int(ln.quantity):
+                    qty = int(ln.quantity)
+                    if have >= qty:
+                        decrements.append((str(ln.sku), qty, int(bin_id) if bin_id is not None else 0))
+                    elif wave_origin:
+                        warnings.append(
+                            f"MAIN не списан для {order.posting_id} {ln.sku}: нужно {qty}, есть {have}"
+                        )
+                    else:
                         ok = False
                         break
                 if not ok:
                     warnings.append(f"Нехватка MAIN для {order.posting_id}")
                     continue
-                for ln in order_lines:
-                    if int(ln.quantity) <= 0:
-                        continue
-                    bin_id = self.storage_repo.get_default_bin_id(int(order.warehouse_id))
+                if not decrements and not wave_origin:
+                    warnings.append(f"Нехватка MAIN для {order.posting_id}")
+                    continue
+                for sku, qty, bin_id in decrements:
                     self.storage_repo.adjust_stock(
                         int(order.warehouse_id),
-                        str(ln.sku),
-                        -int(ln.quantity),
+                        sku,
+                        -int(qty),
                         skip_recalc=True,
-                        bin_id=bin_id,
+                        bin_id=bin_id or None,
                         strict=True,
                     )
-                    qty_by_sku[str(ln.sku)] = qty_by_sku.get(str(ln.sku), 0) + int(ln.quantity)
-                    external_ids.append(f"{order.posting_id}:{ln.sku}")
+                    qty_by_sku[sku] = qty_by_sku.get(sku, 0) + int(qty)
+                    external_ids.append(f"{order.posting_id}:{sku}")
+                if not decrements:
+                    for ln in order_lines:
+                        if int(ln.quantity) > 0:
+                            external_ids.append(f"{order.posting_id}:{ln.sku}")
                 order.status = ORDER_SHIPPED
                 order.updated_at_ts = int(time.time())
                 posted_ids.append(int(order.id))
                 source_for_journal = order.source
             if not posted_ids:
                 session.commit()
+                if wave_origin:
+                    extra = (": " + "; ".join(warnings[:5])) if warnings else ""
+                    raise ValueError("В волне нет заказов для отгрузки" + extra)
                 row = self._row(session, ship)
                 row.warnings.extend(warnings)
                 return row
@@ -310,6 +324,10 @@ class WarehouseShipmentsRepository:
         title: str = "",
         post: bool = True,
     ) -> ShipmentRow:
+        from app.warehouse_wave import ensure_packing_job_attached
+
+        wh_id = self.inventory_repo.get_sync_source_warehouse_id()
+        ensure_packing_job_attached(self.orders_repo, self.engine, int(job_id), wh_id)
         orders = self.orders_repo.list_by_packing_job(int(job_id))
         ids = [int(o.id) for o in orders if o.status not in (ORDER_SHIPPED, ORDER_CANCELLED)]
         if not ids:
