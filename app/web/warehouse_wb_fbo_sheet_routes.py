@@ -13,6 +13,7 @@ from app.catalog_repository import CatalogRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.wb_fbo_sheet_repository import BOX_ASSIGNED, WbFboSheetRepository
 from app.wb_fbo_sheet_service import (
+    assigned_expiry_for_barcode,
     attach_sheet_images,
     create_wb_fbo_sheet_job,
     expiry_for_assignment,
@@ -339,11 +340,14 @@ def _register_sheet_packer_prefix(
                 ),
                 None,
             )
+            kept_expiry = str(existing.expiry or "").strip() if existing else ""
+            if not kept_expiry:
+                kept_expiry = assigned_expiry_for_barcode(job, product_barcode)
             expiry = expiry_for_assignment(
                 catalog_repo,
                 product_id=product.product_id if product else None,
                 production_date=production_date,
-                existing_expiry=existing.expiry if existing else "",
+                existing_expiry=kept_expiry,
             )
             assigned = packing_repo.assign_box(
                 job_id,

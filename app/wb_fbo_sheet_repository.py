@@ -727,6 +727,19 @@ class WbFboSheetRepository:
             assigned = self._assigned_qty_by_barcode(session, job_id).get(key, 0)
             return max(0, int(product.qty_plan or 0) - assigned)
 
+    def _apply_expiry_for_barcode(
+        self, session: Session, job_id: int, product_barcode: str, expiry: str
+    ) -> None:
+        key = str(product_barcode or "").strip().casefold()
+        text = str(expiry or "").strip()
+        if not key or not text:
+            return
+        for item in session.scalars(
+            select(WbFboSheetBoxItem).where(WbFboSheetBoxItem.job_id == int(job_id))
+        ).all():
+            if str(item.product_barcode or "").casefold() == key:
+                item.expiry = text
+
     def assign_box(
         self,
         job_id: int,
@@ -800,6 +813,8 @@ class WbFboSheetRepository:
                     )
                 )
             session.flush()
+            if expiry_text:
+                self._apply_expiry_for_barcode(session, job_id, barcode, expiry_text)
             items = self._items_for_box(session, int(box.id))
             box.status = BOX_ASSIGNED
             box.assigned_at_ts = now

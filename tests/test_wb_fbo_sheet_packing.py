@@ -450,6 +450,82 @@ def test_assign_requires_and_writes_expiry_when_shelf_life(db_url: str, tmp_path
     assert packing.get_job(job_id, include_lines=True).pcs_assigned == 10
 
 
+def test_assign_reuses_sku_expiry_and_rewrites_on_new_date(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    _enable_shelf_life(catalog, "4673746970607", years=3)
+    _enable_shelf_life(catalog, "4673746971086", years=3)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=4), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 3},
+    )
+    assert printed.status_code == 200, printed.text
+    first_id, second_id, third_id = [box["box_id"] for box in printed.json()["boxes"]]
+
+    first = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": first_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+            "production_date": "17.09.2026",
+        },
+    )
+    assert first.status_code == 200, first.text
+    other = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": first_id,
+            "product_barcode": "4673746971086",
+            "quantity": 5,
+            "production_date": "01.01.2024",
+        },
+    )
+    assert other.status_code == 200, other.text
+    reused = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": second_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert reused.status_code == 200, reused.text
+    rewritten = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": third_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+            "production_date": "17.09.2025",
+        },
+    )
+    assert rewritten.status_code == 200, rewritten.text
+
+    downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
+    parsed = parse_boxes_xlsx(downloaded.content)
+    by_id = {}
+    for item in parsed:
+        by_id.setdefault(item.box_id, []).append(item)
+    first_rows = {row.product_barcode: row.expiry for row in by_id[first_id]}
+    assert first_rows["4673746970607"] == "17.09.2028"
+    assert first_rows["4673746971086"] == "01.01.2027"
+    assert by_id[second_id][0].expiry == "17.09.2028"
+    assert by_id[third_id][0].expiry == "17.09.2028"
+    assert packing.get_job(job_id) is not None
+
+
 def test_assign_multiple_skus_to_one_cargo_place(db_url: str, tmp_path) -> None:
     catalog = _catalog(db_url)
     client, packing = _client(db_url, tmp_path, catalog)

@@ -285,6 +285,20 @@ def expiry_for_assignment(
     raise ValueError("Укажите дату производства")
 
 
+def assigned_expiry_for_barcode(job: WbFboSheetJobRow, product_barcode: str) -> str:
+    key = str(product_barcode or "").strip().casefold()
+    if not key:
+        return ""
+    for box in job.boxes:
+        for item in box.items:
+            if str(item.product_barcode or "").casefold() != key:
+                continue
+            text = str(item.expiry or "").strip()
+            if text:
+                return text
+    return ""
+
+
 def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> None:
     buckets: list[dict[str, Any]] = []
     for key in ("products", "remaining_groups", "boxes"):
