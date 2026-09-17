@@ -159,16 +159,17 @@ def parse_goods_xlsx(content: bytes) -> list[ParsedGoodsRow]:
 def parse_boxes_xlsx(content: bytes) -> list[ParsedBoxRow]:
     rows = _first_sheet_rows(content)
     if not rows:
-        raise ValueError("В таблице коробов нет строк")
+        raise ValueError("В таблице грузомест нет строк")
     cols = _map_headers(rows[0], _BOX_HEADERS)
     if "box_id" not in cols or "package_code" not in cols:
         raise ValueError(
-            "В таблице коробов нужны колонки «ШК короба» и "
+            "В таблице грузомест нужны колонки «ШК короба» и "
             "«ШК короба для печати в стороннем сервисе»"
         )
     out: list[ParsedBoxRow] = []
-    seen_box: set[str] = set()
-    seen_pkg: set[str] = set()
+    seen_box_pkg: dict[str, str] = {}
+    seen_pkg_box: dict[str, str] = {}
+    seen_line: set[tuple[str, str]] = set()
     for raw in rows[1:]:
         box_id = cell_text(raw[cols["box_id"]] if cols["box_id"] < len(raw) else "")
         package_code = cell_text(
@@ -177,20 +178,31 @@ def parse_boxes_xlsx(content: bytes) -> list[ParsedBoxRow]:
         if not box_id and not package_code:
             continue
         if not box_id or not package_code:
-            raise ValueError("У короба должны быть и «ШК короба», и код для печати")
+            raise ValueError("У грузоместа должны быть и «ШК короба», и код для печати")
         box_key = digits_only(box_id) or box_id.casefold()
         pkg_key = package_code.casefold()
-        if box_key in seen_box:
-            raise ValueError(f"ШК короба «{box_id}» повторяется")
-        if pkg_key in seen_pkg:
-            raise ValueError(f"Код печати короба «{package_code}» повторяется")
-        seen_box.add(box_key)
-        seen_pkg.add(pkg_key)
         product_barcode = cell_text(
             raw[cols["product_barcode"]]
             if "product_barcode" in cols and cols["product_barcode"] < len(raw)
             else ""
         )
+        if box_key in seen_box_pkg:
+            if seen_box_pkg[box_key] != pkg_key:
+                raise ValueError(f"ШК короба «{box_id}» повторяется с другим кодом печати")
+            if not product_barcode:
+                raise ValueError(f"ШК короба «{box_id}» повторяется")
+        else:
+            seen_box_pkg[box_key] = pkg_key
+        if pkg_key in seen_pkg_box:
+            if seen_pkg_box[pkg_key] != box_key:
+                raise ValueError(f"Код печати грузоместа «{package_code}» повторяется")
+        else:
+            seen_pkg_box[pkg_key] = box_key
+        if product_barcode:
+            line_key = (box_key, product_barcode.casefold())
+            if line_key in seen_line:
+                raise ValueError(f"ШК короба «{box_id}» уже с баркодом «{product_barcode}»")
+            seen_line.add(line_key)
         qty = _cell_int(
             raw[cols["qty"]] if "qty" in cols and cols["qty"] < len(raw) else None
         )
@@ -206,23 +218,87 @@ def parse_boxes_xlsx(content: bytes) -> list[ParsedBoxRow]:
             )
         )
     if not out:
-        raise ValueError("В таблице коробов нет грузомест")
+        raise ValueError("В таблице грузомест нет строк")
     return out
+
+
+def _assignment_lines(assignments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    for item in assignments:
+        nested = item.get("items")
+        box_id = cell_text(item.get("box_id") or item.get("box_human_id"))
+        if isinstance(nested, list) and nested:
+            for line in nested:
+                if not isinstance(line, dict):
+                    continue
+                barcode = cell_text(line.get("product_barcode"))
+                qty = int(line.get("item_qty") or line.get("quantity") or line.get("qty") or 0)
+                if box_id and barcode and qty > 0:
+                    lines.append({"box_id": box_id, "product_barcode": barcode, "item_qty": qty})
+            continue
+        barcode = cell_text(item.get("product_barcode"))
+        qty = int(item.get("item_qty") or item.get("quantity") or item.get("qty") or 0)
+        if box_id and barcode and qty > 0:
+            lines.append({"box_id": box_id, "product_barcode": barcode, "item_qty": qty})
+    return lines
+
+
+def _group_assignment_lines(lines: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: dict[str, list[str]] = {}
+    merged: dict[str, dict[str, dict[str, Any]]] = {}
+    for line in lines:
+        box_id = cell_text(line.get("box_id"))
+        key = digits_only(box_id) or box_id.casefold()
+        if not key:
+            continue
+        barcode = cell_text(line.get("product_barcode"))
+        bkey = barcode.casefold()
+        bucket = merged.setdefault(key, {})
+        if bkey not in bucket:
+            bucket[bkey] = {
+                "box_id": box_id,
+                "product_barcode": barcode,
+                "item_qty": int(line.get("item_qty") or 0),
+            }
+            order.setdefault(key, []).append(bkey)
+        else:
+            bucket[bkey]["item_qty"] = int(bucket[bkey]["item_qty"]) + int(line.get("item_qty") or 0)
+    for key, barcodes in order.items():
+        grouped[key] = [merged[key][bkey] for bkey in barcodes]
+    return grouped
+
+
+def _copy_row(ws, src: int, dest: int) -> None:
+    max_col = int(ws.max_column or 1)
+    for col in range(1, max_col + 1):
+        src_cell = ws.cell(src, col)
+        dest_cell = ws.cell(dest, col)
+        dest_cell.value = src_cell.value
+        dest_cell.number_format = src_cell.number_format
+
+
+def _write_product_qty(ws, row_idx: int, barcode_col: int, qty_col: int, item: dict[str, Any]) -> None:
+    barcode = cell_text(item.get("product_barcode"))
+    qty = int(item.get("item_qty") or item.get("quantity") or item.get("qty") or 0)
+    barcode_cell = ws.cell(row_idx, barcode_col)
+    qty_cell = ws.cell(row_idx, qty_col)
+    barcode_cell.number_format = "@"
+    barcode_cell.value = barcode
+    qty_cell.value = qty if barcode and qty > 0 else 0
 
 
 def fill_boxes_xlsx(
     original: bytes,
     assignments: list[dict[str, Any]],
 ) -> bytes:
-    """Пишет «Баркод товара» и «Кол-во товаров» в исходный шаблон WB."""
+    """Пишет «Баркод товара» и «Кол-во товаров» в исходный шаблон WB.
+
+    Несколько артикулов на одно грузоместо — отдельные строки с тем же «ШК короба».
+    """
     if not original:
-        raise ValueError("Нет исходной таблицы коробов")
-    by_box: dict[str, dict[str, Any]] = {}
-    for item in assignments:
-        box_id = cell_text(item.get("box_id") or item.get("box_human_id"))
-        key = digits_only(box_id) or box_id.casefold()
-        if key:
-            by_box[key] = item
+        raise ValueError("Нет исходной таблицы грузомест")
+    grouped = _group_assignment_lines(_assignment_lines(assignments))
     try:
         wb = load_workbook(io.BytesIO(original))
     except Exception as exc:
@@ -231,23 +307,27 @@ def fill_boxes_xlsx(
     header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
     cols = _map_headers(tuple(header_row), _BOX_HEADERS)
     if "box_id" not in cols or "product_barcode" not in cols or "qty" not in cols:
-        raise ValueError("В шаблоне коробов нет колонок для заполнения")
+        raise ValueError("В шаблоне грузомест нет колонок для заполнения")
     barcode_col = cols["product_barcode"] + 1
     qty_col = cols["qty"] + 1
     box_col = cols["box_id"] + 1
-    for row_idx in range(2, (ws.max_row or 1) + 1):
+    extras: list[tuple[int, list[dict[str, Any]]]] = []
+    max_row = int(ws.max_row or 1)
+    for row_idx in range(2, max_row + 1):
         box_id = cell_text(ws.cell(row_idx, box_col).value)
         key = digits_only(box_id) or box_id.casefold()
-        item = by_box.get(key)
-        barcode_cell = ws.cell(row_idx, barcode_col)
-        qty_cell = ws.cell(row_idx, qty_col)
-        if item is None:
+        lines = grouped.get(key)
+        if not lines:
             continue
-        barcode = cell_text(item.get("product_barcode"))
-        qty = int(item.get("item_qty") or item.get("quantity") or 0)
-        barcode_cell.number_format = "@"
-        barcode_cell.value = barcode
-        qty_cell.value = qty if barcode and qty > 0 else 0
+        _write_product_qty(ws, row_idx, barcode_col, qty_col, lines[0])
+        if len(lines) > 1:
+            extras.append((row_idx, lines[1:]))
+    for row_idx, rest in reversed(extras):
+        ws.insert_rows(row_idx + 1, amount=len(rest))
+        for offset, line in enumerate(rest):
+            dest = row_idx + 1 + offset
+            _copy_row(ws, row_idx, dest)
+            _write_product_qty(ws, dest, barcode_col, qty_col, line)
     buf = io.BytesIO()
     wb.save(buf)
     wb.close()

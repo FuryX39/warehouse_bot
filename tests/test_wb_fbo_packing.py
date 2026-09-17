@@ -379,7 +379,7 @@ def test_fbo_nonstandard_box_qty_warning_text() -> None:
     assert fbo_nonstandard_box_qty_warning({100}, item_qty=100, box_number="413 0001") == ""
     assert (
         fbo_nonstandard_box_qty_warning({100}, item_qty=37, box_number="413 0002")
-        == "В коробе номер 413 0002 находится 37 товара"
+        == "В грузоместе номер 413 0002 находится 37 товара"
     )
     assert fbo_nonstandard_box_qty_warning(set(), item_qty=8, box_number="1") == ""
     assert fbo_nonstandard_box_qty_warning({10, 8}, item_qty=8, box_number="x") == ""
@@ -458,7 +458,7 @@ def test_scan_warns_when_box_qty_is_not_catalog_standard(db_url: str, tmp_path) 
     assert second.json()["line"]["quantity"] == 8
     box_no = second.json()["line"]["box_id"]
     assert box_no
-    warning = f"В коробе номер {box_no} находится 8 товара"
+    warning = f"В грузоместе номер {box_no} находится 8 товара"
     assert second.json()["qty_warning"] == warning
     assert second.json()["qty_warnings"] == [warning]
     assert second.json()["line"]["qty_warning"] == warning
@@ -493,7 +493,7 @@ def test_batch_scan_warns_only_nonstandard_boxes(db_url: str, tmp_path) -> None:
     assert [item["quantity"] for item in lines] == [10, 8]
     assert lines[0]["qty_warning"] == ""
     leftover = lines[1]
-    warning = f"В коробе номер {leftover['box_id']} находится 8 товара"
+    warning = f"В грузоместе номер {leftover['box_id']} находится 8 товара"
     assert leftover["qty_warning"] == warning
     assert scanned.json()["qty_warnings"] == [warning]
 

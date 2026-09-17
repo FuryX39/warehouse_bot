@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
@@ -125,6 +126,17 @@ def _catalog(db_url: str) -> CatalogRepository:
             "components": [],
         }
     )
+    repo.create_product(
+        {
+            "name": "SS959",
+            "sku": "SS959",
+            "code": "00082",
+            "is_kit": False,
+            "barcodes": [{"barcode": "4673746971086", "label": "", "group": ""}],
+            "boxes": [{"barcode": "BOX-SS959-50", "quantity": 50}],
+            "components": [],
+        }
+    )
     return repo
 
 
@@ -223,6 +235,7 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     )
     assert leftover.status_code == 200, leftover.text
     assert "37 товара" in leftover.json()["qty_warning"]
+    assert "грузоместе" in leftover.json()["qty_warning"]
 
     downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
     assert downloaded.status_code == 200
@@ -234,3 +247,179 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     empty = [item for item in parsed if not item.product_barcode]
     assert len(empty) == 48
     assert packing.get_job(job_id).pcs_assigned == 137
+
+
+def test_parse_mixed_articles_same_cargo_place() -> None:
+    content = _workbook_bytes(
+        [
+            [
+                "Баркод товара",
+                "Кол-во товаров",
+                "ШК короба",
+                "Срок годности",
+                "ШК короба для печати в стороннем сервисе",
+            ],
+            ["4673746970607", 10, "4662171", "", "$Ts;0;0;1;box0;TAS"],
+            ["4673746971086", 20, "4662171", "", "$Ts;0;0;1;box0;TAS"],
+        ]
+    )
+    parsed = parse_boxes_xlsx(content)
+    assert len(parsed) == 2
+    assert parsed[0].box_id == parsed[1].box_id == "4662171"
+    assert parsed[0].package_code == parsed[1].package_code
+    assert {item.product_barcode: item.qty for item in parsed} == {
+        "4673746970607": 10,
+        "4673746971086": 20,
+    }
+
+
+def test_parse_rejects_same_box_different_package_code() -> None:
+    content = _workbook_bytes(
+        [
+            [
+                "Баркод товара",
+                "Кол-во товаров",
+                "ШК короба",
+                "Срок годности",
+                "ШК короба для печати в стороннем сервисе",
+            ],
+            ["4673746970607", 10, "4662171", "", "$Ts;0;0;1;box0;TAS"],
+            ["4673746971086", 20, "4662171", "", "$Ts;0;0;1;box1;TAS"],
+        ]
+    )
+    with pytest.raises(ValueError, match="другим кодом печати"):
+        parse_boxes_xlsx(content)
+
+
+def test_fill_boxes_xlsx_mixed_articles_same_cargo() -> None:
+    original = _boxes_xlsx(count=3)
+    boxes = parse_boxes_xlsx(original)
+    filled = fill_boxes_xlsx(
+        original,
+        [
+            {
+                "box_id": boxes[0].box_id,
+                "product_barcode": "4673746970607",
+                "item_qty": 10,
+            },
+            {
+                "box_id": boxes[0].box_id,
+                "product_barcode": "4673746971086",
+                "item_qty": 20,
+            },
+        ],
+    )
+    parsed = parse_boxes_xlsx(filled)
+    same = [item for item in parsed if item.box_id == boxes[0].box_id]
+    assert len(same) == 2
+    assert {(item.product_barcode, item.qty) for item in same} == {
+        ("4673746970607", 10),
+        ("4673746971086", 20),
+    }
+    assert same[0].package_code == same[1].package_code == boxes[0].package_code
+    assert len(parsed) == 4
+
+
+def test_assign_multiple_skus_to_one_cargo_place(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]", "supply_id": "41357389"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=3), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    assert printed.status_code == 200, printed.text
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+
+    first = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 100,
+        },
+    )
+    assert first.status_code == 200, first.text
+    second = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746971086",
+            "quantity": 50,
+        },
+    )
+    assert second.status_code == 200, second.text
+    box = second.json()["box"]
+    assert box["status"] == BOX_ASSIGNED
+    assert len(box["items"]) == 2
+    assert {item["product_barcode"]: item["quantity"] for item in box["items"]} == {
+        "4673746970607": 100,
+        "4673746971086": 50,
+    }
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
+    assert job.box_assigned == 1
+    assert job.pcs_assigned == 150
+    downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
+    assert downloaded.status_code == 200
+    parsed = parse_boxes_xlsx(downloaded.content)
+    rows = [item for item in parsed if item.box_id == cargo_id]
+    assert len(rows) == 2
+    assert {(item.product_barcode, item.qty) for item in rows} == {
+        ("4673746970607", 100),
+        ("4673746971086", 50),
+    }
+
+
+def test_create_job_groups_prefilled_mixed_cargo(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    mixed = _workbook_bytes(
+        [
+            [
+                "Баркод товара",
+                "Кол-во товаров",
+                "ШК короба",
+                "Срок годности",
+                "ШК короба для печати в стороннем сервисе",
+            ],
+            ["4673746970607", 10, "4662171", "", "$Ts;0;0;1;box0;TAS"],
+            ["4673746971086", 20, "4662171", "", "$Ts;0;0;1;box0;TAS"],
+            ["", 0, "4662172", "", "$Ts;0;0;1;box1;TAS"],
+        ]
+    )
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": (
+                "goods.xlsx",
+                _goods_xlsx(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+            "boxes": (
+                "boxes.xlsx",
+                mixed,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job = created.json()["job"]
+    assert job["box_total"] == 2
+    assert job["box_assigned"] == 1
+    assert job["pcs_assigned"] == 30
+    stored = packing.get_job(job["id"], include_lines=True)
+    assert stored is not None
+    assigned = next(box for box in stored.boxes if box.status == BOX_ASSIGNED)
+    assert len(assigned.items) == 2

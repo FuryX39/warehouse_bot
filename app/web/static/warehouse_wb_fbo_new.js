@@ -95,7 +95,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Поставка</th><th>Штук</th><th>Короба</th><th>Упаковщики</th><th></th>" +
+      "<th>№</th><th>Поставка</th><th>Штук</th><th>Грузоместа</th><th>Упаковщики</th><th></th>" +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -195,7 +195,7 @@
             (job.pcs_plan || 0) +
             " шт., " +
             (job.box_total || 0) +
-            " коробов." +
+            " грузомест." +
             (warn ? " " + warn : ""),
           false
         );
@@ -247,7 +247,7 @@
           '<div class="wh-route-card">' +
           "<h3>FBO WB new</h3>" +
           '<p class="wh-muted">Прикрепите таблицы из кабинета WB: товары и пустые ШК коробов. ' +
-          "Упаковщики раскладывают товар по коробам. Готовый файл грузомест скачивается в том же формате кабинета — загружаете его в WB сами.</p>" +
+          "Упаковщики раскладывают товар по грузоместам. Готовый файл грузомест скачивается в том же формате кабинета — загружаете его в WB сами.</p>" +
           '<div class="wh-route-form">' +
           '<label>Товары.xlsx<input type="file" id="whWbFboNewGoods" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
           '<label>Шк коробов.xlsx<input type="file" id="whWbFboNewBoxes" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +

@@ -142,16 +142,7 @@ def register_warehouse_wb_fbo_sheet_routes(
                 original = packing_repo.read_stored(job.boxes_stored_name)
                 filled = fill_boxes_xlsx(
                     original,
-                    [
-                        packing_repo.box_to_dict(box)
-                        | {
-                            "box_id": box.box_human_id,
-                            "product_barcode": box.product_barcode,
-                            "item_qty": box.item_qty,
-                        }
-                        for box in job.boxes
-                        if box.status == BOX_ASSIGNED
-                    ],
+                    packing_repo.box_assignment_rows(job),
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -267,12 +258,12 @@ def _register_sheet_packer_prefix(
         try:
             box_id = int(payload.get("box_id") or 0)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Некорректный короб") from exc
+            raise HTTPException(status_code=400, detail="Некорректное грузоместо") from exc
 
         def _run():
             box = packing_repo.get_box(job_id, box_id)
             if box is None:
-                raise ValueError("Короб не найден")
+                raise ValueError("Грузоместо не найдено")
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
                 raise ValueError("Задание не найдено")
@@ -328,7 +319,7 @@ def _register_sheet_packer_prefix(
                 raise ValueError("Задание не найдено")
             found = find_box_by_scan(job, barcode)
             if found is None:
-                raise ValueError("Сначала выберите товар, затем пикните ШК короба WB")
+                raise ValueError("Сначала выберите товар, затем пикните грузоместо")
             box_id = int(found.id)
             assigned = packing_repo.assign_box(
                 job_id,
@@ -340,7 +331,13 @@ def _register_sheet_packer_prefix(
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
                 raise ValueError("Задание не найдено")
-            warning = qty_warning_for_box(catalog_repo, job, assigned)
+            warning = qty_warning_for_box(
+                catalog_repo,
+                job,
+                assigned,
+                product_barcode=product_barcode,
+                item_qty=qty,
+            )
             item = packing_repo.box_to_dict(assigned)
             item["qty_warning"] = warning
             return item, warning, packer_job_payload(job_id)
@@ -367,7 +364,7 @@ def _register_sheet_packer_prefix(
         def _run() -> bytes:
             box = packing_repo.get_box(job_id, box_id)
             if box is None:
-                raise ValueError("Короб не найден")
+                raise ValueError("Грузоместо не найдено")
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
                 raise ValueError("Задание не найдено")

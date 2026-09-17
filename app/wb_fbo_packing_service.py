@@ -175,7 +175,7 @@ def fbo_nonstandard_box_qty_warning(
     if qty in standard_qtys:
         return ""
     number = str(box_number or "").strip() or "?"
-    return f"В коробе номер {number} находится {qty} товара"
+    return f"В грузоместе номер {number} находится {qty} товара"
 
 
 def attach_fbo_box_qty_warnings(catalog: CatalogRepository, payload: dict[str, Any]) -> None:

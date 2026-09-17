@@ -102,7 +102,7 @@
       "<p><strong>Продавец:</strong> " +
       esc(data.seller_name || "—") +
       "</p>" +
-      "<p><strong>Коробов:</strong> " +
+      "<p><strong>Грузомест:</strong> " +
       esc(data.box_count) +
       " · артикулов: " +
       esc(data.sku_count) +
@@ -132,7 +132,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Поставка</th><th>Город</th><th>Паллет</th><th>Короба</th><th>Упаковщики</th><th></th>" +
+      "<th>№</th><th>Поставка</th><th>Город</th><th>Паллет</th><th>Грузоместа</th><th>Упаковщики</th><th></th>" +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -151,7 +151,7 @@
             '/pallet-sheets.pdf" target="_blank" rel="noopener">Листы</a> ' +
             '<a class="wh-btn wh-btn-sm" href="/api/warehouse/marketplaces/wb-fbo/jobs/' +
             esc(job.id) +
-            '/box-labels.pdf" target="_blank" rel="noopener">Короба</a>';
+            '/box-labels.pdf" target="_blank" rel="noopener">Грузоместа</a>';
           return (
             "<tr><td>#" +
             esc(job.id) +
@@ -216,7 +216,7 @@
       .then(function (data) {
         preview = data;
         renderPreview(root, data);
-        setMessage(root, "Поставка " + data.supply_id + ": " + data.box_count + " коробов.", false);
+        setMessage(root, "Поставка " + data.supply_id + ": " + data.box_count + " грузомест.", false);
       })
       .catch(function (err) {
         preview = null;
@@ -253,7 +253,7 @@
     fd.append("packer_user_ids", JSON.stringify(packers));
     fd.append("qr", file);
     setBusy(root, true);
-    setMessage(root, "Создание задания, листов и этикеток коробов…", false);
+    setMessage(root, "Создание задания, листов и этикеток грузомест…", false);
     fetchJson("/api/warehouse/marketplaces/wb-fbo/jobs", { method: "POST", body: fd })
       .then(function (data) {
         var job = data.job || {};
@@ -315,7 +315,7 @@
         root.innerHTML =
           '<div class="wh-route-card">' +
           "<h3>Wildberries FBO</h3>" +
-          '<p class="wh-muted">Короба заводятся в кабинете WB. Здесь укажите ID поставки — подтянем состав и packageCode. ' +
+          '<p class="wh-muted">Грузоместа заводятся в кабинете WB. Здесь укажите ID поставки — подтянем состав и packageCode. ' +
           "QR поставки (стикер WB-GI) прикрепите файлом из кабинета: по API его нет. " +
           "Листы паллет заполняются как в «поставка лист.docx»: WILDBERRIES, номер, город, Палет N из M.</p>" +
           '<div class="wh-route-form">' +

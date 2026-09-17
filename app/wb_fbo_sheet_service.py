@@ -72,15 +72,7 @@ def create_wb_fbo_sheet_job(
         goods_xlsx=goods_xlsx,
         boxes_xlsx=boxes_xlsx,
         products=products,
-        boxes=[
-            {
-                "box_id": item.box_id,
-                "package_code": item.package_code,
-                "product_barcode": item.product_barcode,
-                "qty": item.qty,
-            }
-            for item in boxes
-        ],
+        boxes=_boxes_for_job(boxes),
     )
 
 
@@ -182,6 +174,25 @@ def resolve_sheet_scan(
     }
 
 
+def _boxes_for_job(boxes) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for item in boxes:
+        key = digits_only(item.box_id) or item.box_id.casefold()
+        if key not in grouped:
+            grouped[key] = {
+                "box_id": item.box_id,
+                "package_code": item.package_code,
+                "items": [],
+            }
+            order.append(key)
+        if item.product_barcode and int(item.qty or 0) > 0:
+            grouped[key]["items"].append(
+                {"product_barcode": item.product_barcode, "qty": int(item.qty)}
+            )
+    return [grouped[key] for key in order]
+
+
 def label_row_for_box(job: WbFboSheetJobRow, box: WbFboSheetBoxRow) -> dict[str, Any]:
     return {
         "supply_id": job.supply_id,
@@ -204,22 +215,42 @@ def qty_warning_for_box(
     catalog: CatalogRepository,
     job: WbFboSheetJobRow,
     box: WbFboSheetBoxRow,
+    *,
+    product_barcode: str = "",
+    item_qty: int | None = None,
 ) -> str:
+    barcode = str(product_barcode or "").strip()
+    qty = item_qty
+    if not barcode and box.items:
+        barcode = str(box.items[-1].product_barcode or "")
+        qty = int(box.items[-1].item_qty or 0) if qty is None else qty
+    if not barcode:
+        barcode = str(box.product_barcode or "").split(",")[0].strip()
     product = next(
         (
             item
             for item in job.products
-            if item.barcode.casefold() == str(box.product_barcode or "").casefold()
+            if item.barcode.casefold() == barcode.casefold()
         ),
         None,
     )
+    if qty is None:
+        match = next(
+            (
+                item
+                for item in box.items
+                if item.product_barcode.casefold() == barcode.casefold()
+            ),
+            None,
+        )
+        qty = int(match.item_qty) if match else int(box.item_qty or 0)
     pid = product.product_id if product else box.product_id
     standard: set[int] = set()
     if pid:
         standard = catalog.product_box_quantities_by_id([int(pid)]).get(int(pid), set())
     return fbo_nonstandard_box_qty_warning(
         standard,
-        item_qty=int(box.item_qty or 0),
+        item_qty=int(qty or 0),
         box_number=box.box_human_id or str(box.seq),
     )
 
@@ -229,7 +260,13 @@ def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> 
     for key in ("products", "remaining_groups", "boxes"):
         rows = payload.get(key)
         if isinstance(rows, list):
-            buckets.extend(item for item in rows if isinstance(item, dict))
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                buckets.append(item)
+                nested = item.get("items")
+                if isinstance(nested, list):
+                    buckets.extend(row for row in nested if isinstance(row, dict))
     pids = [int(item["product_id"]) for item in buckets if item.get("product_id")]
     urls = catalog.image_urls_by_product_ids(pids) if pids else {}
     for item in buckets:
