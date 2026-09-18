@@ -920,3 +920,63 @@ def test_unassign_empty_cargo_place_rejected(db_url: str, tmp_path) -> None:
     assert "нет привязанного" in missing.json()["detail"].casefold()
 
 
+def test_unbind_cargo_from_pallet_keeps_product(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo = printed.json()["boxes"][0]
+    cargo_id = cargo["box_id"]
+    cargo_pk = cargo["id"]
+    pallet_code = _open_pallet(client, job_id)
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["pallet_human_id"] == pallet_code
+    unbound = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/unbind-pallet",
+        json={"box_id": cargo_pk},
+    )
+    assert unbound.status_code == 200, unbound.text
+    box = unbound.json()["box"]
+    assert box["status"] == BOX_ASSIGNED
+    assert box["pallet_id"] in (None, 0)
+    assert not box["pallet_human_id"]
+    assert {item["product_barcode"]: item["quantity"] for item in box["items"]} == {
+        "4673746970607": 10,
+    }
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
+    stored = next(item for item in job.boxes if item.id == cargo_pk)
+    assert stored.pallet_id is None
+    assert stored.status == BOX_ASSIGNED
+    assert job.pcs_assigned == 10
+    pallet = next(item for item in job.pallets if item.pallet_human_id == pallet_code)
+    assert pallet.box_count == 0
+    missing = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/unbind-pallet",
+        json={"box_id": cargo_pk},
+    )
+    assert missing.status_code == 400, missing.text
+    assert "не привязано" in missing.json()["detail"].casefold()
+
+
+

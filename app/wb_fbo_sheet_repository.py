@@ -1201,6 +1201,31 @@ class WbFboSheetRepository:
                 pallet_by_id=self._pallet_by_id(session, job_id),
             )
 
+    def unbind_box_from_pallet(self, job_id: int, *, box_id: int) -> WbFboSheetBoxRow:
+        now = int(time.time())
+        with Session(self.engine) as session:
+            job = session.get(WbFboSheetJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            if job.status == JOB_STATUS_CANCELLED:
+                raise ValueError("Задание отменено")
+            box = session.get(WbFboSheetBox, int(box_id))
+            if box is None or int(box.job_id) != int(job_id):
+                raise ValueError("Грузоместо не найдено")
+            if not box.pallet_id:
+                raise ValueError("Грузоместо не привязано к паллету")
+            box.pallet_id = None
+            job.updated_at_ts = now
+            session.commit()
+            session.refresh(box)
+            sku_by = self._sku_by_barcode(session, job_id)
+            return self._box_row(
+                box,
+                items=self._items_for_box(session, int(box.id)),
+                sku_by_barcode=sku_by,
+                pallet_by_id=self._pallet_by_id(session, job_id),
+            )
+
     def product_to_dict(self, row: WbFboSheetProductRow) -> dict[str, Any]:
         return {
             "id": row.id,
