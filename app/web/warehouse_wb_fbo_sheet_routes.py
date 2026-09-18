@@ -19,6 +19,7 @@ from app.wb_fbo_sheet_service import (
     expiry_for_assignment,
     find_box_by_scan,
     pdf_for_boxes,
+    pdf_for_pallets,
     qty_warning_for_box,
     resolve_sheet_scan,
 )
@@ -249,6 +250,94 @@ def _register_sheet_packer_prefix(
             "job": job,
         }
 
+    @app.post(f"{prefix}/jobs/{{job_id}}/print-pallets")
+    async def api_sheet_print_pallets(
+        job_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(auth_dep),
+    ) -> dict:
+        require_packer(actor, job_id)
+        payload = body if isinstance(body, dict) else {}
+        try:
+            count = int(payload.get("count") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Некорректное количество") from exc
+
+        def _run():
+            printed = packing_repo.create_printed_pallets(job_id, count)
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise ValueError("Задание не найдено")
+            pdf = pdf_for_pallets(job, printed)
+            pages = _split_pdf_pages(pdf, len(printed))
+            return printed, pages, packer_job_payload(job_id)
+
+        try:
+            printed, pages, job = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        pdfs_b64 = [base64.b64encode(page).decode("ascii") for page in pages]
+        return {
+            "pallets": [packing_repo.pallet_to_dict(item) for item in printed],
+            "pdfs_base64": pdfs_b64,
+            "pdf_base64": pdfs_b64[0] if pdfs_b64 else "",
+            "job": job,
+        }
+
+    @app.post(f"{prefix}/jobs/{{job_id}}/reprint-pallet")
+    async def api_sheet_reprint_pallet(
+        job_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(auth_dep),
+    ) -> dict:
+        require_packer(actor, job_id)
+        payload = body if isinstance(body, dict) else {}
+        try:
+            pallet_id = int(payload.get("pallet_id") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Некорректный паллет") from exc
+
+        def _run():
+            pallet = packing_repo.get_pallet(job_id, pallet_id)
+            if pallet is None:
+                raise ValueError("Паллет не найден")
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise ValueError("Задание не найдено")
+            pdf = pdf_for_pallets(job, [pallet])
+            return pallet, pdf, packer_job_payload(job_id)
+
+        try:
+            pallet, pdf, job = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        b64 = base64.b64encode(pdf).decode("ascii")
+        return {
+            "pallet": packing_repo.pallet_to_dict(pallet),
+            "pdf_base64": b64,
+            "pdfs_base64": [b64],
+            "job": job,
+        }
+
+    @app.post(f"{prefix}/jobs/{{job_id}}/close-pallet")
+    async def api_sheet_close_pallet(
+        job_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(auth_dep),
+    ) -> dict:
+        user_id = require_packer(actor, job_id)
+        barcode = str((body or {}).get("barcode") or (body or {}).get("code") or "")
+
+        def _run():
+            pallet = packing_repo.close_pallet(job_id, user_id, barcode)
+            return packing_repo.pallet_to_dict(pallet), packer_job_payload(job_id)
+
+        try:
+            pallet, job = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        return {"pallet": pallet, "job": job}
+
     @app.post(f"{prefix}/jobs/{{job_id}}/reprint-box")
     async def api_sheet_reprint_box(
         job_id: int,
@@ -290,14 +379,21 @@ def _register_sheet_packer_prefix(
         body: dict,
         actor: TasksApiActor = Depends(auth_dep),
     ) -> dict:
-        require_packer(actor, job_id)
+        user_id = require_packer(actor, job_id)
         barcode = str((body or {}).get("barcode") or (body or {}).get("code") or "")
         try:
             resolved = await asyncio.to_thread(
-                resolve_sheet_scan, catalog_repo, packing_repo, job_id, barcode
+                resolve_sheet_scan,
+                catalog_repo,
+                packing_repo,
+                job_id,
+                barcode,
+                user_id=user_id,
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
+        if str(resolved.get("kind") or "") == "pallet":
+            resolved["job"] = packer_job_payload(job_id)
         return resolved
 
     @app.post(f"{prefix}/jobs/{{job_id}}/assign")

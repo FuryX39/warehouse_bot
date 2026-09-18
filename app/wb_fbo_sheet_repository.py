@@ -24,6 +24,10 @@ BOX_PENDING = "pending"
 BOX_PRINTED = "printed"
 BOX_ASSIGNED = "assigned"
 
+PALLET_PRINTED = "printed"
+PALLET_OPEN = "open"
+PALLET_CLOSED = "closed"
+
 
 class _Base(DeclarativeBase):
     pass
@@ -71,6 +75,26 @@ class WbFboSheetProduct(_Base):
     qty_plan: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class WbFboSheetPallet(_Base):
+    __tablename__ = "wb_fbo_sheet_pallets"
+    __table_args__ = (
+        UniqueConstraint("job_id", "pallet_human_id", name="uq_wb_fbo_sheet_pallet_human"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("wb_fbo_sheet_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pallet_human_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=PALLET_PRINTED)
+    printed_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    opened_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closed_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    opened_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closed_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class WbFboSheetBox(_Base):
     __tablename__ = "wb_fbo_sheet_boxes"
     __table_args__ = (
@@ -91,6 +115,9 @@ class WbFboSheetBox(_Base):
     printed_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assigned_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assigned_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pallet_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("wb_fbo_sheet_pallets.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class WbFboSheetBoxItem(_Base):
@@ -164,7 +191,23 @@ class WbFboSheetBoxRow:
     sku: str = ""
     product_name: str = ""
     product_id: int | None = None
+    pallet_id: int | None = None
+    pallet_human_id: str = ""
     items: list[WbFboSheetBoxItemRow] = field(default_factory=list)
+
+
+@dataclass
+class WbFboSheetPalletRow:
+    id: int
+    job_id: int
+    seq: int
+    pallet_human_id: str
+    status: str
+    printed_at_ts: int | None = None
+    opened_at_ts: int | None = None
+    closed_at_ts: int | None = None
+    box_count: int = 0
+    box_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -191,8 +234,12 @@ class WbFboSheetJobRow:
     box_printed: int
     box_assigned: int
     box_pending: int
+    pallet_total: int = 0
+    pallet_closed: int = 0
     products: list[WbFboSheetProductRow] = field(default_factory=list)
     boxes: list[WbFboSheetBoxRow] = field(default_factory=list)
+    pallets: list[WbFboSheetPalletRow] = field(default_factory=list)
+    open_pallet: WbFboSheetPalletRow | None = None
 
 
 class WbFboSheetRepository:
@@ -205,6 +252,7 @@ class WbFboSheetRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._migrate_box_item_expiry()
+        self._migrate_pallets()
         self._backfill_box_items()
 
     def _migrate_box_item_expiry(self) -> None:
@@ -231,6 +279,29 @@ class WbFboSheetRepository:
                         "ADD COLUMN expiry VARCHAR(32) NOT NULL DEFAULT ''"
                     )
                 )
+            session.commit()
+
+    def _migrate_pallets(self) -> None:
+        from sqlalchemy import inspect, text
+
+        names = inspect(self.engine).get_table_names()
+        if "wb_fbo_sheet_boxes" not in names:
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("wb_fbo_sheet_boxes")}
+        if "pallet_id" in cols:
+            return
+        dialect = self.engine.dialect.name
+        with Session(self.engine) as session:
+            if dialect == "postgresql":
+                session.execute(
+                    text(
+                        "ALTER TABLE wb_fbo_sheet_boxes "
+                        "ADD COLUMN IF NOT EXISTS pallet_id INTEGER "
+                        "REFERENCES wb_fbo_sheet_pallets(id) ON DELETE SET NULL"
+                    )
+                )
+            else:
+                session.execute(text("ALTER TABLE wb_fbo_sheet_boxes ADD COLUMN pallet_id INTEGER"))
             session.commit()
 
     def _backfill_box_items(self) -> None:
@@ -335,6 +406,7 @@ class WbFboSheetRepository:
         *,
         items: list[WbFboSheetBoxItem] | None = None,
         sku_by_barcode: dict[str, WbFboSheetProductRow] | None = None,
+        pallet_by_id: dict[int, WbFboSheetPalletRow] | None = None,
     ) -> WbFboSheetBoxRow:
         src_items = list(items or [])
         item_rows = [
@@ -361,6 +433,8 @@ class WbFboSheetRepository:
         names = [item.product_name for item in item_rows if item.product_name]
         pids = [item.product_id for item in item_rows if item.product_id]
         total_qty = sum(item.item_qty for item in item_rows)
+        pallet_pk = int(row.pallet_id) if getattr(row, "pallet_id", None) else None
+        pallet = (pallet_by_id or {}).get(pallet_pk) if pallet_pk else None
         return WbFboSheetBoxRow(
             id=int(row.id),
             job_id=int(row.job_id),
@@ -376,6 +450,8 @@ class WbFboSheetRepository:
             sku=", ".join(skus),
             product_name=", ".join(names),
             product_id=pids[0] if len(pids) == 1 else None,
+            pallet_id=pallet_pk,
+            pallet_human_id=pallet.pallet_human_id if pallet else "",
             items=item_rows,
         )
 
@@ -442,14 +518,33 @@ class WbFboSheetRepository:
         items_by_box: dict[int, list[WbFboSheetBoxItem]] = {}
         for item in item_orm:
             items_by_box.setdefault(int(item.box_id), []).append(item)
+        pallet_orm = list(
+            session.scalars(
+                select(WbFboSheetPallet)
+                .where(WbFboSheetPallet.job_id == int(job.id))
+                .order_by(WbFboSheetPallet.seq, WbFboSheetPallet.id)
+            ).all()
+        )
+        boxes_by_pallet: dict[int, list[str]] = {}
+        for box in boxes:
+            pid = int(box.pallet_id) if getattr(box, "pallet_id", None) else 0
+            if pid:
+                boxes_by_pallet.setdefault(pid, []).append(str(box.box_human_id or ""))
+        pallet_rows = [
+            self._pallet_row(row, box_ids=boxes_by_pallet.get(int(row.id), []))
+            for row in pallet_orm
+        ]
+        pallet_by_id = {int(item.id): item for item in pallet_rows}
         box_rows = [
             self._box_row(
                 row,
                 items=items_by_box.get(int(row.id), []),
                 sku_by_barcode=sku_by_barcode,
+                pallet_by_id=pallet_by_id,
             )
             for row in boxes
         ]
+        open_pallet = next((item for item in pallet_rows if item.status == PALLET_OPEN), None)
         return WbFboSheetJobRow(
             id=int(job.id),
             supply_id=str(job.supply_id or ""),
@@ -473,8 +568,12 @@ class WbFboSheetRepository:
             box_printed=sum(1 for item in box_rows if item.printed_at_ts),
             box_assigned=sum(1 for item in box_rows if item.status == BOX_ASSIGNED),
             box_pending=sum(1 for item in box_rows if item.status == BOX_PENDING),
+            pallet_total=len(pallet_rows),
+            pallet_closed=sum(1 for item in pallet_rows if item.status == PALLET_CLOSED),
             products=product_rows if include_lines else [],
             boxes=box_rows if include_lines else [],
+            pallets=pallet_rows if include_lines else [],
+            open_pallet=open_pallet,
         )
 
     def create_job(
@@ -701,6 +800,178 @@ class WbFboSheetRepository:
                 row,
                 items=self._items_for_box(session, int(row.id)),
                 sku_by_barcode=sku_by,
+                pallet_by_id=self._pallet_by_id(session, job_id),
+            )
+
+    def _pallet_row(
+        self, row: WbFboSheetPallet, *, box_ids: list[str] | None = None
+    ) -> WbFboSheetPalletRow:
+        ids = list(box_ids or [])
+        return WbFboSheetPalletRow(
+            id=int(row.id),
+            job_id=int(row.job_id),
+            seq=int(row.seq or 0),
+            pallet_human_id=str(row.pallet_human_id or ""),
+            status=str(row.status or PALLET_PRINTED),
+            printed_at_ts=int(row.printed_at_ts) if row.printed_at_ts else None,
+            opened_at_ts=int(row.opened_at_ts) if row.opened_at_ts else None,
+            closed_at_ts=int(row.closed_at_ts) if row.closed_at_ts else None,
+            box_count=len(ids),
+            box_ids=ids,
+        )
+
+    def _pallet_by_id(self, session: Session, job_id: int) -> dict[int, WbFboSheetPalletRow]:
+        rows = list(
+            session.scalars(
+                select(WbFboSheetPallet).where(WbFboSheetPallet.job_id == int(job_id))
+            ).all()
+        )
+        return {int(row.id): self._pallet_row(row) for row in rows}
+
+    def _box_ids_for_pallet(self, session: Session, pallet_id: int) -> list[str]:
+        rows = session.scalars(
+            select(WbFboSheetBox)
+            .where(WbFboSheetBox.pallet_id == int(pallet_id))
+            .order_by(WbFboSheetBox.seq, WbFboSheetBox.id)
+        ).all()
+        return [str(row.box_human_id or "") for row in rows if str(row.box_human_id or "")]
+
+    def pallet_to_dict(self, row: WbFboSheetPalletRow) -> dict[str, Any]:
+        return {
+            "id": row.id,
+            "job_id": row.job_id,
+            "seq": row.seq,
+            "pallet_id": row.pallet_human_id,
+            "status": row.status,
+            "box_count": row.box_count,
+            "boxes": row.box_ids,
+        }
+
+    def create_printed_pallets(self, job_id: int, count: int) -> list[WbFboSheetPalletRow]:
+        want = int(count)
+        if want <= 0:
+            raise ValueError("Укажите количество ШК паллет для печати")
+        if want > 200:
+            raise ValueError("Слишком много паллет за раз (макс. 200)")
+        now = int(time.time())
+        with Session(self.engine) as session:
+            job = self._require_active(session, job_id)
+            max_seq = int(
+                session.scalar(
+                    select(func.coalesce(func.max(WbFboSheetPallet.seq), 0)).where(
+                        WbFboSheetPallet.job_id == int(job_id)
+                    )
+                )
+                or 0
+            )
+            created: list[WbFboSheetPallet] = []
+            for offset in range(1, want + 1):
+                seq = max_seq + offset
+                code = f"WBPAL-{int(job_id)}-{seq:04d}-{uuid.uuid4().hex[:6].upper()}"
+                row = WbFboSheetPallet(
+                    job_id=int(job_id),
+                    seq=seq,
+                    pallet_human_id=code,
+                    status=PALLET_PRINTED,
+                    printed_at_ts=now,
+                )
+                session.add(row)
+                created.append(row)
+            if job.status == JOB_STATUS_OPEN:
+                job.status = JOB_STATUS_IN_PROGRESS
+            job.updated_at_ts = now
+            session.commit()
+            for row in created:
+                session.refresh(row)
+            return [self._pallet_row(row) for row in created]
+
+    def get_pallet(self, job_id: int, pallet_id: int) -> WbFboSheetPalletRow | None:
+        with Session(self.engine) as session:
+            row = session.get(WbFboSheetPallet, int(pallet_id))
+            if row is None or int(row.job_id) != int(job_id):
+                return None
+            return self._pallet_row(row, box_ids=self._box_ids_for_pallet(session, int(row.id)))
+
+    def find_pallet_by_scan(self, job_id: int, barcode: str) -> WbFboSheetPalletRow | None:
+        key = str(barcode or "").strip()
+        if not key:
+            return None
+        fold = key.casefold()
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(WbFboSheetPallet).where(WbFboSheetPallet.job_id == int(job_id))
+            ).all()
+            for row in rows:
+                if str(row.pallet_human_id or "").casefold() == fold:
+                    return self._pallet_row(
+                        row, box_ids=self._box_ids_for_pallet(session, int(row.id))
+                    )
+        return None
+
+    def open_pallet(self, job_id: int, user_id: int, barcode: str) -> WbFboSheetPalletRow:
+        key = str(barcode or "").strip()
+        if not key:
+            raise ValueError("Пустой штрихкод паллета")
+        now = int(time.time())
+        fold = key.casefold()
+        with Session(self.engine) as session:
+            job = self._require_active(session, job_id)
+            found = None
+            open_row = None
+            for row in session.scalars(
+                select(WbFboSheetPallet).where(WbFboSheetPallet.job_id == int(job_id))
+            ).all():
+                if str(row.status or "") == PALLET_OPEN:
+                    open_row = row
+                if str(row.pallet_human_id or "").casefold() == fold:
+                    found = row
+            if found is None:
+                raise ValueError("Паллет не найден")
+            if str(found.status or "") == PALLET_CLOSED:
+                raise ValueError("Паллет уже закрыт")
+            if open_row is not None and int(open_row.id) != int(found.id):
+                raise ValueError(
+                    f"Сначала закройте паллет {open_row.pallet_human_id}"
+                )
+            if str(found.status or "") != PALLET_OPEN:
+                found.status = PALLET_OPEN
+                found.opened_at_ts = now
+                found.opened_by_user_id = int(user_id)
+            if job.status == JOB_STATUS_OPEN:
+                job.status = JOB_STATUS_IN_PROGRESS
+            job.updated_at_ts = now
+            session.commit()
+            session.refresh(found)
+            return self._pallet_row(
+                found, box_ids=self._box_ids_for_pallet(session, int(found.id))
+            )
+
+    def close_pallet(self, job_id: int, user_id: int, barcode: str) -> WbFboSheetPalletRow:
+        key = str(barcode or "").strip()
+        if not key:
+            raise ValueError("Пикните ШК паллета")
+        now = int(time.time())
+        fold = key.casefold()
+        with Session(self.engine) as session:
+            job = self._require_active(session, job_id)
+            open_row = session.scalars(
+                select(WbFboSheetPallet).where(
+                    WbFboSheetPallet.job_id == int(job_id),
+                    WbFboSheetPallet.status == PALLET_OPEN,
+                )
+            ).first()
+            if open_row is None:
+                raise ValueError("Нет открытого паллета")
+            if str(open_row.pallet_human_id or "").casefold() != fold:
+                raise ValueError(f"Пикните ШК открытого паллета {open_row.pallet_human_id}")
+            open_row.status = PALLET_CLOSED
+            open_row.closed_at_ts = now
+            open_row.closed_by_user_id = int(user_id)
+            job.updated_at_ts = now
+            session.commit()
+            session.refresh(open_row)
+            return self._pallet_row(
+                open_row, box_ids=self._box_ids_for_pallet(session, int(open_row.id))
             )
 
     def remaining_pcs(self, job_id: int, product_barcode: str) -> int:
@@ -772,6 +1043,18 @@ class WbFboSheetRepository:
                     break
             if product is None:
                 raise ValueError("Товара с этим баркодом нет в задании")
+            open_pallet = session.scalars(
+                select(WbFboSheetPallet).where(
+                    WbFboSheetPallet.job_id == int(job_id),
+                    WbFboSheetPallet.status == PALLET_OPEN,
+                )
+            ).first()
+            if open_pallet is None:
+                raise ValueError("Сначала пикните паллет")
+            current_pallet = int(box.pallet_id) if box.pallet_id else 0
+            if current_pallet and current_pallet != int(open_pallet.id):
+                raise ValueError("Это грузоместо уже на другом паллете")
+            box.pallet_id = int(open_pallet.id)
             assigned = self._assigned_qty_by_barcode(session, job_id).get(barcode.casefold(), 0)
             left = int(product.qty_plan or 0) - assigned
             if qty > left:
@@ -842,6 +1125,7 @@ class WbFboSheetRepository:
                 box,
                 items=self._items_for_box(session, int(box.id)),
                 sku_by_barcode=sku_by,
+                pallet_by_id=self._pallet_by_id(session, job_id),
             )
 
     def product_to_dict(self, row: WbFboSheetProductRow) -> dict[str, Any]:
@@ -884,6 +1168,8 @@ class WbFboSheetRepository:
             "product_id": row.product_id,
             "quantity": row.item_qty,
             "status": row.status,
+            "pallet_id": row.pallet_id,
+            "pallet_human_id": row.pallet_human_id,
             "items": items,
         }
 
@@ -937,6 +1223,9 @@ class WbFboSheetRepository:
             "box_printed": job.box_printed,
             "box_assigned": job.box_assigned,
             "box_pending": job.box_pending,
+            "pallet_total": job.pallet_total,
+            "pallet_closed": job.pallet_closed,
+            "open_pallet": self.pallet_to_dict(job.open_pallet) if job.open_pallet else None,
             "line_total": job.box_total,
             "line_done": job.box_assigned,
             "line_printed": job.box_printed,
@@ -945,6 +1234,7 @@ class WbFboSheetRepository:
         if include_lines:
             payload["products"] = [self.product_to_dict(item) for item in job.products]
             payload["boxes"] = [self.box_to_dict(item) for item in job.boxes]
+            payload["pallets"] = [self.pallet_to_dict(item) for item in job.pallets]
             payload["remaining_groups"] = [
                 self.product_to_dict(item)
                 for item in job.products

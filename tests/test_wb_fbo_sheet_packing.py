@@ -175,6 +175,23 @@ def _client(db_url: str, tmp_path, catalog: CatalogRepository):
     return TestClient(app), packing
 
 
+def _open_pallet(client, job_id: int) -> str:
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-pallets",
+        json={"count": 1},
+    )
+    assert printed.status_code == 200, printed.text
+    code = printed.json()["pallets"][0]["pallet_id"]
+    opened = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": code},
+    )
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["kind"] == "pallet"
+    assert opened.json()["pallet"]["status"] == "open"
+    return code
+
+
 def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> None:
     catalog = _catalog(db_url)
     client, packing = _client(db_url, tmp_path, catalog)
@@ -204,6 +221,7 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert printed.json()["pdf_base64"]
     first_box = printed.json()["boxes"][0]["box_id"]
     second_box = printed.json()["boxes"][1]["box_id"]
+    _open_pallet(client, job_id)
 
     resolved = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
@@ -377,6 +395,7 @@ def test_assign_ignores_production_date_without_shelf_life(db_url: str, tmp_path
         json={"count": 1},
     )
     cargo_id = printed.json()["boxes"][0]["box_id"]
+    _open_pallet(client, job_id)
     assigned = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
         json={
@@ -415,6 +434,7 @@ def test_assign_requires_and_writes_expiry_when_shelf_life(db_url: str, tmp_path
         json={"count": 1},
     )
     cargo_id = printed.json()["boxes"][0]["box_id"]
+    _open_pallet(client, job_id)
     missing = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
         json={
@@ -472,6 +492,7 @@ def test_assign_reuses_sku_expiry_and_rewrites_on_new_date(db_url: str, tmp_path
     )
     assert printed.status_code == 200, printed.text
     first_id, second_id, third_id = [box["box_id"] for box in printed.json()["boxes"]]
+    _open_pallet(client, job_id)
 
     first = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
@@ -546,6 +567,7 @@ def test_assign_multiple_skus_to_one_cargo_place(db_url: str, tmp_path) -> None:
     )
     assert printed.status_code == 200, printed.text
     cargo_id = printed.json()["boxes"][0]["box_id"]
+    _open_pallet(client, job_id)
 
     first = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
@@ -629,3 +651,109 @@ def test_create_job_groups_prefilled_mixed_cargo(db_url: str, tmp_path) -> None:
     assert stored is not None
     assigned = next(box for box in stored.boxes if box.status == BOX_ASSIGNED)
     assert len(assigned.items) == 2
+
+
+def test_assign_requires_open_pallet(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, _packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+    missing = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert missing.status_code == 400, missing.text
+    assert "паллет" in missing.json()["detail"].casefold()
+
+
+def test_print_open_close_pallet_and_bind_box(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]", "supply_id": "41357389"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
+        },
+    )
+    job_id = created.json()["job"]["id"]
+    boxes = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    ).json()["boxes"]
+    cargo_id = boxes[0]["box_id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-pallets",
+        json={"count": 2},
+    )
+    assert printed.status_code == 200, printed.text
+    assert len(printed.json()["pallets"]) == 2
+    assert printed.json()["pdf_base64"]
+    first = printed.json()["pallets"][0]["pallet_id"]
+    second = printed.json()["pallets"][1]["pallet_id"]
+    assert first.startswith("WBPAL-")
+    opened = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": first},
+    )
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["kind"] == "pallet"
+    assert opened.json()["job"]["open_pallet"]["pallet_id"] == first
+    wrong_close = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/close-pallet",
+        json={"barcode": second},
+    )
+    assert wrong_close.status_code == 400, wrong_close.text
+    other = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": second},
+    )
+    assert other.status_code == 400, other.text
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["pallet_human_id"] == first
+    closed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/close-pallet",
+        json={"barcode": first},
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["pallet"]["status"] == "closed"
+    assert closed.json()["pallet"]["box_count"] == 1
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
+    assert job.open_pallet is None
+    assert job.pallet_closed == 1
+    second_open = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": second},
+    )
+    assert second_open.status_code == 200, second_open.text
+    assert second_open.json()["pallet"]["status"] == "open"
+

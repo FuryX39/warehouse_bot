@@ -13,8 +13,10 @@ from app.wb_fbo_packing_service import fbo_nonstandard_box_qty_warning
 from app.wb_fbo_sheet_repository import (
     WbFboSheetBoxRow,
     WbFboSheetJobRow,
+    WbFboSheetPalletRow,
     WbFboSheetRepository,
 )
+from app.wb_fbo_sheet_pallet_pdf import generate_wb_fbo_sheet_pallet_labels_pdf
 from app.wb_fbo_sheet_xlsx import digits_only, parse_boxes_xlsx, parse_goods_xlsx
 from app.wb_fbw_box_label_pdf import (
     format_fbw_box_human_id,
@@ -127,11 +129,24 @@ def _catalog_box_qty(product, barcode: str) -> int | None:
     return None
 
 
+def find_pallet_by_scan(job: WbFboSheetJobRow, barcode: str) -> WbFboSheetPalletRow | None:
+    key = str(barcode or "").strip()
+    if not key:
+        return None
+    fold = key.casefold()
+    for pallet in job.pallets:
+        if str(pallet.pallet_human_id or "").casefold() == fold:
+            return pallet
+    return None
+
+
 def resolve_sheet_scan(
     catalog: CatalogRepository,
     packing_repo: WbFboSheetRepository,
     job_id: int,
     barcode: str,
+    *,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     text = str(barcode or "").strip()
     if not text:
@@ -139,6 +154,12 @@ def resolve_sheet_scan(
     job = packing_repo.get_job(job_id, include_lines=True)
     if job is None:
         raise ValueError("Задание не найдено")
+    pallet = find_pallet_by_scan(job, text)
+    if pallet is not None:
+        if user_id is None:
+            return {"kind": "pallet", "pallet": packing_repo.pallet_to_dict(pallet)}
+        opened = packing_repo.open_pallet(job_id, int(user_id), text)
+        return {"kind": "pallet", "pallet": packing_repo.pallet_to_dict(opened)}
     box = find_box_by_scan(job, text)
     if box is not None:
         return {"kind": "wb_box", "box": packing_repo.box_to_dict(box)}
@@ -216,6 +237,19 @@ def label_row_for_box(job: WbFboSheetJobRow, box: WbFboSheetBoxRow) -> dict[str,
 
 def pdf_for_boxes(job: WbFboSheetJobRow, boxes: list[WbFboSheetBoxRow]) -> bytes:
     return generate_wb_fbw_box_labels_pdf([label_row_for_box(job, box) for box in boxes])
+
+
+def pdf_for_pallets(job: WbFboSheetJobRow, pallets: list[WbFboSheetPalletRow]) -> bytes:
+    return generate_wb_fbo_sheet_pallet_labels_pdf(
+        [
+            {
+                "pallet_id": item.pallet_human_id,
+                "seq": item.seq,
+                "supply_id": job.supply_id,
+            }
+            for item in pallets
+        ]
+    )
 
 
 def qty_warning_for_box(
