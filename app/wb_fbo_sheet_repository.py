@@ -1128,6 +1128,79 @@ class WbFboSheetRepository:
                 pallet_by_id=self._pallet_by_id(session, job_id),
             )
 
+    def unassign_box(
+        self,
+        job_id: int,
+        *,
+        box_id: int,
+        product_barcode: str = "",
+    ) -> WbFboSheetBoxRow:
+        now = int(time.time())
+        barcode_key = str(product_barcode or "").strip()
+        with Session(self.engine) as session:
+            job = session.get(WbFboSheetJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            if job.status == JOB_STATUS_CANCELLED:
+                raise ValueError("Задание отменено")
+            box = session.get(WbFboSheetBox, int(box_id))
+            if box is None or int(box.job_id) != int(job_id):
+                raise ValueError("Грузоместо не найдено")
+            items = self._items_for_box(session, int(box.id))
+            key = barcode_key.casefold()
+            if items:
+                removed = 0
+                for item in list(items):
+                    item_key = str(item.product_barcode or "").casefold()
+                    if not key or item_key == key:
+                        session.delete(item)
+                        removed += 1
+                if removed == 0:
+                    raise ValueError("Этого товара нет в грузоместе")
+            else:
+                box_barcode = str(box.product_barcode or "").strip()
+                if int(box.item_qty or 0) <= 0 and not box_barcode:
+                    raise ValueError("В грузоместе нет привязанного товара")
+                if key and box_barcode.casefold() != key:
+                    raise ValueError("Этого товара нет в грузоместе")
+                box.product_barcode = ""
+                box.item_qty = 0
+            session.flush()
+            items = self._items_for_box(session, int(box.id))
+            if items:
+                box.status = BOX_ASSIGNED
+                box.item_qty = sum(int(item.item_qty or 0) for item in items)
+                box.product_barcode = (
+                    str(items[0].product_barcode) if len(items) == 1 else ""
+                )
+            else:
+                box.status = BOX_PRINTED if box.printed_at_ts else BOX_PENDING
+                box.item_qty = 0
+                box.product_barcode = ""
+                box.assigned_at_ts = None
+                box.assigned_by_user_id = None
+            job.updated_at_ts = now
+            qty_map = self._assigned_qty_by_barcode(session, job_id)
+            remaining_products = session.scalars(
+                select(WbFboSheetProduct).where(WbFboSheetProduct.job_id == int(job_id))
+            ).all()
+            if remaining_products and all(
+                qty_map.get(str(item.barcode or "").casefold(), 0) >= int(item.qty_plan or 0)
+                for item in remaining_products
+            ):
+                job.status = JOB_STATUS_DONE
+            elif job.status == JOB_STATUS_DONE:
+                job.status = JOB_STATUS_IN_PROGRESS
+            session.commit()
+            session.refresh(box)
+            sku_by = self._sku_by_barcode(session, job_id)
+            return self._box_row(
+                box,
+                items=self._items_for_box(session, int(box.id)),
+                sku_by_barcode=sku_by,
+                pallet_by_id=self._pallet_by_id(session, job_id),
+            )
+
     def product_to_dict(self, row: WbFboSheetProductRow) -> dict[str, Any]:
         return {
             "id": row.id,

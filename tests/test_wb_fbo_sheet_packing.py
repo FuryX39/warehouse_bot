@@ -757,3 +757,108 @@ def test_print_open_close_pallet_and_bind_box(db_url: str, tmp_path) -> None:
     assert second_open.status_code == 200, second_open.text
     assert second_open.json()["pallet"]["status"] == "open"
 
+
+def test_unassign_product_from_cargo_place(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    assert printed.status_code == 200, printed.text
+    cargo = printed.json()["boxes"][0]
+    cargo_id = cargo["box_id"]
+    cargo_pk = cargo["id"]
+    _open_pallet(client, job_id)
+    first = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 100,
+        },
+    )
+    assert first.status_code == 200, first.text
+    second = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746971086",
+            "quantity": 50,
+        },
+    )
+    assert second.status_code == 200, second.text
+
+    one = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/unassign",
+        json={"box_id": cargo_pk, "product_barcode": "4673746970607"},
+    )
+    assert one.status_code == 200, one.text
+    box = one.json()["box"]
+    assert box["status"] == BOX_ASSIGNED
+    assert {item["product_barcode"]: item["quantity"] for item in box["items"]} == {
+        "4673746971086": 50,
+    }
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
+    assert job.pcs_assigned == 50
+    assert job.box_assigned == 1
+    remaining = {item.barcode: item.qty_plan - item.qty_assigned for item in job.products}
+    assert remaining["4673746970607"] == 750
+    assert remaining["4673746971086"] == 650
+
+    empty = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/unassign",
+        json={"barcode": cargo_id},
+    )
+    assert empty.status_code == 200, empty.text
+    box = empty.json()["box"]
+    assert box["status"] == BOX_PRINTED
+    assert box["items"] == []
+    assert box["pallet_human_id"]
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
+    assert job.pcs_assigned == 0
+    assert job.box_assigned == 0
+    remaining = {item.barcode: item.qty_plan - item.qty_assigned for item in job.products}
+    assert remaining["4673746970607"] == 750
+    assert remaining["4673746971086"] == 700
+
+
+def test_unassign_empty_cargo_place_rejected(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, _packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo_pk = printed.json()["boxes"][0]["id"]
+    missing = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/unassign",
+        json={"box_id": cargo_pk},
+    )
+    assert missing.status_code == 400, missing.text
+    assert "нет привязанного" in missing.json()["detail"].casefold()
+
+

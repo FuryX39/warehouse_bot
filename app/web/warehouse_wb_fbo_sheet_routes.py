@@ -478,6 +478,44 @@ def _register_sheet_packer_prefix(
             "job": job,
         }
 
+    @app.post(f"{prefix}/jobs/{{job_id}}/unassign")
+    async def api_sheet_unassign(
+        job_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(auth_dep),
+    ) -> dict:
+        require_packer(actor, job_id)
+        payload = body if isinstance(body, dict) else {}
+        barcode = str(payload.get("barcode") or payload.get("box_code") or "")
+        product_barcode = str(payload.get("product_barcode") or "")
+        try:
+            box_pk = int(payload.get("box_id") or payload.get("id") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Некорректное грузоместо") from exc
+
+        def _run():
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise ValueError("Задание не найдено")
+            box_id = box_pk
+            if box_id <= 0:
+                found = find_box_by_scan(job, barcode)
+                if found is None:
+                    raise ValueError("Грузоместо не найдено")
+                box_id = int(found.id)
+            box = packing_repo.unassign_box(
+                job_id,
+                box_id=box_id,
+                product_barcode=product_barcode,
+            )
+            return packing_repo.box_to_dict(box), packer_job_payload(job_id)
+
+        try:
+            box, job = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        return {"box": box, "job": job}
+
     @app.get(f"{prefix}/jobs/{{job_id}}/boxes/{{box_id}}/label")
     async def api_sheet_box_label(
         job_id: int,
