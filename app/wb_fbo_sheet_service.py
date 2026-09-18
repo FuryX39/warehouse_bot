@@ -11,6 +11,8 @@ from app.catalog_repository import CatalogProduct, CatalogRepository
 from app.shelf_life import expiry_from_production
 from app.wb_fbo_packing_service import fbo_nonstandard_box_qty_warning
 from app.wb_fbo_sheet_repository import (
+    PALLET_CLOSED,
+    PALLET_OPEN,
     WbFboSheetBoxRow,
     WbFboSheetJobRow,
     WbFboSheetPalletRow,
@@ -158,8 +160,23 @@ def resolve_sheet_scan(
     if pallet is not None:
         if user_id is None:
             return {"kind": "pallet", "pallet": packing_repo.pallet_to_dict(pallet)}
+        if str(pallet.status or "") == PALLET_OPEN:
+            closed = packing_repo.close_pallet(job_id, int(user_id), text)
+            return {
+                "kind": "pallet",
+                "action": "closed",
+                "pallet": packing_repo.pallet_to_dict(closed),
+            }
+        reopened = str(pallet.status or "") == PALLET_CLOSED
         opened = packing_repo.open_pallet(job_id, int(user_id), text)
-        return {"kind": "pallet", "pallet": packing_repo.pallet_to_dict(opened)}
+        payload: dict[str, Any] = {
+            "kind": "pallet",
+            "action": "reopened" if reopened else "opened",
+            "pallet": packing_repo.pallet_to_dict(opened),
+        }
+        if reopened:
+            payload["warning"] = "Этот паллет открыт повторно"
+        return payload
     box = find_box_by_scan(job, text)
     if box is not None:
         return {"kind": "wb_box", "box": packing_repo.box_to_dict(box)}

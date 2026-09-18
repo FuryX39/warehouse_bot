@@ -927,8 +927,6 @@ class WbFboSheetRepository:
                     found = row
             if found is None:
                 raise ValueError("Паллет не найден")
-            if str(found.status or "") == PALLET_CLOSED:
-                raise ValueError("Паллет уже закрыт")
             if open_row is not None and int(open_row.id) != int(found.id):
                 raise ValueError(
                     f"Сначала закройте паллет {open_row.pallet_human_id}"
@@ -937,6 +935,8 @@ class WbFboSheetRepository:
                 found.status = PALLET_OPEN
                 found.opened_at_ts = now
                 found.opened_by_user_id = int(user_id)
+                found.closed_at_ts = None
+                found.closed_by_user_id = None
             if job.status == JOB_STATUS_OPEN:
                 job.status = JOB_STATUS_IN_PROGRESS
             job.updated_at_ts = now

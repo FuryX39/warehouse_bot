@@ -758,6 +758,64 @@ def test_print_open_close_pallet_and_bind_box(db_url: str, tmp_path) -> None:
     assert second_open.json()["pallet"]["status"] == "open"
 
 
+def test_rescan_open_pallet_closes_and_closed_pallet_reopens(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-pallets",
+        json={"count": 2},
+    )
+    first = printed.json()["pallets"][0]["pallet_id"]
+    second = printed.json()["pallets"][1]["pallet_id"]
+    opened = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": first},
+    )
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["action"] == "opened"
+    assert opened.json()["pallet"]["status"] == "open"
+    assert not opened.json().get("warning")
+
+    closed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": first},
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["action"] == "closed"
+    assert closed.json()["pallet"]["status"] == "closed"
+    assert closed.json()["job"]["open_pallet"] is None
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
+    assert job.open_pallet is None
+
+    reopened = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": first},
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["action"] == "reopened"
+    assert reopened.json()["pallet"]["status"] == "open"
+    assert reopened.json()["warning"] == "Этот паллет открыт повторно"
+    assert reopened.json()["job"]["open_pallet"]["pallet_id"] == first
+
+    blocked = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": second},
+    )
+    assert blocked.status_code == 400, blocked.text
+    assert "закройте" in blocked.json()["detail"].casefold()
+
+
 def test_unassign_product_from_cargo_place(db_url: str, tmp_path) -> None:
     catalog = _catalog(db_url)
     client, packing = _client(db_url, tmp_path, catalog)
