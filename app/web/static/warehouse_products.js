@@ -1157,6 +1157,23 @@
     );
   }
 
+  function linkRow(link) {
+    link = link || {};
+    return (
+      '<div class="wh-cat-link-row">' +
+      '<input type="text" class="wh-cat-link-counterparty" value="' +
+      esc(link.counterparty || "") +
+      '" placeholder="Контрагент" title="Контрагент" />' +
+      '<input type="text" class="wh-cat-link-sku" value="' +
+      esc(link.counterparty_sku || "") +
+      '" placeholder="Артикул контрагента" title="Артикул контрагента" />' +
+      '<input type="text" class="wh-cat-link-url" value="' +
+      esc(link.url || "") +
+      '" placeholder="Ссылка на товар" title="Ссылка на товар" />' +
+      '<button type="button" class="wh-btn wh-btn-sm wh-cat-link-remove" title="Удалить">&times;</button></div>'
+    );
+  }
+
   function boxRow(box) {
     box = box || {};
     var qty = box.quantity != null && box.quantity !== "" ? box.quantity : 1;
@@ -1215,6 +1232,8 @@
           barcodes: [],
           gtins: [],
           boxes: [],
+          links: [],
+          tnved: "",
           components: [],
         });
     load
@@ -1236,6 +1255,11 @@
             return boxRow(box);
           })
           .join("");
+        var linksHtml = (p.links || [])
+          .map(function (link) {
+            return linkRow(link);
+          })
+          .join("");
         var componentsHtml = kitComponents.map(componentRow).join("");
         var pricesList =
           p.prices && p.prices.length
@@ -1250,7 +1274,7 @@
             ? "≈ " + p.volume + " л"
             : "Считается из габаритов (л)";
         var pricesHtml = renderProductPriceFields(pricesList);
-        var kitSectionNum = formIsKit ? "6" : "5";
+        var kitSectionNum = "7";
         root.innerHTML =
           '<div class="wh-crm-form-toolbar">' +
           '<button type="button" class="wh-btn" id="whCatBackList">&larr; К списку</button>' +
@@ -1269,6 +1293,7 @@
           '<div><label>Группа</label><select id="whPrGroup" data-prev="' + esc(p.group_id || "") + '">' + buildSelectOptions(meta.groups, p.group_id) + "</select></div>" +
           '<div><label>Страна</label><input type="text" id="whPrCountry" value="' + esc(p.country) + '" /></div>' +
           '<div><label>Артикул</label><input type="text" id="whPrSku" value="' + esc(p.sku) + '" /></div>' +
+          '<div><label>ТН ВЭД</label><input type="text" id="whPrTnved" value="' + esc(p.tnved || "") + '" placeholder="10 цифр" inputmode="numeric" /></div>' +
           '<div><label>Код</label><div class="wh-form-input-with-btn">' +
           '<input type="text" id="whPrCode" value="' + esc(p.code) + '" />' +
           '<button type="button" class="wh-btn wh-btn-sm" id="whPrGenCode" title="Сгенерировать уникальный код">↻</button></div></div>' +
@@ -1307,7 +1332,11 @@
           '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddBox" title="Добавить">+</button></div>' +
           '<p class="wh-muted">Готовые грузоместа поставки: штрихкод короба и сколько штук товара внутри.</p>' +
           '<div id="whPrBoxes">' + boxesHtml + "</div></section>" +
-          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">5. Цены</h4>' +
+          '<section class="wh-crm-section"><div class="wh-crm-section-head"><h4 class="wh-crm-section-title">5. Ссылки</h4>' +
+          '<button type="button" class="wh-btn wh-btn-sm wh-crm-icon-btn" id="whPrAddLink" title="Добавить">+</button></div>' +
+          '<p class="wh-muted">Площадки с этим товаром. Контрагент, артикул контрагента и ссылка необязательны.</p>' +
+          '<div id="whPrLinks">' + linksHtml + "</div></section>" +
+          '<section class="wh-crm-section"><h4 class="wh-crm-section-title">6. Цены</h4>' +
           '<div class="wh-form-row wh-cat-prices-row">' + pricesHtml + "</div></section>" +
           (formIsKit
             ? '<section class="wh-crm-section" id="whPrKitSection"><div class="wh-crm-section-head">' +
@@ -1376,6 +1405,14 @@
         root.querySelector("#whPrBoxes").addEventListener("click", function (e) {
           if (e.target.classList.contains("wh-cat-box-remove")) {
             e.target.closest(".wh-cat-box-row").remove();
+          }
+        });
+        root.querySelector("#whPrAddLink").addEventListener("click", function () {
+          root.querySelector("#whPrLinks").insertAdjacentHTML("beforeend", linkRow({}));
+        });
+        root.querySelector("#whPrLinks").addEventListener("click", function (e) {
+          if (e.target.classList.contains("wh-cat-link-remove")) {
+            e.target.closest(".wh-cat-link-row").remove();
           }
         });
         if (formIsKit) {
@@ -1508,6 +1545,18 @@
       var qty = parseInt(qtyEl ? qtyEl.value : "1", 10);
       boxes.push({ barcode: code, quantity: qty > 0 ? qty : 1 });
     });
+    var links = [];
+    root.querySelectorAll(".wh-cat-link-row").forEach(function (row) {
+      var counterparty = row.querySelector(".wh-cat-link-counterparty").value.trim();
+      var counterpartySku = row.querySelector(".wh-cat-link-sku").value.trim();
+      var url = row.querySelector(".wh-cat-link-url").value.trim();
+      if (!counterparty && !counterpartySku && !url) return;
+      links.push({
+        counterparty: counterparty,
+        counterparty_sku: counterpartySku,
+        url: url,
+      });
+    });
     var components = [];
     if (formIsKit) {
       root.querySelectorAll("#whPrComponents .wh-crm-component-row").forEach(function (row) {
@@ -1526,6 +1575,7 @@
       sku: root.querySelector("#whPrSku").value.trim(),
       code: root.querySelector("#whPrCode").value.trim(),
       external_code: root.querySelector("#whPrExtCode").value.trim(),
+      tnved: root.querySelector("#whPrTnved").value.trim(),
       unit_id: root.querySelector("#whPrUnit").value || null,
       weight: root.querySelector("#whPrWeight").value.trim(),
       width_mm: root.querySelector("#whPrWidth").value.trim(),
@@ -1538,6 +1588,7 @@
       barcodes: barcodes,
       gtins: gtins,
       boxes: boxes,
+      links: links,
       components: components,
       prices: (meta.price_types || []).map(function (pt) {
         var inp = root.querySelector('[data-price-type-id="' + pt.id + '"]');

@@ -123,6 +123,7 @@ class CatalogProduct(_Base):
     )
     has_shelf_life: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     shelf_life_years: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tnved: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -153,6 +154,21 @@ class CatalogProductBox(_Base):
     )
     barcode: Mapped[str] = mapped_column(String(128), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CatalogProductLink(_Base):
+    """Площадка товара: контрагент, его артикул и ссылка. Все поля необязательны."""
+
+    __tablename__ = "catalog_product_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False
+    )
+    counterparty: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    counterparty_sku: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -241,7 +257,9 @@ class CatalogProductRow:
     volume_manual: bool = False
     has_shelf_life: bool = False
     shelf_life_years: int = 0
+    tnved: str = ""
     barcodes: list[dict[str, str]] = field(default_factory=list)
+    links: list[dict[str, str]] = field(default_factory=list)
     gtins: list[str] = field(default_factory=list)
     boxes: list[dict[str, Any]] = field(default_factory=list)
     components: list[KitComponentRow] = field(default_factory=list)
@@ -271,6 +289,13 @@ def _validate_code128(barcode: str) -> str:
 
 def _normalize_barcode_label(label: str) -> str:
     return str(label or "").strip()[:128]
+
+
+def _normalize_tnved(value: object) -> str:
+    text = str(value or "").strip().replace(" ", "")
+    if len(text) > 32:
+        raise ValueError("ТН ВЭД слишком длинный (макс. 32 символа)")
+    return text
 
 
 def _normalize_barcode_group(group: str) -> str:
@@ -384,6 +409,7 @@ class CatalogRepository:
         self._migrate_barcode_group()
         self._migrate_product_dimensions()
         self._migrate_product_shelf_life()
+        self._migrate_product_tnved()
         self._cleanup_orphan_product_rows()
         self._seed_defaults()
 
@@ -428,6 +454,13 @@ class CatalogRepository:
                 session.execute(
                     text(
                         "DELETE FROM catalog_product_boxes WHERE product_id NOT IN "
+                        "(SELECT id FROM catalog_products)"
+                    )
+                )
+            if "catalog_product_links" in tables:
+                session.execute(
+                    text(
+                        "DELETE FROM catalog_product_links WHERE product_id NOT IN "
                         "(SELECT id FROM catalog_products)"
                     )
                 )
@@ -542,6 +575,32 @@ class CatalogRepository:
                             "ADD COLUMN shelf_life_years INTEGER NOT NULL DEFAULT 0"
                         )
                     )
+            session.commit()
+
+    def _migrate_product_tnved(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_products" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_products")}
+        if "tnved" in cols:
+            return
+        dialect = self.engine.dialect.name
+        with Session(self.engine) as session:
+            if dialect == "postgresql":
+                session.execute(
+                    text(
+                        "ALTER TABLE catalog_products "
+                        "ADD COLUMN IF NOT EXISTS tnved VARCHAR(32) NOT NULL DEFAULT ''"
+                    )
+                )
+            else:
+                session.execute(
+                    text(
+                        "ALTER TABLE catalog_products "
+                        "ADD COLUMN tnved VARCHAR(32) NOT NULL DEFAULT ''"
+                    )
+                )
             session.commit()
 
     def _migrate_product_group_cost(self) -> None:
@@ -1477,6 +1536,9 @@ class CatalogRepository:
                 delete(CatalogProductGtin).where(CatalogProductGtin.product_id == pid)
             )
             session.execute(
+                delete(CatalogProductLink).where(CatalogProductLink.product_id == pid)
+            )
+            session.execute(
                 delete(CatalogProductPrice).where(CatalogProductPrice.product_id == pid)
             )
             session.execute(
@@ -1580,6 +1642,11 @@ class CatalogRepository:
         if update_gtins and not isinstance(gtins_raw, list):
             raise ValueError("gtins должен быть массивом")
         gtins = self._normalize_gtins(gtins_raw) if update_gtins else []
+        update_links = "links" in data
+        links_raw = data.get("links") if update_links else []
+        if update_links and not isinstance(links_raw, list):
+            raise ValueError("links должен быть массивом")
+        links = self._normalize_links(links_raw) if update_links else []
         components_raw = data.get("components") or []
         if not isinstance(components_raw, list):
             raise ValueError("components должен быть массивом")
@@ -1672,6 +1739,20 @@ class CatalogRepository:
                             sort_order=i,
                         )
                     )
+            if update_links:
+                session.execute(
+                    delete(CatalogProductLink).where(CatalogProductLink.product_id == row.id)
+                )
+                for i, link in enumerate(links):
+                    session.add(
+                        CatalogProductLink(
+                            product_id=int(row.id),
+                            counterparty=link["counterparty"],
+                            counterparty_sku=link["counterparty_sku"],
+                            url=link["url"],
+                            sort_order=i,
+                        )
+                    )
             if update_gtins:
                 self._validate_gtins_unique(session, gtins, exclude_product_id=int(row.id))
                 session.execute(
@@ -1725,6 +1806,7 @@ class CatalogRepository:
         row.group_id = _opt_int(data.get("group_id"))
         row.country = str(data.get("country") or "").strip()[:128]
         row.external_code = str(data.get("external_code") or "").strip()[:128]
+        row.tnved = _normalize_tnved(data.get("tnved"))
         row.unit_id = _opt_int(data.get("unit_id"))
         row.weight = str(data.get("weight") or "").strip()[:32]
         row.width_mm = _parse_optional_mm(data.get("width_mm"), field_label="Ширина")
@@ -1747,6 +1829,25 @@ class CatalogRepository:
             row.shelf_life_years = years
         else:
             row.shelf_life_years = 0
+
+    def _normalize_links(self, raw: list) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            counterparty = str(item.get("counterparty") or "").strip()[:256]
+            counterparty_sku = str(item.get("counterparty_sku") or "").strip()[:128]
+            url = str(item.get("url") or "").strip()[:2048]
+            if not counterparty and not counterparty_sku and not url:
+                continue
+            out.append(
+                {
+                    "counterparty": counterparty,
+                    "counterparty_sku": counterparty_sku,
+                    "url": url,
+                }
+            )
+        return out
 
     def _normalize_barcodes(self, raw: list) -> list[dict[str, str]]:
         out: list[dict[str, str]] = []
@@ -2214,6 +2315,7 @@ class CatalogRepository:
         barcodes: list[dict[str, str]] = []
         gtins: list[str] = []
         boxes: list[dict[str, Any]] = []
+        links: list[dict[str, str]] = []
         components: list[KitComponentRow] = []
         barcode_count = int(
             session.scalar(
@@ -2247,6 +2349,19 @@ class CatalogRepository:
             boxes = [
                 {"barcode": b.barcode, "quantity": int(b.quantity)}
                 for b in box_rows
+            ]
+            link_rows = session.scalars(
+                select(CatalogProductLink)
+                .where(CatalogProductLink.product_id == row.id)
+                .order_by(CatalogProductLink.sort_order, CatalogProductLink.id)
+            ).all()
+            links = [
+                {
+                    "counterparty": item.counterparty or "",
+                    "counterparty_sku": item.counterparty_sku or "",
+                    "url": item.url or "",
+                }
+                for item in link_rows
             ]
             if row.is_kit:
                 comp_rows = session.scalars(
@@ -2298,6 +2413,8 @@ class CatalogRepository:
             barcode_count=barcode_count,
             has_shelf_life=bool(row.has_shelf_life),
             shelf_life_years=int(row.shelf_life_years or 0),
+            tnved=row.tnved or "",
+            links=links,
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
         )
@@ -2327,6 +2444,7 @@ class CatalogRepository:
             "marking_type_name": row.marking_type_name,
             "has_shelf_life": bool(row.has_shelf_life),
             "shelf_life_years": int(row.shelf_life_years or 0),
+            "tnved": row.tnved or "",
             "barcode_count": row.barcode_count,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,
@@ -2337,6 +2455,14 @@ class CatalogRepository:
             d["boxes"] = [
                 {"barcode": str(item["barcode"]), "quantity": int(item["quantity"])}
                 for item in (row.boxes or [])
+            ]
+            d["links"] = [
+                {
+                    "counterparty": str(item.get("counterparty") or ""),
+                    "counterparty_sku": str(item.get("counterparty_sku") or ""),
+                    "url": str(item.get("url") or ""),
+                }
+                for item in (row.links or [])
             ]
             d["components"] = [
                 {

@@ -1895,6 +1895,33 @@ body.wh-body {
   word-break: break-all;
 }
 
+.wh-cat-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.wh-cat-link-row .wh-cat-link-counterparty,
+.wh-cat-link-row .wh-cat-link-sku {
+  flex: 0 1 12rem;
+  min-width: 8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.wh-cat-link-row .wh-cat-link-url {
+  flex: 1 1 16rem;
+  min-width: 12rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
 .wh-crm-barcode-input {
   flex: 1;
   min-width: 8rem;

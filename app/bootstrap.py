@@ -17,6 +17,7 @@ from app.adapters.wildberries import WildberriesAdapter
 from app.adapters.yandex_market import YandexMarketAdapter
 from app.config import Settings, load_settings
 from app.config import dealer_analysis_data_dir_default
+from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.dealer_analysis_repository import DealerAnalysisRepository
 from app.movement_repository import MovementRepository
@@ -54,6 +55,10 @@ def create_inventory_stack() -> tuple[
 
     crm_repo = CrmRepository(settings.db_url)
     crm_repo.init_schema()
+
+    # Колонки catalog_products (срок годности, ТН ВЭД) должны существовать
+    # до backfill заказов: он читает товары через ORM.
+    CatalogRepository(settings.db_url).init_schema()
 
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
