@@ -256,6 +256,10 @@
       window.WhWbFboNew.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "other-platforms" && window.WhOtherPlatforms) {
+      window.WhOtherPlatforms.render(tab, item);
+      return;
+    }
     if (tab.id === "marketplaces" && item.id === "fbs" && window.WhFbs) {
       window.WhFbs.render(tab, item);
       return;

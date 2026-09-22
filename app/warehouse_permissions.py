@@ -73,6 +73,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
             {"id": "stock-sync", "title": "Синхронизация остатков"},
             {"id": "pick-lists", "title": "Листы подбора"},
             {"id": "route-sheets", "title": "Маршрутные листы"},
+            {"id": "other-platforms", "title": "Другие площадки"},
             {"id": "repricer", "title": "Репрайсер"},
         ],
     },
@@ -172,6 +173,8 @@ def normalize_permissions(raw: dict[str, Any] | None) -> dict[str, list[str]]:
             extra.append("wb-fbo-supplies")
         if "wb-fbo-supplies" in marketplace_items and "wb-fbo-new" not in marketplace_items:
             extra.append("wb-fbo-new")
+        if "fbs" in marketplace_items and "other-platforms" not in marketplace_items:
+            extra.append("other-platforms")
         if extra:
             out["marketplaces"] = [*marketplace_items, *extra]
     return out

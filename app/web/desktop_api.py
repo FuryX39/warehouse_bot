@@ -20,6 +20,8 @@ from app.catalog_repository import CatalogRepository
 from app.config import Settings, resolve_warehouse_admin_credentials
 from app.crm_repository import CrmRepository
 from app.fbs_packing_repository import FbsPackingRepository
+from app.other_marketplace_repository import OtherMarketplaceRepository
+from app.web.warehouse_other_platforms_routes import register_warehouse_other_platform_routes
 from app.wb_fbo_packing_repository import WbFboPackingRepository
 from app.wb_fbo_sheet_repository import WbFboSheetRepository
 from app.storage_warehouse_repository import StorageWarehouseRepository
@@ -123,6 +125,9 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     packing_repo = FbsPackingRepository(settings.db_url, files_data_dir=packing_files_dir)
     packing_repo.init_schema()
 
+    other_mp_repo = OtherMarketplaceRepository(settings.db_url)
+    other_mp_repo.init_schema()
+
     wb_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_packing"
     wb_fbo_repo = WbFboPackingRepository(settings.db_url, files_data_dir=wb_fbo_files_dir)
     wb_fbo_repo.init_schema()
@@ -208,6 +213,7 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
             "login": "/api/v1/login",
             "tasks": "/api/v1/tasks",
             "fbs_packing": "/api/v1/fbs-packing",
+            "other_marketplaces": "/api/v1/other-marketplaces",
             "fbo_packing": "/api/v1/fbo-packing",
         }
 
@@ -250,6 +256,16 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
         warehouse_task_summary_repo,
         require_tasks_access,
         prefixes=("/api/v1/tasks",),
+    )
+    register_warehouse_other_platform_routes(
+        app,
+        other_mp_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=False,
+        packer_prefixes=("/api/v1/other-marketplaces",),
     )
     register_warehouse_fbs_packing_routes(
         app,

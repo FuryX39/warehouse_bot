@@ -126,6 +126,8 @@ from app.web.warehouse_repricer_routes import register_warehouse_repricer_routes
 from app.web.warehouse_reports_routes import register_warehouse_reports_routes
 from app.web.warehouse_marking_routes import register_warehouse_marking_routes
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
+from app.other_marketplace_repository import OtherMarketplaceRepository
+from app.web.warehouse_other_platforms_routes import register_warehouse_other_platform_routes
 from app.web.warehouse_wb_fbo_routes import register_warehouse_wb_fbo_routes
 from app.web.warehouse_wb_fbo_sheet_routes import register_warehouse_wb_fbo_sheet_routes
 from app.wb_fbo_packing_repository import WbFboPackingRepository
@@ -330,6 +332,9 @@ def create_dashboard_app(
     packing_repo = FbsPackingRepository(settings.db_url, files_data_dir=packing_files_dir)
     packing_repo.init_schema()
 
+    other_mp_repo = OtherMarketplaceRepository(settings.db_url)
+    other_mp_repo.init_schema()
+
     wb_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_packing"
     wb_fbo_repo = WbFboPackingRepository(settings.db_url, files_data_dir=wb_fbo_files_dir)
     wb_fbo_repo.init_schema()
@@ -458,6 +463,17 @@ def create_dashboard_app(
         user = _warehouse_user_from_session(request)
         if user is None:
             raise HTTPException(status_code=401, detail="Требуется вход в новую панель")
+        return user
+
+    async def require_other_platforms(request: Request) -> WarehouseUserRow | None:
+        if request.session.get("authenticated"):
+            return _warehouse_user_from_session(request)
+        user = _warehouse_user_from_session(request)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Требуется вход")
+        is_admin, permissions = _resolve_user_access(user)
+        if not is_admin and "other-platforms" not in permissions.get("marketplaces", []):
+            raise HTTPException(status_code=403, detail="Нет доступа к разделу «Другие площадки»")
         return user
 
     async def require_fbs_access(request: Request) -> WarehouseUserRow | None:
@@ -688,6 +704,16 @@ def create_dashboard_app(
         warehouse_task_summary_repo,
         require_tasks_access,
         prefixes=("/api/warehouse/tasks",),
+    )
+    register_warehouse_other_platform_routes(
+        app,
+        other_mp_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        require_other_platforms,
+        require_tasks_access,
+        include_manager=True,
+        packer_prefixes=(),
     )
     register_warehouse_fbs_packing_routes(
         app,
