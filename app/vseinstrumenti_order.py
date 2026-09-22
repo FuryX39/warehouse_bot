@@ -13,8 +13,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 _ORDER_RE = re.compile(r"№\s*(\d+)")
 _DATE_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
-_HEADER_SCAN_FROM = 15
-_HEADER_SCAN_TO = 25
+_PRODUCT_HEADERS = ("№", "штрихкод", "наименование", "код сети", "артикул")
 _MAX_BYTES = 20 * 1024 * 1024
 
 
@@ -56,9 +55,9 @@ def _parse_sheet(worksheet: Worksheet) -> VseinstrumentiOrder:
     order_number = _order_number(_cell(worksheet, 1, 1))
     if not order_number:
         raise ValueError("В ячейке A1 нет номера заказа")
-    supplier = _labeled_value(worksheet, "поставщик")
-    delivery_raw = _labeled_value(worksheet, "ожидаемое время доставки")
     header_row, columns = _header(worksheet)
+    supplier = _labeled_value(worksheet, "поставщик", until_row=header_row)
+    delivery_raw = _labeled_value(worksheet, "ожидаемое время доставки", until_row=header_row)
     grouped: dict[tuple[str, str], VseinstrumentiOrderLine] = {}
     order: list[tuple[str, str]] = []
     for row_idx in range(header_row + 1, (worksheet.max_row or header_row) + 1):
@@ -102,25 +101,24 @@ def _parse_sheet(worksheet: Worksheet) -> VseinstrumentiOrder:
 
 
 def _header(worksheet: Worksheet) -> tuple[int, dict[str, int]]:
-    last = min(worksheet.max_row or _HEADER_SCAN_TO, _HEADER_SCAN_TO)
-    for row_idx in range(_HEADER_SCAN_FROM, last + 1):
-        labels = {
-            _cell(worksheet, row_idx, col).casefold(): col
-            for col in range(1, (worksheet.max_column or 1) + 1)
-            if _cell(worksheet, row_idx, col)
-        }
-        sku_col = _find_col(labels, "артикул")
-        if sku_col is None:
+    last_row = worksheet.max_row or 1
+    last_col = worksheet.max_column or 1
+    for row_idx in range(1, last_row + 1):
+        labels: dict[str, int] = {}
+        for col in range(1, last_col + 1):
+            label = _norm_label(_cell(worksheet, row_idx, col))
+            if label and label not in labels:
+                labels[label] = col
+        if not all(name in labels for name in _PRODUCT_HEADERS):
             continue
-        barcode_col = _find_col(labels, "штрихкод") or 2
         return row_idx, {
-            "sku": sku_col,
-            "barcode": barcode_col,
-            "name": _find_col(labels, "наименование") or 0,
+            "sku": labels["артикул"],
+            "barcode": labels["штрихкод"],
+            "name": labels["наименование"],
             "confirmed": _find_col(labels, "подтверждено") or 0,
             "ordered": _find_col(labels, "заказано") or 0,
         }
-    raise ValueError("Не найдена строка заголовка с колонкой «Артикул»")
+    raise ValueError("Не найдена шапка «№  Штрихкод  Наименование  Код сети  Артикул»")
 
 
 def _find_col(labels: dict[str, int], needle: str) -> int | None:
@@ -130,8 +128,8 @@ def _find_col(labels: dict[str, int], needle: str) -> int | None:
     return None
 
 
-def _labeled_value(worksheet: Worksheet, prefix: str) -> str:
-    last = min(worksheet.max_row or 17, 17)
+def _labeled_value(worksheet: Worksheet, prefix: str, *, until_row: int) -> str:
+    last = max(until_row - 1, 0)
     for row_idx in range(1, last + 1):
         label = _cell(worksheet, row_idx, 1).casefold()
         if not label.startswith(prefix):
@@ -181,6 +179,10 @@ def _iso_date(value: str) -> str:
     if not match:
         return ""
     return f"{match.group(3)}-{match.group(2)}-{match.group(1)}"
+
+
+def _norm_label(value: str) -> str:
+    return " ".join(value.casefold().replace("\n", " ").split())
 
 
 def _cell(worksheet: Worksheet, row_idx: int, col_idx: int) -> str:

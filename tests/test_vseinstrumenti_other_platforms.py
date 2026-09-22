@@ -18,7 +18,7 @@ from app.other_marketplace_service import (
 from app.vseinstrumenti_order import parse_vseinstrumenti_order
 
 
-def _xlsx() -> bytes:
+def _xlsx(*, header_row: int = 18) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws["A1"] = 'Подтверждение заказа №4394602 от 22.09.2026 ООО "ВсеИнструменты.ру"'
@@ -26,16 +26,18 @@ def _xlsx() -> bytes:
     ws["D4"] = "10.10.2026 00:00"
     ws["A14"] = "Поставщик:"
     ws["C14"] = 'ООО "ШАЙН СИСТЕМС"'
+    ws.cell(header_row - 2, 1, "Артикул")
+    ws.cell(10, 3, "Наименование")
     headers = ["№", "Штрихкод", "Наименование", "Код сети", "Артикул", "Заказано", "Подтверждено"]
     for col, title in enumerate(headers, start=1):
-        ws.cell(18, col, title)
+        ws.cell(header_row, col, title)
     rows = [
         (1, "4673746970683", "Паста из файла", "SS585", "SS585", 5, 5),
         (2, "9990000000002", "Другой штрихкод", "SS100", "SS100", 2, 2),
     ]
     for offset, row in enumerate(rows):
         for col, value in enumerate(row, start=1):
-            ws.cell(19 + offset, col, value)
+            ws.cell(header_row + 1 + offset, col, value)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -59,6 +61,18 @@ def test_parser_reads_order_barcode_and_confirmed_qty() -> None:
         ("SS585", "4673746970683", 5),
         ("SS100", "9990000000002", 2),
     ]
+
+
+def test_product_list_follows_header_above_or_below_row_18() -> None:
+    expected = [
+        ("SS585", "4673746970683", 5),
+        ("SS100", "9990000000002", 2),
+    ]
+    for header_row in (12, 18, 30):
+        order = parse_vseinstrumenti_order(_xlsx(header_row=header_row))
+        assert order.order_number == "4394602"
+        assert order.delivery_date == "2026-10-10"
+        assert [(line.sku, line.excel_barcode, line.quantity) for line in order.lines] == expected
 
 
 def test_real_example_barcode_is_column_b() -> None:
