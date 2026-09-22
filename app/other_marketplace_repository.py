@@ -35,6 +35,7 @@ class OtherMarketplaceJob(_Base):
     transfer_number: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     supplier: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     delivery_date: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    purchase_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     source_filename: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_OPEN)
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -138,6 +139,7 @@ class OtherMarketplaceJobRow:
     transfer_number: str
     supplier: str
     delivery_date: str
+    purchase_status: str
     source_filename: str
     status: str
     created_by_user_id: int | None
@@ -153,6 +155,25 @@ class OtherMarketplaceRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_purchase_status()
+
+    def _migrate_purchase_status(self) -> None:
+        from sqlalchemy import inspect, text
+
+        tables = set(inspect(self.engine).get_table_names())
+        if "other_marketplace_jobs" not in tables:
+            return
+        columns = {col["name"] for col in inspect(self.engine).get_columns("other_marketplace_jobs")}
+        if "purchase_status" in columns:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE other_marketplace_jobs "
+                    "ADD COLUMN purchase_status VARCHAR(64) NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
 
     def create_job(
         self,
@@ -162,6 +183,7 @@ class OtherMarketplaceRepository:
         transfer_number: str,
         supplier: str,
         delivery_date: str,
+        purchase_status: str,
         source_filename: str,
         created_by_user_id: int | None,
         packer_user_ids: list[int],
@@ -175,6 +197,7 @@ class OtherMarketplaceRepository:
                 transfer_number=transfer_number,
                 supplier=supplier,
                 delivery_date=delivery_date,
+                purchase_status=str(purchase_status or "")[:64],
                 source_filename=source_filename,
                 status=JOB_OPEN,
                 created_by_user_id=created_by_user_id,
@@ -251,6 +274,55 @@ class OtherMarketplaceRepository:
                 raise ValueError("Задание уже собрано")
             job.status = JOB_CANCELLED
             job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id)
+        if row is None:
+            raise ValueError("Задание не найдено")
+            return row
+
+    def set_purchase_status(self, job_id: int, purchase_status: str) -> OtherMarketplaceJobRow:
+        with Session(self.engine) as session:
+            job = session.get(OtherMarketplaceJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.purchase_status = str(purchase_status or "")[:64]
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
+
+    def set_line_status(self, job_id: int, line_id: int, status: str) -> OtherMarketplaceJobRow:
+        want = str(status or "").strip().casefold()
+        if want not in {LINE_PENDING, LINE_DONE}:
+            raise ValueError("Можно поставить только статус «в сборке» или «готово»")
+        now = int(time.time())
+        with Session(self.engine) as session:
+            job = session.get(OtherMarketplaceJob, int(job_id))
+            line = session.get(OtherMarketplaceLine, int(line_id))
+            if job is None or line is None or int(line.job_id) != int(job.id):
+                raise ValueError("Строка задания не найдена")
+            if job.status == JOB_CANCELLED:
+                raise ValueError("Задание отменено")
+            if want == LINE_DONE:
+                line.status = LINE_DONE
+                line.picked_qty = int(line.quantity)
+            else:
+                line.status = LINE_PENDING
+                if int(line.picked_qty) >= int(line.quantity):
+                    line.picked_qty = 0
+            pending = session.scalar(
+                select(OtherMarketplaceLine.id).where(
+                    OtherMarketplaceLine.job_id == int(job.id),
+                    OtherMarketplaceLine.status != LINE_DONE,
+                )
+            )
+            if pending is None:
+                job.status = JOB_DONE
+            elif job.status in {JOB_OPEN, JOB_DONE}:
+                job.status = JOB_IN_PROGRESS
+            job.updated_at_ts = now
             session.commit()
         row = self.get_job(job_id)
         if row is None:
@@ -344,6 +416,7 @@ class OtherMarketplaceRepository:
             "transfer_number": row.transfer_number,
             "supplier": row.supplier,
             "delivery_date": row.delivery_date,
+            "purchase_status": row.purchase_status,
             "source_filename": row.source_filename,
             "status": row.status,
             "created_by_user_id": row.created_by_user_id,
@@ -383,6 +456,7 @@ class OtherMarketplaceRepository:
                     "name": line.product_name,
                     "barcode": line.excel_barcode,
                     "qty": max(0, line.quantity - line.picked_qty),
+                    "quantity": max(0, line.quantity - line.picked_qty),
                     "require_cis": line.require_cis,
                 }
                 for line in row.lines
@@ -482,6 +556,7 @@ class OtherMarketplaceRepository:
             transfer_number=job.transfer_number,
             supplier=job.supplier,
             delivery_date=job.delivery_date,
+            purchase_status=str(job.purchase_status or ""),
             source_filename=job.source_filename,
             status=job.status,
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id is not None else None,

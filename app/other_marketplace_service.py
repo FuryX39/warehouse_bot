@@ -14,6 +14,7 @@ from app.marking.cis import replace_gs_for_excel
 from app.marketplace_route_sheets import (
     DEFAULT_ROUTE_SUPPLIER,
     generate_vseinstrumenti_route_sheets_pdf,
+    list_route_purchase_statuses,
     normalize_vseinstrumenti_route_sheet_payload,
 )
 from app.other_marketplace_repository import (
@@ -26,6 +27,14 @@ from app.other_marketplace_repository import (
 from app.vseinstrumenti_order import VseinstrumentiOrder, parse_vseinstrumenti_order
 
 BARCODE_SOURCE_NOTE = "Печатается штрихкод из столбца «Штрихкод» файла заказа"
+
+
+def require_purchase_status(value: str) -> str:
+    name = str(value or "").strip()
+    allowed = {str(row.get("name") or "").strip() for row in list_route_purchase_statuses()}
+    if not name or name not in allowed:
+        raise ValueError("Укажите статус закупки")
+    return name
 
 
 def barcodes_match(left: str, right: str) -> bool:
@@ -47,10 +56,12 @@ def create_vseinstrumenti_job(
     content: bytes,
     filename: str,
     transfer_number: str,
+    purchase_status: str,
     packer_user_ids: list[int],
     created_by_user_id: int | None,
 ) -> tuple[OtherMarketplaceJobRow, list[str]]:
     number = str(transfer_number or "").strip()
+    status_name = require_purchase_status(purchase_status)
     if not number:
         raise ValueError("Укажите номер перемещения")
     packers = []
@@ -91,6 +102,7 @@ def create_vseinstrumenti_job(
         transfer_number=number,
         supplier=order.supplier or DEFAULT_ROUTE_SUPPLIER,
         delivery_date=order.delivery_date,
+        purchase_status=status_name,
         source_filename=str(filename or "")[:256],
         created_by_user_id=created_by_user_id,
         packer_user_ids=packers,
@@ -225,18 +237,63 @@ def _pick_payload(repo, job_id: int, line: OtherMarketplaceLineRow, *, copies: i
     }
 
 
-def build_vseinstrumenti_route_pdf(job: OtherMarketplaceJobRow, *, cargo_type: str, cargo_count: int) -> bytes:
-    payload = normalize_vseinstrumenti_route_sheet_payload(
+def vseinstrumenti_route_sheet_data(job: OtherMarketplaceJobRow, *, cargo_type: str, cargo_count: int):
+    status_name = str(job.purchase_status or "").strip()
+    if not status_name:
+        raise ValueError("Менеджер не указал статус закупки")
+    return normalize_vseinstrumenti_route_sheet_payload(
         {
             "supplier": job.supplier,
             "purchase_number": job.order_number,
+            "purchase_status": status_name,
             "delivery_date": job.delivery_date,
             "transfer_number": job.transfer_number,
             "cargo_type": cargo_type,
             "cargo_count": cargo_count,
         }
     )
-    return generate_vseinstrumenti_route_sheets_pdf(payload)
+
+
+def build_vseinstrumenti_route_pdf(job: OtherMarketplaceJobRow, *, cargo_type: str, cargo_count: int) -> bytes:
+    return generate_vseinstrumenti_route_sheets_pdf(
+        vseinstrumenti_route_sheet_data(job, cargo_type=cargo_type, cargo_count=cargo_count)
+    )
+
+
+def attach_catalog_images(catalog: CatalogRepository, payload: dict[str, Any]) -> None:
+    buckets: list[dict[str, Any]] = []
+    remaining = payload.get("remaining_groups")
+    if isinstance(remaining, list):
+        buckets.extend(item for item in remaining if isinstance(item, dict))
+    lines = payload.get("lines")
+    if isinstance(lines, list):
+        buckets.extend(item for item in lines if isinstance(item, dict))
+    product_ids: list[int] = []
+    skus: list[str] = []
+    for item in buckets:
+        raw_id = item.get("product_id")
+        if raw_id not in (None, ""):
+            try:
+                product_ids.append(int(raw_id))
+            except (TypeError, ValueError):
+                pass
+        sku = str(item.get("sku") or "").strip()
+        if sku:
+            skus.append(sku)
+    by_id = catalog.image_urls_by_product_ids(product_ids) if product_ids else {}
+    by_sku = catalog.lookup_products_by_skus(skus) if skus else {}
+    for item in buckets:
+        url = ""
+        raw_id = item.get("product_id")
+        if raw_id not in (None, ""):
+            try:
+                url = by_id.get(int(raw_id), "") or ""
+            except (TypeError, ValueError):
+                url = ""
+        if not url:
+            product = by_sku.get(str(item.get("sku") or "").strip().casefold()) or {}
+            url = str(product.get("image_url") or "")
+        item["image_url"] = url
 
 
 def build_other_marketplace_marking_xlsx(job: OtherMarketplaceJobRow) -> bytes:

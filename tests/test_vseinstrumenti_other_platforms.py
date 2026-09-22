@@ -5,15 +5,19 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
+
 from openpyxl import Workbook, load_workbook
 
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.other_marketplace_repository import OtherMarketplaceRepository
 from app.other_marketplace_service import (
+    attach_catalog_images,
     build_other_marketplace_marking_xlsx,
     create_vseinstrumenti_job,
     pick_other_marketplace_line,
+    vseinstrumenti_route_sheet_data,
 )
 from app.vseinstrumenti_order import parse_vseinstrumenti_order
 
@@ -110,10 +114,13 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
         content=_xlsx(),
         filename="order.xlsx",
         transfer_number="ПР-15",
+        purchase_status="КЗ",
         packer_user_ids=[1],
         created_by_user_id=1,
     )
     assert warnings == []
+    assert job.purchase_status == "КЗ"
+    assert vseinstrumenti_route_sheet_data(job, cargo_type="pallets", cargo_count=1).purchase_status == "КЗ"
     assert job.lines[0].product_name == "EasyFinish из карточки"
     assert job.lines[0].excel_barcode == "4673746970683"
 
@@ -148,3 +155,71 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
     assert sheet["D2"].value == "9990000000002"
     assert sheet["E2"].value == "5555666677778"
     assert sheet.max_row == 2
+
+
+def test_images_come_from_catalog_by_excel_sku(db_url: str) -> None:
+    catalog, repo = _repos(db_url)
+    catalog.create_product(
+        {
+            "name": "EasyFinish из карточки",
+            "sku": "ss585",
+            "code": "585",
+            "image_url": "https://img.example/ss585.jpg",
+        }
+    )
+    job, _warnings = create_vseinstrumenti_job(
+        catalog=catalog,
+        repo=repo,
+        content=_xlsx(),
+        filename="order.xlsx",
+        transfer_number="ПР-15",
+        purchase_status="КЗ",
+        packer_user_ids=[1],
+        created_by_user_id=1,
+    )
+    payload = repo.job_to_dict(job)
+    attach_catalog_images(catalog, payload)
+    line = next(item for item in payload["lines"] if item["sku"] == "SS585")
+    group = next(item for item in payload["remaining_groups"] if item["sku"] == "SS585")
+    assert line["image_url"] == "https://img.example/ss585.jpg"
+    assert group["image_url"] == "https://img.example/ss585.jpg"
+    other = next(item for item in payload["lines"] if item["sku"] == "SS100")
+    assert other["image_url"] == ""
+
+
+def test_manager_purchase_status_and_packer_line_status(db_url: str) -> None:
+    catalog, repo = _repos(db_url)
+    with pytest.raises(ValueError, match="статус закупки"):
+        create_vseinstrumenti_job(
+            catalog=catalog,
+            repo=repo,
+            content=_xlsx(),
+            filename="order.xlsx",
+            transfer_number="ПР-15",
+            purchase_status="",
+            packer_user_ids=[1],
+            created_by_user_id=1,
+        )
+    job, _warnings = create_vseinstrumenti_job(
+        catalog=catalog,
+        repo=repo,
+        content=_xlsx(),
+        filename="order.xlsx",
+        transfer_number="ПР-15",
+        purchase_status="ПСО",
+        packer_user_ids=[1],
+        created_by_user_id=1,
+    )
+    changed = repo.set_purchase_status(job.id, "КЗ")
+    assert changed.purchase_status == "КЗ"
+    line_id = job.lines[0].id
+    closed = repo.set_line_status(job.id, line_id, "done")
+    closed_line = next(line for line in closed.lines if line.id == line_id)
+    assert closed_line.status == "done"
+    assert closed_line.picked_qty == closed_line.quantity
+    assert all(item["line_id"] != line_id for item in repo.job_to_dict(closed)["remaining_groups"])
+    opened = repo.set_line_status(job.id, line_id, "pending")
+    opened_line = next(line for line in opened.lines if line.id == line_id)
+    assert opened_line.status == "pending"
+    assert opened_line.picked_qty == 0
+    assert any(item["line_id"] == line_id for item in repo.job_to_dict(opened)["remaining_groups"])

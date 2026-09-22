@@ -9,13 +9,19 @@ from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.catalog_repository import CatalogRepository
-from app.marketplace_route_sheets import route_sheet_content_disposition, route_sheet_download_filename
+from app.marketplace_route_sheets import (
+    list_route_purchase_statuses,
+    route_sheet_content_disposition,
+    route_sheet_download_filename,
+)
 from app.other_marketplace_repository import PLATFORM_VSEINSTRUMENTI, OtherMarketplaceRepository
 from app.other_marketplace_service import (
+    attach_catalog_images,
     build_other_marketplace_marking_xlsx,
     build_vseinstrumenti_route_pdf,
     create_vseinstrumenti_job,
     pick_other_marketplace_line,
+    require_purchase_status,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_tasks_api_auth import TasksApiActor
@@ -61,6 +67,7 @@ def register_warehouse_other_platform_routes(
                     {"id": PLATFORM_VSEINSTRUMENTI, "title": "ВсеИнструменты", "enabled": True},
                 ],
                 "assignees": users_repo.list_assignee_picker(),
+                "purchase_statuses": list_route_purchase_statuses(),
             }
 
         @app.get("/api/warehouse/other-platforms/vseinstrumenti/jobs")
@@ -74,6 +81,7 @@ def register_warehouse_other_platform_routes(
         async def api_vi_create_job(
             file: UploadFile = File(...),
             transfer_number: str = Form(""),
+            purchase_status: str = Form(""),
             packer_user_ids: str = Form(""),
             user: WarehouseUserRow | None = Depends(require_access),
         ) -> dict:
@@ -87,6 +95,7 @@ def register_warehouse_other_platform_routes(
                     content=content,
                     filename=file.filename or "",
                     transfer_number=transfer_number,
+                    purchase_status=purchase_status,
                     packer_user_ids=ids,
                     created_by_user_id=int(user.id) if user is not None else None,
                 )
@@ -101,6 +110,19 @@ def register_warehouse_other_platform_routes(
         ) -> dict:
             try:
                 job = await asyncio.to_thread(repo.cancel_job, job_id)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": _job_dict(job, include_lines=False)}
+
+        @app.post("/api/warehouse/other-platforms/jobs/{job_id}/purchase-status")
+        async def api_vi_purchase_status(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_access),
+        ) -> dict:
+            try:
+                status_name = require_purchase_status(str((body or {}).get("purchase_status") or ""))
+                job = await asyncio.to_thread(repo.set_purchase_status, job_id, status_name)
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": _job_dict(job, include_lines=False)}
@@ -156,14 +178,16 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
         job = repo.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Задание не найдено")
-        return {"job": job_dict(job, include_lines=True)}
+        payload = job_dict(job, include_lines=True)
+        attach_catalog_images(catalog_repo, payload)
+        return {"job": payload}
 
     @app.post(f"{prefix}/jobs/{{job_id}}/scan", name=f"other_mp_scan_{tag}")
     async def api_other_mp_scan(job_id: int, body: dict, actor: TasksApiActor = Depends(_actor)) -> dict:
         _require(actor, job_id)
         barcode = str((body or {}).get("barcode") or (body or {}).get("code") or "")
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 pick_other_marketplace_line,
                 catalog=catalog_repo,
                 repo=repo,
@@ -172,6 +196,10 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
+        job_payload = result.get("job")
+        if isinstance(job_payload, dict):
+            attach_catalog_images(catalog_repo, job_payload)
+        return result
 
     @app.post(f"{prefix}/jobs/{{job_id}}/pick", name=f"other_mp_pick_{tag}")
     async def api_other_mp_pick(job_id: int, body: dict, actor: TasksApiActor = Depends(_actor)) -> dict:
@@ -183,7 +211,7 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
         except (TypeError, ValueError):
             product_id = None
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 pick_other_marketplace_line,
                 catalog=catalog_repo,
                 repo=repo,
@@ -194,6 +222,27 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
+        job_payload = result.get("job")
+        if isinstance(job_payload, dict):
+            attach_catalog_images(catalog_repo, job_payload)
+        return result
+
+    @app.post(f"{prefix}/jobs/{{job_id}}/lines/{{line_id}}/set-status", name=f"other_mp_line_status_{tag}")
+    async def api_other_mp_line_status(
+        job_id: int,
+        line_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(_actor),
+    ) -> dict:
+        _require(actor, job_id)
+        status = str((body or {}).get("status") or "")
+        try:
+            job = await asyncio.to_thread(repo.set_line_status, job_id, line_id, status)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        payload = job_dict(job, include_lines=True)
+        attach_catalog_images(catalog_repo, payload)
+        return {"job": payload}
 
     @app.post(f"{prefix}/jobs/{{job_id}}/route-sheet.pdf", name=f"other_mp_a4_{tag}")
     async def api_other_mp_a4(job_id: int, body: dict, actor: TasksApiActor = Depends(_actor)) -> Response:
