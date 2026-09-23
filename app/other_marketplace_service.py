@@ -217,13 +217,7 @@ def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int
         add_qty=add_qty,
         mismatch_barcode=mismatch,
     )
-    warning = ""
-    if mismatch:
-        warning = (
-            f"Штрихкода «{mismatch}» нет в файле поставки. "
-            f"Строка {line.sku} принята, код записан в лист несовпадений."
-        )
-    return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=bool(mismatch), warning=warning)
+    return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=bool(mismatch))
 
 
 def _resolve_supply_scan(catalog: CatalogRepository, text: str) -> PackingScanResolve:

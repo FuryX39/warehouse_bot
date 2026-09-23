@@ -143,8 +143,7 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
     assert other["mismatch"] is True
     assert other["barcode"] == "9990000000002"
     assert other["barcode_copies"] == 2
-    assert "нет в файле поставки" in other["warning"]
-    assert "SS100" in other["warning"]
+    assert other["warning"] == ""
 
     saved = repo.get_job(job.id)
     assert saved is not None
