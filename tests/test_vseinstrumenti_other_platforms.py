@@ -230,13 +230,15 @@ def test_unknown_barcode_and_unknown_gtin_name_the_problem(db_url: str) -> None:
     )
     with pytest.raises(ValueError, match="нет в базе товаров"):
         pick_other_marketplace_line(catalog=catalog, repo=repo, job_id=job.id, raw="4600000000000")
-    with pytest.raises(ValueError, match="Код Честного знака не принят"):
+    with pytest.raises(ValueError, match="Кода маркировки") as cis_error:
         pick_other_marketplace_line(
             catalog=catalog,
             repo=repo,
             job_id=job.id,
             raw="010000000000001721SERIAL",
         )
+    assert "GTIN" not in str(cis_error.value)
+    assert "Код Честного знака не принят" in str(cis_error.value)
 
 
 def test_images_come_from_catalog_by_excel_sku(db_url: str) -> None:

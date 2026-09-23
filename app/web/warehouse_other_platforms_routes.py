@@ -199,7 +199,7 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
             )
         except ValueError as exc:
             shown = barcode if len(barcode) <= 32 else f"{barcode[:16]}…({len(barcode)})"
-            logger.warning("VI scan rejected job=%s: %s [%s]", job_id, exc, shown)
+            logger.warning("Пик ВсеИнструменты отклонён, задание %s: %s [%s]", job_id, exc, shown)
             raise _http_value_error(exc) from exc
         job_payload = result.get("job")
         if isinstance(job_payload, dict):

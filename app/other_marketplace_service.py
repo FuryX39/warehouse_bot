@@ -232,7 +232,7 @@ def _resolve_supply_scan(catalog: CatalogRepository, text: str) -> PackingScanRe
     except ValueError as exc:
         message = str(exc)
         if "не найден" not in message.casefold():
-            raise
+            raise _russian_scan_error(exc) from exc
         found = _lookup_equivalent_product(catalog, text)
         if found is None:
             raise _scan_not_in_catalog(text, exc) from exc
@@ -259,7 +259,7 @@ def _lookup_equivalent_product(catalog: CatalogRepository, text: str) -> tuple[s
     index, conflicts = build_gtin_index(catalog)
     if target in conflicts:
         skus = ", ".join(conflicts[target])
-        raise ValueError(f"GTIN {target} конфликт в каталоге ({skus})")
+        raise ValueError(f"Код маркировки {target} указан у нескольких товаров ({skus})")
     ref = index.get(target)
     if ref is None:
         return None
@@ -270,8 +270,18 @@ def _scan_not_in_catalog(text: str, exc: ValueError) -> ValueError:
     message = str(exc)
     if message.startswith("GTIN "):
         gtin = message.split()[1] if len(message.split()) > 1 else ""
-        return ValueError(f"GTIN {gtin} нет в базе товаров. Код Честного знака не принят")
+        return ValueError(f"Кода маркировки {gtin} нет в базе товаров. Код Честного знака не принят")
     return ValueError(f"Штрихкода «{text}» нет в базе товаров")
+
+
+def _russian_scan_error(exc: ValueError) -> ValueError:
+    message = str(exc)
+    if message.startswith("GTIN ") and "конфликт" in message:
+        gtin = message.split()[1] if len(message.split()) > 1 else ""
+        return ValueError(f"Код маркировки {gtin} указан у нескольких товаров")
+    if "GTIN" in message or "Data Matrix" in message:
+        return ValueError("Код Честного знака не разобран и не принят")
+    return exc
 
 
 def _match_excel_barcode(lines: list[OtherMarketplaceLineRow], raw: str) -> OtherMarketplaceLineRow | None:
