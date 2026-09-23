@@ -143,6 +143,8 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
     assert other["mismatch"] is True
     assert other["barcode"] == "9990000000002"
     assert other["barcode_copies"] == 2
+    assert "нет в файле поставки" in other["warning"]
+    assert "SS100" in other["warning"]
 
     saved = repo.get_job(job.id)
     assert saved is not None
@@ -155,6 +157,86 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
     assert sheet["D2"].value == "9990000000002"
     assert sheet["E2"].value == "5555666677778"
     assert sheet.max_row == 2
+
+
+def test_gtin14_and_aim_prefix_still_pick_the_line(db_url: str) -> None:
+    catalog, repo = _repos(db_url)
+    catalog.create_product(
+        {
+            "name": "EasyFinish из карточки",
+            "sku": "SS585",
+            "code": "585",
+            "barcodes": [{"barcode": "4673746970683", "label": ""}],
+        }
+    )
+    catalog.create_product(
+        {
+            "name": "NanoGlass из карточки",
+            "sku": "SS100",
+            "code": "100",
+            "barcodes": [{"barcode": "5555666677778", "label": ""}],
+        }
+    )
+    job, _warnings = create_vseinstrumenti_job(
+        catalog=catalog,
+        repo=repo,
+        content=_xlsx(),
+        filename="order.xlsx",
+        transfer_number="ПР-15",
+        purchase_status="КЗ",
+        packer_user_ids=[1],
+        created_by_user_id=1,
+    )
+    same = pick_other_marketplace_line(
+        catalog=catalog,
+        repo=repo,
+        job_id=job.id,
+        raw="]E004673746970683",
+    )
+    assert same["mismatch"] is False
+    assert same["barcode"] == "4673746970683"
+    assert same["barcode_copies"] == 5
+
+    other = pick_other_marketplace_line(
+        catalog=catalog,
+        repo=repo,
+        job_id=job.id,
+        raw="05555666677778",
+    )
+    assert other["mismatch"] is True
+    assert other["barcode"] == "9990000000002"
+    assert other["barcode_copies"] == 2
+
+
+def test_unknown_barcode_and_unknown_gtin_name_the_problem(db_url: str) -> None:
+    catalog, repo = _repos(db_url)
+    catalog.create_product(
+        {
+            "name": "EasyFinish из карточки",
+            "sku": "SS585",
+            "code": "585",
+            "barcodes": [{"barcode": "4673746970683", "label": ""}],
+        }
+    )
+    job, _warnings = create_vseinstrumenti_job(
+        catalog=catalog,
+        repo=repo,
+        content=_xlsx(),
+        filename="order.xlsx",
+        transfer_number="ПР-16",
+        purchase_status="КЗ",
+        packer_user_ids=[1],
+        created_by_user_id=1,
+    )
+    with pytest.raises(ValueError, match="нет в базе товаров"):
+        pick_other_marketplace_line(catalog=catalog, repo=repo, job_id=job.id, raw="4600000000000")
+    with pytest.raises(ValueError, match="Код Честного знака не принят"):
+        pick_other_marketplace_line(
+            catalog=catalog,
+            repo=repo,
+            job_id=job.id,
+            raw="010000000000001721SERIAL",
+        )
 
 
 def test_images_come_from_catalog_by_excel_sku(db_url: str) -> None:

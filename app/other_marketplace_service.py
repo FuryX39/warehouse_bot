@@ -9,8 +9,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from app.catalog_repository import CatalogRepository
-from app.fbs_packing_service import CIS_REQUIRED_ERROR, resolve_packing_scan
+from app.fbs_packing_service import CIS_REQUIRED_ERROR, PackingScanResolve, resolve_packing_scan
 from app.marking.cis import replace_gs_for_excel
+from app.marking.gtin import pad_gtin14
+from app.marking.match import build_gtin_index
 from app.marketplace_route_sheets import (
     DEFAULT_ROUTE_SUPPLIER,
     generate_vseinstrumenti_route_sheets_pdf,
@@ -37,6 +39,20 @@ def require_purchase_status(value: str) -> str:
     return name
 
 
+def _scan_code(raw: str) -> str:
+    text = str(raw or "").strip()
+    if len(text) >= 4 and text[0] == "]" and text[1].isalnum() and text[2].isalnum():
+        text = text[3:].strip()
+    return text
+
+
+def _pure_gtin14(value: str) -> str | None:
+    compact = "".join(ch for ch in str(value or "") if not ch.isspace())
+    if not compact.isdigit():
+        return None
+    return pad_gtin14(compact)
+
+
 def barcodes_match(left: str, right: str) -> bool:
     a = str(left or "").strip()
     b = str(right or "").strip()
@@ -46,7 +62,11 @@ def barcodes_match(left: str, right: str) -> bool:
         return True
     a_digits = "".join(ch for ch in a if ch.isdigit())
     b_digits = "".join(ch for ch in b if ch.isdigit())
-    return bool(a_digits) and a_digits == b_digits
+    if a_digits and a_digits == b_digits:
+        return True
+    a14 = _pure_gtin14(a)
+    b14 = _pure_gtin14(b)
+    return bool(a14) and a14 == b14
 
 
 def create_vseinstrumenti_job(
@@ -123,7 +143,7 @@ def pick_other_marketplace_line(
     job = repo.get_job(job_id)
     if job is None:
         raise ValueError("Задание не найдено")
-    text = str(raw or "").strip()
+    text = _scan_code(raw)
     if text:
         pending = [line for line in job.lines if line.status != LINE_DONE]
         excel_line = _match_excel_barcode(pending, text)
@@ -133,7 +153,7 @@ def pick_other_marketplace_line(
             add_qty = max(0, excel_line.quantity - excel_line.picked_qty)
             updated = repo.record_pick(job.id, excel_line.id, add_qty=add_qty)
             return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=False)
-        resolved = resolve_packing_scan(catalog, text)
+        resolved = _resolve_supply_scan(catalog, text)
         return _apply_resolved(repo, job, resolved.sku, resolved.product_id, text, resolved)
     target_sku = str(sku or "").strip()
     if not target_sku:
@@ -163,7 +183,7 @@ def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int
     if resolved.is_cis:
         line = _match_line(pending, sku, product_id)
         if line is None:
-            raise ValueError("Этого товара нет в задании")
+            raise ValueError("Товар есть в базе, в этой поставке его нет")
         if not line.require_cis:
             raise ValueError("Для этого товара КИЗ не нужен — пикните штрихкод товара")
         updated = repo.record_pick(
@@ -181,7 +201,7 @@ def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int
     if line is None:
         line = _match_line(pending, sku, product_id)
         if line is None:
-            raise ValueError("Этого товара нет в задании")
+            raise ValueError("Товар есть в базе, в этой поставке его нет")
         if line.excel_barcode and not barcodes_match(raw, line.excel_barcode) and raw.casefold() != line.sku.casefold():
             mismatch = raw
         if line.require_cis:
@@ -197,7 +217,61 @@ def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int
         add_qty=add_qty,
         mismatch_barcode=mismatch,
     )
-    return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=bool(mismatch))
+    warning = ""
+    if mismatch:
+        warning = (
+            f"Штрихкода «{mismatch}» нет в файле поставки. "
+            f"Строка {line.sku} принята, код записан в лист несовпадений."
+        )
+    return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=bool(mismatch), warning=warning)
+
+
+def _resolve_supply_scan(catalog: CatalogRepository, text: str) -> PackingScanResolve:
+    try:
+        return resolve_packing_scan(catalog, text)
+    except ValueError as exc:
+        message = str(exc)
+        if "не найден" not in message.casefold():
+            raise
+        found = _lookup_equivalent_product(catalog, text)
+        if found is None:
+            raise _scan_not_in_catalog(text, exc) from exc
+        sku, product_id = found
+        return PackingScanResolve(sku=sku, product_id=product_id)
+
+
+def _lookup_equivalent_product(catalog: CatalogRepository, text: str) -> tuple[str, int | None] | None:
+    """Тот же товар, если сканер прислал EAN-13 с нулём спереди или GTIN из карточки."""
+    by_sku, by_code, by_barcode = catalog.build_product_import_index()
+    key = text.casefold()
+    product = by_barcode.get(key) or by_sku.get(key) or by_code.get(key)
+    target = _pure_gtin14(text)
+    if product is None and target:
+        for stored, item in by_barcode.items():
+            if _pure_gtin14(stored) == target:
+                product = item
+                break
+    if product is not None:
+        product_id = int(product["id"]) if product.get("id") else None
+        return str(product.get("sku") or ""), product_id
+    if not target:
+        return None
+    index, conflicts = build_gtin_index(catalog)
+    if target in conflicts:
+        skus = ", ".join(conflicts[target])
+        raise ValueError(f"GTIN {target} конфликт в каталоге ({skus})")
+    ref = index.get(target)
+    if ref is None:
+        return None
+    return ref.sku, ref.product_id
+
+
+def _scan_not_in_catalog(text: str, exc: ValueError) -> ValueError:
+    message = str(exc)
+    if message.startswith("GTIN "):
+        gtin = message.split()[1] if len(message.split()) > 1 else ""
+        return ValueError(f"GTIN {gtin} нет в базе товаров. Код Честного знака не принят")
+    return ValueError(f"Штрихкода «{text}» нет в базе товаров")
 
 
 def _match_excel_barcode(lines: list[OtherMarketplaceLineRow], raw: str) -> OtherMarketplaceLineRow | None:
@@ -222,7 +296,15 @@ def _match_line(
     return None
 
 
-def _pick_payload(repo, job_id: int, line: OtherMarketplaceLineRow, *, copies: int, mismatch: bool) -> dict[str, Any]:
+def _pick_payload(
+    repo,
+    job_id: int,
+    line: OtherMarketplaceLineRow,
+    *,
+    copies: int,
+    mismatch: bool,
+    warning: str = "",
+) -> dict[str, Any]:
     job = repo.get_job(job_id)
     if job is None:
         raise ValueError("Задание не найдено")
@@ -234,6 +316,7 @@ def _pick_payload(repo, job_id: int, line: OtherMarketplaceLineRow, *, copies: i
         "barcode_copies": copies if barcode else 0,
         "barcode_note": BARCODE_SOURCE_NOTE if barcode else "В строке заказа нет штрихкода",
         "mismatch": mismatch,
+        "warning": warning,
     }
 
 
