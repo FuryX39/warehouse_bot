@@ -234,6 +234,10 @@ def test_one_supply_per_warehouse_for_retail_and_one_for_legal(db_url: str, tmp_
     assert len(adapter.created) == 2
     assert adapter.added["WB-GI-TEST"] == [9101]
     assert adapter.added["WB-GI-2"] == [9102, 9103]
+    assert adapter.created[0][1].endswith("юрлица")
+    assert adapter.created[1][1].endswith("юрлица")
+    assert "FBS" not in adapter.created[0][1]
+    assert "склад" not in adapter.created[0][1].casefold()
     assert all(packing.read_line_pdf(job.id, line.id).startswith(b"%PDF") for line in job.lines)
 
 

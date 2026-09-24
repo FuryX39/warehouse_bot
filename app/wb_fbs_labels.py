@@ -214,16 +214,10 @@ def wb_supply_group_key(order: dict) -> tuple[str, str, bool, str, str]:
 
 
 def wb_supply_group_name(stamp: str, key: tuple[str, str, bool, str, str]) -> str:
-    warehouse, destination, b2b, cargo, cross = key
+    warehouse, destination, b2b, _cargo, _cross = key
     place = destination or warehouse
-    parts = [f"FBS {stamp}", f"склад {place}"]
-    parts.append("юрлица" if b2b else "физлица")
-    cargo_label = {"2": "СГТ", "3": "КГТ"}.get(cargo)
-    if cargo_label:
-        parts.append(cargo_label)
-    if cross not in {"0", ""}:
-        parts.append("трансгран")
-    return " ".join(parts)[:128]
+    audience = "юрлица" if b2b else "физлица"
+    return f"{place} {stamp} {audience}"[:128]
 
 
 def group_orders_for_supplies(
@@ -256,7 +250,7 @@ def collect_wb_unit_labels(
     sticker_orders = orders
 
     if substatus == "STARTED":
-        stamp = time.strftime("%Y-%m-%d %H:%M")
+        stamp = time.strftime("%d.%m.%Y")
         sticker_orders = []
         for key, group in group_orders_for_supplies(orders):
             name = wb_supply_group_name(stamp, key)

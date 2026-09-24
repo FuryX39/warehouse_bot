@@ -79,7 +79,7 @@ def _fbw_http_error(response: requests.Response) -> requests.HTTPError:
 
 
 def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
-    """GET/POST/PUT с повторами при временных сбоях TLS и транспорта."""
+    """GET/POST/PUT/PATCH с повторами при временных сбоях TLS и транспорта."""
     transient = (
         req_exc.SSLError,
         req_exc.ConnectionError,
@@ -95,6 +95,8 @@ def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
                 return requests.post(url, **kwargs)
             if method_u == "PUT":
                 return requests.put(url, **kwargs)
+            if method_u == "PATCH":
+                return requests.patch(url, **kwargs)
             raise ValueError(f"unsupported HTTP method: {method}")
         except transient as exc:
             logger.warning(

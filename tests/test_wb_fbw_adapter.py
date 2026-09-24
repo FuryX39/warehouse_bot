@@ -7,12 +7,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from app.adapters.wildberries import WildberriesAdapter, _parse_fbw_supply_id
+from app.adapters.wildberries import WildberriesAdapter, _parse_fbw_supply_id, _wb_request
 
 
 def test_parse_fbw_supply_id_rejects_gi() -> None:
     with pytest.raises(ValueError, match="числовой ID"):
         _parse_fbw_supply_id("WB-GI-277689956")
+
+
+def test_wb_request_supports_patch() -> None:
+    expected = _resp(ok=True, status=204)
+    with patch("app.adapters.wildberries.requests.patch", return_value=expected) as request:
+        actual = _wb_request("PATCH", "https://example/orders", json={"orders": [1]})
+    assert actual is expected
+    request.assert_called_once_with("https://example/orders", json={"orders": [1]})
 
 
 def _resp(*, ok: bool, status: int, payload=None, text: str = "", url: str = "https://example"):
