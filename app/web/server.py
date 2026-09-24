@@ -123,6 +123,7 @@ from app.adapters.ozon import OzonAdapter
 from app.web.warehouse_admin_routes import register_warehouse_admin_routes
 from app.web.warehouse_route_sheets_routes import register_warehouse_route_sheets_routes
 from app.web.warehouse_repricer_routes import register_warehouse_repricer_routes
+from app.web.warehouse_price_lists_routes import register_warehouse_price_lists_routes
 from app.web.warehouse_reports_routes import register_warehouse_reports_routes
 from app.web.warehouse_marking_routes import register_warehouse_marking_routes
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
@@ -633,6 +634,7 @@ def create_dashboard_app(
     )
     register_warehouse_route_sheets_routes(app, require_warehouse_user)
     register_warehouse_repricer_routes(app, catalog_repo, crm_repo, require_warehouse_user)
+    register_warehouse_price_lists_routes(app, require_warehouse_user)
     register_warehouse_reports_routes(
         app,
         inventory_repo,

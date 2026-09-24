@@ -87,6 +87,7 @@ data/order_money_cache.json
 tables_examples/
 dealer_examples/
 *.xlsx
+!app/assets/vseinstrumenti_pricat.xlsx
 
 *.db
 *.db-journal

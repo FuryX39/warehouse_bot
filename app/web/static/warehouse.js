@@ -292,6 +292,10 @@
       window.WhProducts.renderScanner(tab, item);
       return;
     }
+    if (tab.id === "products" && item.id === "price-lists" && window.WhPriceLists) {
+      window.WhPriceLists.render(tab, item);
+      return;
+    }
     if (tab.id === "products" && item.id === "marking-codes" && window.WhMarking) {
       window.WhMarking.render(tab, item);
       return;
