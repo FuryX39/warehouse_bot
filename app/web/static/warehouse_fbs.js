@@ -82,6 +82,13 @@
     );
   }
 
+  function transferFieldHtml() {
+    return (
+      '<label>Перемещение <small>(необязательно)</small>' +
+      '<input type="text" id="whFbsTransfer" autocomplete="off" placeholder="Можно указать позже" /></label>'
+    );
+  }
+
   function marketplacePanelHtml() {
     if (activeMarketplace === "ozon") {
       return (
@@ -93,6 +100,7 @@
         '<div class="wh-route-form">' +
         '<label>Первое отправление<input type="text" id="whFbsFirstPosting" placeholder="Необязательно" /></label>' +
         '<label>Последнее отправление<input type="text" id="whFbsLastPosting" placeholder="Необязательно" /></label>' +
+        transferFieldHtml() +
         "</div>" +
         '<p class="wh-muted">Упаковщики</p>' +
         packerPickerHtml() +
@@ -107,7 +115,7 @@
       return (
         '<div class="wh-route-card">' +
         "<h3>Wildberries FBS</h3>" +
-        '<p class="wh-muted">Каждый заказ — одна строка задания. «Готовы к сборке» создаёт поставку WB и скачивает стикеры. ' +
+        '<p class="wh-muted">Каждый заказ — одна строка задания. «Готовы к сборке» создаёт отдельные поставки WB по складам и отдельно для юрлиц, распределяет заказы и собирает их в одно задание. ' +
         "«Готовы к отгрузке» — отметьте одну или несколько поставок: несколько галочек дают одно объединённое задание.</p>" +
         '<div class="wh-route-form">' +
         '<label>Статус<select id="whFbsSubstatus">' +
@@ -115,6 +123,7 @@
         '<option value="READY_TO_SHIP">Готовы к отгрузке</option>' +
         "</select></label>" +
         '<label>Количество товаров<input type="number" id="whFbsItemLimit" min="1" step="1" placeholder="Все товары" /></label>' +
+        transferFieldHtml() +
         "</div>" +
         '<div id="whFbsWbSupplyWrap" hidden>' +
         '<p class="wh-muted">Поставки. Несколько галочек — одно объединённое задание.</p>' +
@@ -140,6 +149,7 @@
       '<option value="READY_TO_SHIP">Готовы к отгрузке</option>' +
       "</select></label>" +
       '<label>Количество товаров<input type="number" id="whFbsYandexItemLimit" min="1" step="1" placeholder="Все товары" /></label>' +
+      transferFieldHtml() +
       "</div>" +
       '<label class="wh-fbs-check"><input type="checkbox" id="whFbsBuildList" checked /> Сформировать список</label>' +
       '<p class="wh-muted">Упаковщики</p>' +
@@ -191,7 +201,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Статус</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>" +
+      "<th>№</th><th>Статус</th><th>Перемещение</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>" +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -215,7 +225,13 @@
             esc(job.id) +
             "</td><td>" +
             esc(jobStatusLabel(job.status)) +
-            "</td><td>" +
+            '</td><td><input type="text" class="wh-fbs-transfer" data-id="' +
+            esc(job.id) +
+            '" data-prev="' +
+            esc(job.transfer_number) +
+            '" value="' +
+            esc(job.transfer_number) +
+            '" /></td><td>' +
             esc(jobMarketplaceLabel(job)) +
             " · " +
             esc(jobSubstatusLabel(job)) +
@@ -260,6 +276,35 @@
         downloadMarking(root, parseInt(btn.getAttribute("data-id"), 10));
       });
     });
+    wrap.querySelectorAll(".wh-fbs-transfer").forEach(function (input) {
+      input.addEventListener("change", function () {
+        saveTransfer(root, input);
+      });
+    });
+  }
+
+  function saveTransfer(root, input) {
+    var jobId = input.getAttribute("data-id");
+    var previous = input.getAttribute("data-prev") || "";
+    var value = String(input.value || "").trim();
+    if (value === previous) return;
+    shell()
+      .fetchJson("/api/warehouse/fbs-packing/jobs/" + jobId + "/transfer-number", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transfer_number: value }),
+      })
+      .then(function () {
+        input.value = value;
+        input.setAttribute("data-prev", value);
+        (jobsCache || []).forEach(function (job) {
+          if (String(job.id) === String(jobId)) job.transfer_number = value;
+        });
+      })
+      .catch(function (error) {
+        input.value = previous;
+        setMessage(root, error.message || "Не удалось сохранить перемещение", true);
+      });
   }
 
   function packingMarketplaceParam() {
@@ -568,6 +613,10 @@
       order_substatus: substatusEl ? String(substatusEl.value || "STARTED") : "STARTED",
       build_list: buildListChecked(root),
       packer_user_ids: packers,
+      transfer_number: (function () {
+        var el = root.querySelector("#whFbsTransfer");
+        return el ? String(el.value || "").trim() : "";
+      })(),
     };
     if (activeMarketplace === "wildberries") {
       body.build_list = false;

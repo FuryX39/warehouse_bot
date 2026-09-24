@@ -65,6 +65,8 @@ class FakeWbAdapter(WildberriesAdapter):
         ]
         self.supply_id = "WB-GI-TEST"
         self.sticker_b64 = base64.b64encode(_png_bytes()).decode("ascii")
+        self.created: list[tuple[str, str]] = []
+        self.added: dict[str, list[int]] = {}
 
     def is_configured(self) -> bool:
         return True
@@ -77,10 +79,12 @@ class FakeWbAdapter(WildberriesAdapter):
         return [o for o in self.orders if int(o["id"]) in want]
 
     def create_supply(self, name: str) -> str:
-        return self.supply_id
+        sid = self.supply_id if not getattr(self, "created", None) else f"WB-GI-{len(self.created) + 1}"
+        self.created.append((sid, name))
+        return sid
 
     def add_orders_to_supply(self, supply_id: str, order_ids: list[int]) -> None:
-        assert supply_id == self.supply_id
+        self.added.setdefault(supply_id, []).extend(int(x) for x in order_ids)
 
     def fetch_order_stickers_png(self, order_ids: list[int]) -> dict[int, dict[str, str]]:
         out: dict[int, dict[str, str]] = {}
@@ -148,7 +152,88 @@ def test_create_wb_job_started(db_url: str, tmp_path) -> None:
     assert job.marketplace == "wildberries"
     assert job.line_total == 2
     assert job.supply_id == "WB-GI-TEST"
+    assert len(adapter.created) == 1
+    assert adapter.added["WB-GI-TEST"] == [9001, 9002]
     assert all(line.place_total == 1 for line in job.lines)
+
+
+def test_started_splits_supplies_by_warehouse_and_legal_entity(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
+    catalog.create_product(
+        {
+            "name": "WB товар",
+            "sku": "SKU-WB",
+            "code": "00011",
+            "is_kit": False,
+            "barcodes": [{"barcode": "WB-SKU", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    packing = FbsPackingRepository(db_url, files_data_dir=tmp_path / "wb_split")
+    packing.init_schema()
+    adapter = FakeWbAdapter()
+    adapter.orders = [
+        {"id": 9001, "article": "SKU-WB", "warehouseId": 11, "options": {"isB2B": False}},
+        {"id": 9002, "article": "SKU-WB", "warehouseId": 22, "options": {"isB2B": False}},
+        {"id": 9003, "article": "SKU-WB", "warehouseId": 11, "options": {"isB2B": True}},
+        {"id": 9004, "article": "SKU-WB", "warehouseId": 11, "options": {"isB2B": False}},
+    ]
+
+    job = create_wb_packing_job(
+        adapter=adapter,
+        catalog=catalog,
+        packing_repo=packing,
+        order_substatus="STARTED",
+        item_limit=None,
+        packer_user_ids=[7],
+        created_by_user_id=1,
+    )
+
+    assert job.line_total == 4
+    assert len(adapter.created) == 3
+    assert adapter.added["WB-GI-TEST"] == [9001, 9004]
+    assert adapter.added["WB-GI-2"] == [9002]
+    assert adapter.added["WB-GI-3"] == [9003]
+    assert "юрлица" in adapter.created[2][1]
+    assert job.sheet_title.startswith("Объединено:")
+    assert "WB-GI-TEST" in job.sheet_title
+
+
+def test_one_supply_per_warehouse_for_retail_and_one_for_legal(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
+    catalog.create_product(
+        {
+            "name": "WB товар",
+            "sku": "SKU-WB",
+            "code": "00011",
+            "is_kit": False,
+            "barcodes": [{"barcode": "WB-SKU", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    packing = FbsPackingRepository(db_url, files_data_dir=tmp_path / "wb_b2b")
+    packing.init_schema()
+    adapter = FakeWbAdapter()
+    adapter.orders = [
+        {"id": 9101, "article": "SKU-WB", "warehouseId": 11, "offices": ["Новосибирск"], "options": {"isB2B": True}},
+        {"id": 9102, "article": "SKU-WB", "warehouseId": 11, "offices": ["Подольск"], "options": {"isB2B": True}},
+        {"id": 9103, "article": "SKU-WB", "warehouseId": 11, "offices": ["Подольск"], "options": {"isB2B": True}},
+    ]
+
+    job = create_wb_packing_job(
+        adapter=adapter,
+        catalog=catalog,
+        packing_repo=packing,
+        order_substatus="STARTED",
+        item_limit=None,
+        packer_user_ids=[7],
+        created_by_user_id=1,
+    )
+
+    assert job.line_total == 3
+    assert len(adapter.created) == 2
+    assert adapter.added["WB-GI-TEST"] == [9101]
+    assert adapter.added["WB-GI-2"] == [9102, 9103]
     assert all(packing.read_line_pdf(job.id, line.id).startswith(b"%PDF") for line in job.lines)
 
 

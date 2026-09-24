@@ -42,6 +42,7 @@ class FbsPackingJob(_Base):
     build_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     require_cis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     supply_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    transfer_number: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_STATUS_OPEN)
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sheet_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
@@ -138,6 +139,7 @@ class FbsPackingJobRow:
     line_printed: int
     require_cis: bool = False
     supply_id: str = ""
+    transfer_number: str = ""
     lines: list[FbsPackingLineRow] = field(default_factory=list)
 
 
@@ -203,6 +205,13 @@ class FbsPackingRepository:
                         text(
                             "ALTER TABLE fbs_packing_jobs "
                             "ADD COLUMN supply_id VARCHAR(64) NOT NULL DEFAULT ''"
+                        )
+                    )
+                if "transfer_number" not in job_cols:
+                    session.execute(
+                        text(
+                            "ALTER TABLE fbs_packing_jobs "
+                            "ADD COLUMN transfer_number VARCHAR(128) NOT NULL DEFAULT ''"
                         )
                     )
             if "fbs_packing_lines" in tables:
@@ -280,6 +289,7 @@ class FbsPackingRepository:
             build_list=bool(job.build_list),
             require_cis=bool(getattr(job, "require_cis", False)),
             supply_id=str(getattr(job, "supply_id", None) or ""),
+            transfer_number=str(getattr(job, "transfer_number", None) or ""),
             status=str(job.status or JOB_STATUS_OPEN),
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
             sheet_url=str(job.sheet_url or ""),
@@ -312,6 +322,7 @@ class FbsPackingRepository:
         lines: list[dict[str, Any]],
         require_cis: bool = False,
         supply_id: str = "",
+        transfer_number: str = "",
     ) -> FbsPackingJobRow:
         if not lines:
             raise ValueError("Нет строк с ярлыками для задания")
@@ -345,6 +356,7 @@ class FbsPackingRepository:
                 build_list=bool(build_list),
                 require_cis=bool(require_cis),
                 supply_id=str(supply_id or ""),
+                transfer_number=str(transfer_number or "").strip()[:128],
                 status=JOB_STATUS_OPEN,
                 created_by_user_id=int(created_by_user_id) if created_by_user_id else None,
                 sheet_url=str(sheet_url or ""),
@@ -433,6 +445,20 @@ class FbsPackingRepository:
         with Session(self.engine) as session:
             row = session.get(FbsPackingJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_transfer_number(self, job_id: int, transfer_number: str) -> FbsPackingJobRow:
+        number = str(transfer_number or "").strip()[:128]
+        with Session(self.engine) as session:
+            job = session.get(FbsPackingJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.transfer_number = number
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=True)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def cancel_job(self, job_id: int) -> FbsPackingJobRow | None:
         with Session(self.engine) as session:
@@ -822,6 +848,7 @@ class FbsPackingRepository:
             "build_list": job.build_list,
             "require_cis": bool(job.require_cis),
             "supply_id": job.supply_id,
+            "transfer_number": job.transfer_number,
             "status": job.status,
             "created_by_user_id": job.created_by_user_id,
             "sheet_url": job.sheet_url,

@@ -959,3 +959,32 @@ def test_set_line_status_printed_to_pending_keeps_cis(db_url: str, tmp_path) -> 
     assert row is not None
     assert row.status == LINE_PENDING
     assert row.cis_key == cis_key
+
+
+def test_transfer_number_is_optional_and_can_be_set_later(db_url: str, tmp_path) -> None:
+    packing = _packing_repo(tmp_path, db_url)
+    job = packing.create_job(
+        marketplace="wildberries",
+        order_substatus="STARTED",
+        build_list=False,
+        created_by_user_id=1,
+        packer_user_ids=[1],
+        lines=[
+            {
+                "seq": 1,
+                "sku": "SKU-A",
+                "product_name": "Товар A",
+                "order_id": "100001",
+                "pdf": _pdf("A"),
+            }
+        ],
+    )
+    assert job.transfer_number == ""
+    assert packing.job_to_dict(job)["transfer_number"] == ""
+
+    named = packing.set_transfer_number(job.id, "  ПР-15  ")
+    assert named.transfer_number == "ПР-15"
+    assert packing.job_to_dict(named)["transfer_number"] == "ПР-15"
+
+    cleared = packing.set_transfer_number(job.id, "")
+    assert cleared.transfer_number == ""

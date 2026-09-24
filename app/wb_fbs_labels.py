@@ -176,32 +176,118 @@ def load_wb_fbs_list_rows(
     return rows, orders, warnings, available
 
 
+def _order_flag(order: dict, *names: str) -> str:
+    for name in names:
+        if name in order and order.get(name) not in (None, ""):
+            return str(order.get(name)).strip()
+    return ""
+
+
+def order_is_b2b(order: dict) -> bool:
+    options = order.get("options")
+    if isinstance(options, dict) and (options.get("isB2B") or options.get("isB2b")):
+        return True
+    return bool(order.get("isB2B") or order.get("isB2b"))
+
+
+def order_destination(order: dict) -> str:
+    """Склад WB, куда направлен заказ."""
+    offices = order.get("offices")
+    if isinstance(offices, list):
+        names = [str(item).strip() for item in offices if str(item).strip()]
+        if names:
+            return ", ".join(names)
+    return _order_flag(order, "officeId", "office_id", "destinationOfficeId")
+
+
+def wb_supply_group_key(order: dict) -> tuple[str, str, bool, str, str]:
+    """Один склад и один тип покупателя — одна поставка.
+
+    Склад — куда упал заказ. Название склада берётся из заказа, список складов не задан заранее.
+    Физлица и юрлица одного склада идут в разные поставки. Несколько заказов одной группы — в одну поставку.
+    """
+    warehouse = _order_flag(order, "warehouseId", "warehouse_id") or "0"
+    destination = order_destination(order)
+    cargo = _order_flag(order, "cargoType") or "0"
+    cross = _order_flag(order, "crossBorderType") or "0"
+    return warehouse, destination, order_is_b2b(order), cargo, cross
+
+
+def wb_supply_group_name(stamp: str, key: tuple[str, str, bool, str, str]) -> str:
+    warehouse, destination, b2b, cargo, cross = key
+    place = destination or warehouse
+    parts = [f"FBS {stamp}", f"склад {place}"]
+    parts.append("юрлица" if b2b else "физлица")
+    cargo_label = {"2": "СГТ", "3": "КГТ"}.get(cargo)
+    if cargo_label:
+        parts.append(cargo_label)
+    if cross not in {"0", ""}:
+        parts.append("трансгран")
+    return " ".join(parts)[:128]
+
+
+def group_orders_for_supplies(
+    orders: list[dict],
+) -> list[tuple[tuple[str, str, bool, str, str], list[dict]]]:
+    buckets: dict[tuple[str, str, bool, str, str], list[dict]] = {}
+    order: list[tuple[str, str, bool, str, str]] = []
+    for item in orders:
+        key = wb_supply_group_key(item)
+        if key not in buckets:
+            order.append(key)
+            buckets[key] = []
+        buckets[key].append(item)
+    return [(key, buckets[key]) for key in order]
+
+
 def collect_wb_unit_labels(
     adapter: WildberriesAdapter,
     orders: list[dict],
     *,
     substatus: str,
     supply_id: str = "",
-) -> tuple[list[WbUnitLabel], list[str], str]:
-    """Этикетки PNG→PDF. Для STARTED создаёт поставку и добавляет заказы."""
+) -> tuple[list[WbUnitLabel], list[str], list[str]]:
+    """Этикетки PNG→PDF. Для «к сборке» создаёт поставку на каждую группу заказов."""
     warnings: list[str] = []
     if not orders:
-        return [], warnings, ""
+        return [], warnings, []
     substatus = normalize_wb_fbs_substatus(substatus)
-    effective_supply = str(supply_id or "").strip()
-    order_ids = [_order_id(order) for order in orders]
+    created_supplies: list[str] = []
+    sticker_orders = orders
 
     if substatus == "STARTED":
-        supply_name = f"FBS {time.strftime('%Y-%m-%d %H:%M')}"
-        effective_supply = adapter.create_supply(supply_name)
-        try:
-            adapter.add_orders_to_supply(effective_supply, order_ids)
-        except Exception as exc:  # noqa: BLE001
-            warnings.append(f"Не все заказы добавлены в поставку: {exc}")
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        sticker_orders = []
+        for key, group in group_orders_for_supplies(orders):
+            name = wb_supply_group_name(stamp, key)
+            try:
+                supply_id_new = adapter.create_supply(name)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Не создана поставка «{name}»: {exc}")
+                continue
+            ids = [_order_id(item) for item in group]
+            try:
+                adapter.add_orders_to_supply(supply_id_new, ids)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Поставка {supply_id_new} («{name}»): заказы не добавлены: {exc}")
+                continue
+            created_supplies.append(supply_id_new)
+            sticker_orders.extend(group)
+            place = key[1] or key[0]
+            audience = "юрлица" if key[2] else "физлица"
+            warnings.append(
+                f"Поставка {supply_id_new}: склад {place}, {audience}, заказов {len(group)}"
+            )
+        if not sticker_orders:
+            return [], warnings, created_supplies
+    else:
+        if str(supply_id or "").strip():
+            created_supplies.append(str(supply_id).strip())
 
+    order_ids = [_order_id(order) for order in sticker_orders]
     stickers = adapter.fetch_order_stickers_png(order_ids)
     units: list[WbUnitLabel] = []
-    for order in orders:
+    for order in sticker_orders:
         oid = _order_id(order)
         sku = _order_sku(order)
         sticker = stickers.get(oid)
@@ -242,7 +328,7 @@ def collect_wb_unit_labels(
     missing = [u for u in units if u.error]
     for item in missing[:5]:
         warnings.append(item.error)
-    return units, warnings, effective_supply
+    return units, warnings, created_supplies
 
 
 def list_rows_payload(list_rows: list[WbFbsListRow]) -> list[dict]:

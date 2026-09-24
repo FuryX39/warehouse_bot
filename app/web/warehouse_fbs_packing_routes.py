@@ -336,6 +336,12 @@ def register_warehouse_fbs_packing_routes(
                 limit = int(item_limit) if item_limit not in (None, "") else None
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="Некорректный лимит товаров") from exc
+            transfer_number = str(payload.get("transfer_number") or "").strip()[:128]
+
+            def _with_transfer(job):
+                if not transfer_number:
+                    return job
+                return packing_repo.set_transfer_number(int(job.id), transfer_number)
 
             if mp == MARKETPLACE_WB:
                 adapter = get_configured_wb_adapter(coordinator)
@@ -371,6 +377,7 @@ def register_warehouse_fbs_packing_routes(
                     raise _http_value_error(exc) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
+                job = _with_transfer(job)
                 _after_job_created(job)
                 return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
@@ -402,6 +409,7 @@ def register_warehouse_fbs_packing_routes(
                     raise _http_value_error(exc) from exc
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
+                job = _with_transfer(job)
                 _after_job_created(job)
                 return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
@@ -437,8 +445,22 @@ def register_warehouse_fbs_packing_routes(
                 raise _http_value_error(exc) from exc
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
+            job = _with_transfer(job)
             _after_job_created(job)
             return {"job": packing_repo.job_to_dict(job, include_lines=True)}
+
+        @app.post("/api/warehouse/fbs-packing/jobs/{job_id}/transfer-number")
+        async def api_fbs_packing_job_transfer(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            number = str((body or {}).get("transfer_number") or "").strip()[:128]
+            try:
+                job = packing_repo.set_transfer_number(job_id, number)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": packing_repo.job_to_dict(job)}
 
         @app.get("/api/warehouse/fbs-packing/jobs/{job_id}")
         async def api_fbs_packing_job_get(

@@ -310,13 +310,17 @@ def create_wb_packing_job(
     if not selected_orders:
         raise ValueError("Среди выбранных отправлений нет заказов для задания")
 
-    units, label_warnings, effective_supply = collect_wb_unit_labels(
+    units, label_warnings, created_supplies = collect_wb_unit_labels(
         adapter,
         selected_orders,
         substatus=substatus,
         supply_id=supplies[0] if supplies else supply_id if substatus == "READY_TO_SHIP" else "",
     )
     warnings.extend(label_warnings)
+    if substatus == "STARTED":
+        job_supplies = created_supplies
+    else:
+        job_supplies = supplies
     units_with_pdf = [unit for unit in units if unit.pdf]
     if not units_with_pdf:
         detail = "; ".join(warnings[:5]) if warnings else "нет PDF"
@@ -355,8 +359,8 @@ def create_wb_packing_job(
         order_substatus=substatus,
         build_list=False,
         require_cis=bool(require_cis),
-        supply_id=effective_supply,
-        sheet_title=merged_wb_supply_title(supplies) if substatus == "READY_TO_SHIP" else "",
+        supply_id=job_supplies[0] if job_supplies else "",
+        sheet_title=merged_wb_supply_title(job_supplies),
         created_by_user_id=created_by_user_id,
         packer_user_ids=packer_user_ids,
         warnings=warnings,
