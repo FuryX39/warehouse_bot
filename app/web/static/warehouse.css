@@ -289,6 +289,117 @@ body.wh-body {
   margin-top: 0.25rem;
 }
 
+.wh-fbs-transfer-field {
+  grid-column: 1 / -1;
+  max-width: 520px;
+  padding: 0.85rem 1rem;
+  border: 1px solid #d7e0eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.wh-fbs-transfer-label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--wh-text);
+  font-weight: 600;
+}
+
+.wh-fbs-transfer-label span {
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: var(--wh-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.wh-fbs-transfer-control {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #bdc9d8;
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wh-fbs-transfer-control:focus-within {
+  border-color: var(--wh-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.wh-fbs-transfer-icon {
+  padding-left: 0.7rem;
+  color: #64748b;
+  font-size: 1rem;
+}
+
+.wh-route-form .wh-fbs-transfer-control input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.wh-fbs-transfer-field > small {
+  color: #7b8798;
+  font-size: 0.75rem;
+}
+
+.wh-fbs-transfer-column {
+  min-width: 245px;
+}
+
+.wh-fbs-transfer-editor {
+  display: grid;
+  grid-template-columns: minmax(125px, 1fr) auto;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 230px;
+}
+
+.wh-fbs-transfer-editor .wh-fbs-transfer {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 0.42rem 0.55rem;
+  background: #fff;
+  color: var(--wh-text);
+  font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wh-fbs-transfer-editor .wh-fbs-transfer:focus {
+  border-color: var(--wh-primary);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.wh-fbs-transfer-save {
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.wh-fbs-transfer-editor--dirty .wh-fbs-transfer {
+  border-color: #f59e0b;
+}
+
+.wh-fbs-transfer-editor--dirty .wh-fbs-transfer-save,
+.wh-fbs-transfer-editor--saved .wh-fbs-transfer-save {
+  visibility: visible;
+  opacity: 1;
+}
+
+.wh-fbs-transfer-editor--saved .wh-fbs-transfer {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
+}
+
 .wh-fbs-check {
   display: flex;
   align-items: center;

@@ -84,8 +84,14 @@
 
   function transferFieldHtml() {
     return (
-      '<label>Перемещение <small>(необязательно)</small>' +
-      '<input type="text" id="whFbsTransfer" autocomplete="off" placeholder="Можно указать позже" /></label>'
+      '<label class="wh-fbs-transfer-field">' +
+      '<span class="wh-fbs-transfer-label">Перемещение <span>необязательно</span></span>' +
+      '<span class="wh-fbs-transfer-control">' +
+      '<span class="wh-fbs-transfer-icon" aria-hidden="true">↔</span>' +
+      '<input type="text" id="whFbsTransfer" maxlength="128" autocomplete="off" placeholder="Например, ПР-15" />' +
+      "</span>" +
+      '<small>Можно заполнить или изменить после создания задания</small>' +
+      "</label>"
     );
   }
 
@@ -201,7 +207,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Статус</th><th>Перемещение</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>" +
+      '<th>№</th><th>Статус</th><th class="wh-fbs-transfer-column">Перемещение</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>' +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -225,13 +231,13 @@
             esc(job.id) +
             "</td><td>" +
             esc(jobStatusLabel(job.status)) +
-            '</td><td><input type="text" class="wh-fbs-transfer" data-id="' +
+            '</td><td><div class="wh-fbs-transfer-editor"><input type="text" class="wh-fbs-transfer" maxlength="128" autocomplete="off" aria-label="Номер перемещения" placeholder="Не указано" data-id="' +
             esc(job.id) +
             '" data-prev="' +
             esc(job.transfer_number) +
             '" value="' +
             esc(job.transfer_number) +
-            '" /></td><td>' +
+            '" /><button type="button" class="wh-btn wh-btn-sm wh-fbs-transfer-save" title="Сохранить перемещение">Сохранить</button></div></td><td>' +
             esc(jobMarketplaceLabel(job)) +
             " · " +
             esc(jobSubstatusLabel(job)) +
@@ -277,8 +283,26 @@
       });
     });
     wrap.querySelectorAll(".wh-fbs-transfer").forEach(function (input) {
-      input.addEventListener("change", function () {
+      input.addEventListener("input", function () {
+        var editor = input.closest(".wh-fbs-transfer-editor");
+        if (editor) {
+          editor.classList.toggle(
+            "wh-fbs-transfer-editor--dirty",
+            String(input.value || "").trim() !== (input.getAttribute("data-prev") || "")
+          );
+        }
+      });
+      input.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
         saveTransfer(root, input);
+      });
+    });
+    wrap.querySelectorAll(".wh-fbs-transfer-save").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var editor = button.closest(".wh-fbs-transfer-editor");
+        var input = editor && editor.querySelector(".wh-fbs-transfer");
+        if (input) saveTransfer(root, input);
       });
     });
   }
@@ -288,6 +312,13 @@
     var previous = input.getAttribute("data-prev") || "";
     var value = String(input.value || "").trim();
     if (value === previous) return;
+    var editor = input.closest(".wh-fbs-transfer-editor");
+    var button = editor && editor.querySelector(".wh-fbs-transfer-save");
+    input.disabled = true;
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Сохраняем…";
+    }
     shell()
       .fetchJson("/api/warehouse/fbs-packing/jobs/" + jobId + "/transfer-number", {
         method: "POST",
@@ -297,6 +328,13 @@
       .then(function () {
         input.value = value;
         input.setAttribute("data-prev", value);
+        if (editor) {
+          editor.classList.remove("wh-fbs-transfer-editor--dirty");
+          editor.classList.add("wh-fbs-transfer-editor--saved");
+          setTimeout(function () {
+            editor.classList.remove("wh-fbs-transfer-editor--saved");
+          }, 1200);
+        }
         (jobsCache || []).forEach(function (job) {
           if (String(job.id) === String(jobId)) job.transfer_number = value;
         });
@@ -304,6 +342,13 @@
       .catch(function (error) {
         input.value = previous;
         setMessage(root, error.message || "Не удалось сохранить перемещение", true);
+      })
+      .finally(function () {
+        input.disabled = false;
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Сохранить";
+        }
       });
   }
 
