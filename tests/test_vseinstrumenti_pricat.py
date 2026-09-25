@@ -9,8 +9,10 @@ from openpyxl import Workbook, load_workbook
 import pytest
 
 from app.vseinstrumenti_pricat import (
+    _quantity,
     build_vseinstrumenti_pricat,
     build_vseinstrumenti_quantity_template,
+    quantity_template_names,
 )
 from app.crm_repository import CrmRepository
 
@@ -201,6 +203,49 @@ def test_quantity_template_has_two_columns() -> None:
     sheet = load_workbook(BytesIO(build_vseinstrumenti_quantity_template())).active
     assert sheet["A1"].value == "Название"
     assert sheet["B1"].value == "Количество"
+
+
+def test_excel_text_quantity_is_written() -> None:
+    result, _ = build_vseinstrumenti_pricat(
+        _quantities([["Первый товар", "889\u00a0826,000"]]),
+        catalog_products=_products(),
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+        template_bytes=_pricat(),
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["AB13"].value == 889826
+
+
+def test_russian_quantity_formats_are_accepted() -> None:
+    samples = {
+        "889 826,000": 889826,
+        "256\u00a0993,584": 256993,
+        "168 550,000": 168550,
+        "143 536,560": 143536,
+        "122 426,000": 122426,
+        "108 000,000": 108000,
+        "93 659,000": 93659,
+        "90 000,000": 90000,
+        "88 000,000": 88000,
+        "69 186,000": 69186,
+        "58 432,000": 58432,
+        "55 000,000": 55000,
+        12.9: 12,
+        "0": 0,
+    }
+    for raw, expected in samples.items():
+        assert _quantity(raw, 2) == expected
+
+
+def test_quantity_template_contains_catalog_names() -> None:
+    names = quantity_template_names(_products(), template_bytes=_pricat())
+    assert names == ["Второй товар", "Первый товар", "Только PRICAT"]
+    sheet = load_workbook(BytesIO(build_vseinstrumenti_quantity_template(names))).active
+    assert sheet["A2"].value == "Второй товар"
+    assert sheet["B2"].value is None
+    assert sheet.max_row == 4
 
 
 def test_counterparty_gln_round_trip(db_url: str) -> None:

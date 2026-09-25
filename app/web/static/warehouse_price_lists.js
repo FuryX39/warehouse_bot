@@ -196,7 +196,7 @@
       "</div></fieldset>" +
       '<fieldset><legend>4. Количество</legend>' +
       '<label class="wh-pricat-file">Заполненный шаблон количества<input id="whViQuantityFile" type="file" accept=".xlsx" required></label>' +
-      '<p class="wh-muted">Названия сопоставляются с каталогом строго. Повторения используют минимальное количество. Комплекты рассчитываются из компонентов.</p>' +
+      '<p class="wh-muted">Скачайте шаблон: в нём уже названия из каталога. Заполните столбец «Количество». Допустимы значения вида 889&nbsp;826,000. Дробная часть отбрасывается. Комплекты считаются из компонентов.</p>' +
       "</fieldset>" +
       '<div class="wh-pricat-actions"><button id="whViPricatSubmit" class="wh-btn wh-btn-primary" type="submit">Сформировать PRICAT</button></div>' +
       '<p id="whViPricatMessage" class="wh-msg"></p>' +

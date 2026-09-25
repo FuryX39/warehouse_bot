@@ -31,19 +31,91 @@ def _normalize_name(value: Any) -> str:
     return " ".join(str(value or "").strip().casefold().split())
 
 
+_THOUSAND_SEPARATORS = (" ", "\u00a0", "\u202f", "\u2009", "\u2007", "'", "\u2019")
+
+
 def _quantity(value: Any, row: int) -> int:
     if value in (None, ""):
         return 0
+    if isinstance(value, bool):
+        raise ValueError(f"Строка {row}: некорректное количество «{value}»")
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError(f"Строка {row}: количество должно быть не меньше нуля")
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"Строка {row}: количество должно быть не меньше нуля")
+        return math.floor(value)
+
+    text = str(value).strip()
+    if not text:
+        return 0
+    for sep in _THOUSAND_SEPARATORS:
+        text = text.replace(sep, "")
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        text = text.replace(",", ".")
     try:
-        number = float(value)
+        number = float(text)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Строка {row}: некорректное количество «{value}»") from exc
-    if not math.isfinite(number) or number < 0 or not number.is_integer():
-        raise ValueError(f"Строка {row}: количество должно быть целым числом не меньше нуля")
-    return int(number)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"Строка {row}: количество должно быть не меньше нуля")
+    return math.floor(number)
 
 
-def build_vseinstrumenti_quantity_template() -> bytes:
+def list_vseinstrumenti_pricat_skus(template_bytes: bytes | None = None) -> set[str]:
+    template = template_bytes if template_bytes is not None else _TEMPLATE_PATH.read_bytes()
+    book = load_workbook(BytesIO(template), data_only=True, read_only=True)
+    try:
+        if "Лист 1" not in book.sheetnames:
+            raise ValueError("В PRICAT отсутствует лист «Лист 1»")
+        sheet = book["Лист 1"]
+        skus: set[str] = set()
+        for row in sheet.iter_rows(min_row=13, min_col=5, max_col=5, values_only=True):
+            sku = _article(row[0]).casefold()
+            if sku:
+                skus.add(sku)
+        return skus
+    finally:
+        book.close()
+
+
+def quantity_template_names(
+    products: list[dict[str, Any]],
+    *,
+    template_bytes: bytes | None = None,
+) -> list[str]:
+    pricat_skus = list_vseinstrumenti_pricat_skus(template_bytes)
+    names: list[str] = []
+    seen: set[str] = set()
+    for product in sorted(
+        products,
+        key=lambda item: (
+            _normalize_name(item.get("name")),
+            _article(item.get("sku")).casefold(),
+        ),
+    ):
+        if bool(product.get("is_kit")):
+            continue
+        sku = _article(product.get("sku")).casefold()
+        if sku not in pricat_skus:
+            continue
+        name = str(product.get("name") or "").strip()
+        key = _normalize_name(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def build_vseinstrumenti_quantity_template(product_names: list[str] | None = None) -> bytes:
     book = Workbook()
     sheet = book.active
     sheet.title = "Количество"
@@ -51,8 +123,17 @@ def build_vseinstrumenti_quantity_template() -> bytes:
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="315D8A")
+    seen: set[str] = set()
+    for raw_name in product_names or []:
+        name = str(raw_name or "").strip()
+        key = _normalize_name(name)
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        sheet.append([name, None])
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = "A1:B1"
+    last_row = max(1, sheet.max_row)
+    sheet.auto_filter.ref = f"A1:B{last_row}"
     sheet.column_dimensions[get_column_letter(1)].width = 72
     sheet.column_dimensions[get_column_letter(2)].width = 16
     output = BytesIO()

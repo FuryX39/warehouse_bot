@@ -15,6 +15,7 @@ from app.crm_repository import CrmRepository
 from app.vseinstrumenti_pricat import (
     build_vseinstrumenti_pricat,
     build_vseinstrumenti_quantity_template,
+    quantity_template_names,
 )
 from app.warehouse_users_repository import WarehouseUserRow
 
@@ -69,8 +70,10 @@ def register_warehouse_price_lists_routes(
     async def api_vseinstrumenti_quantity_template(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> Response:
+        catalog_data = await asyncio.to_thread(catalog_repo.list_products_for_export, {})
+        names = quantity_template_names(catalog_data.get("products") or [])
         return Response(
-            content=build_vseinstrumenti_quantity_template(),
+            content=build_vseinstrumenti_quantity_template(names),
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={
                 "Content-Disposition": 'attachment; filename="PRICAT_quantity_template.xlsx"'
