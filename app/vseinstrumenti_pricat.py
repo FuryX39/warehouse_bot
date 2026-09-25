@@ -334,16 +334,6 @@ def build_vseinstrumenti_pricat(
             continue
         ordinary_quantities[sku] = quantity
 
-    errors: list[str] = []
-    if unknown_names:
-        errors.append("Не найдены в каталоге: " + ", ".join(unknown_names[:20]))
-    if ambiguous_names:
-        errors.append("Неоднозначные названия: " + ", ".join(ambiguous_names[:20]))
-    if outside_pricat:
-        errors.append("Нет в базовом PRICAT: " + ", ".join(outside_pricat[:20]))
-    if errors:
-        raise ValueError("; ".join(errors))
-
     final_quantities: dict[str, int] = {}
     kits_calculated = 0
     for sku in pricat_rows:
@@ -392,7 +382,11 @@ def build_vseinstrumenti_pricat(
     template_book.close()
     return _patch_pricat_xml(template, updates), {
         "source_names": len(named_quantities),
-        "matched_names": len(named_quantities) - ignored_kit_inputs,
+        "matched_names": len(ordinary_quantities),
+        "skipped_names": len(unknown_names) + len(ambiguous_names) + len(outside_pricat),
+        "unknown_names": len(unknown_names),
+        "ambiguous_names": len(ambiguous_names),
+        "outside_pricat": len(outside_pricat),
         "rows_written": len(pricat_rows),
         "kits_calculated": kits_calculated,
         "ignored_kit_inputs": ignored_kit_inputs,

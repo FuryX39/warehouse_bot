@@ -158,7 +158,8 @@
           message.className = "wh-msg wh-msg-ok";
           message.textContent =
             "Готово. Записано строк: " + (result.stats.rows_written || 0) +
-            ". Рассчитано комплектов: " + (result.stats.kits_calculated || 0) + ".";
+            ". Рассчитано комплектов: " + (result.stats.kits_calculated || 0) +
+            ". Пропущено: " + (result.stats.skipped_names || 0) + ".";
         })
         .catch(function (error) {
           message.className = "wh-msg wh-msg-error";
@@ -196,7 +197,7 @@
       "</div></fieldset>" +
       '<fieldset><legend>4. Количество</legend>' +
       '<label class="wh-pricat-file">Заполненный шаблон количества<input id="whViQuantityFile" type="file" accept=".xlsx" required></label>' +
-      '<p class="wh-muted">Скачайте шаблон: в нём уже названия из каталога. Заполните столбец «Количество». Допустимы значения вида 889&nbsp;826,000. Дробная часть отбрасывается. Комплекты считаются из компонентов.</p>' +
+      '<p class="wh-muted">Скачайте шаблон: в нём уже названия из каталога. Заполните столбец «Количество». Допустимы значения вида 889&nbsp;826,000. Дробная часть отбрасывается. Ненайденные, неоднозначные и отсутствующие в PRICAT строки пропускаются. Комплекты считаются из компонентов.</p>' +
       "</fieldset>" +
       '<div class="wh-pricat-actions"><button id="whViPricatSubmit" class="wh-btn wh-btn-primary" type="submit">Сформировать PRICAT</button></div>' +
       '<p id="whViPricatMessage" class="wh-msg"></p>' +

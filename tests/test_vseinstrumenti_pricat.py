@@ -143,46 +143,32 @@ def test_build_vseinstrumenti_pricat_with_kits_and_full_header() -> None:
     assert stats["ignored_kit_inputs"] == 1
 
 
-def test_unknown_name_is_rejected() -> None:
-    with pytest.raises(ValueError, match="Не найдены в каталоге"):
-        build_vseinstrumenti_pricat(
-            _quantities([["Неизвестный", 2]]),
-            catalog_products=_products(),
-            buyer=_party("Покупатель"),
-            supplier=_party("Поставщик"),
-            header=_header(),
-            template_bytes=_pricat(),
-        )
-
-
-def test_ambiguous_catalog_name_is_rejected() -> None:
+def test_unknown_ambiguous_and_outside_names_are_skipped() -> None:
     products = _products() + [
-        {"name": "Первый товар", "sku": "A-3", "is_kit": False, "components": []}
+        {"name": "Первый товар", "sku": "A-3", "is_kit": False, "components": []},
+        {"name": "Лишний товар", "sku": "A-9", "is_kit": False, "components": []},
     ]
-    with pytest.raises(ValueError, match="Неоднозначные названия"):
-        build_vseinstrumenti_pricat(
-            _quantities([["Первый товар", 2]]),
-            catalog_products=products,
-            buyer=_party("Покупатель"),
-            supplier=_party("Поставщик"),
-            header=_header(),
-            template_bytes=_pricat(),
-        )
-
-
-def test_catalog_product_outside_pricat_is_rejected() -> None:
-    products = _products() + [
-        {"name": "Лишний товар", "sku": "A-3", "is_kit": False, "components": []}
-    ]
-    with pytest.raises(ValueError, match="Нет в базовом PRICAT"):
-        build_vseinstrumenti_pricat(
-            _quantities([["Лишний товар", 2]]),
-            catalog_products=products,
-            buyer=_party("Покупатель"),
-            supplier=_party("Поставщик"),
-            header=_header(),
-            template_bytes=_pricat(),
-        )
+    result, stats = build_vseinstrumenti_pricat(
+        _quantities([
+            ["Неизвестный", 2],
+            ["Первый товар", 4],
+            ["Лишний товар", 7],
+            ["Второй товар", 5],
+        ]),
+        catalog_products=products,
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+        template_bytes=_pricat(),
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["AB13"].value == 0
+    assert sheet["AB14"].value == 5
+    assert stats["skipped_names"] == 3
+    assert stats["unknown_names"] == 1
+    assert stats["ambiguous_names"] == 1
+    assert stats["outside_pricat"] == 1
+    assert stats["matched_names"] == 1
 
 
 def test_kit_with_missing_component_is_rejected() -> None:
