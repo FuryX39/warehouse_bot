@@ -666,6 +666,7 @@
             '<input type="text" id="whCpFias" value="' + esc(cp.fias_code) + '" />'
           ) +
           formField("КПП", '<input type="text" id="whCpKpp" value="' + esc(cp.kpp) + '" />') +
+          formField("GLN", '<input type="text" id="whCpGln" value="' + esc(cp.gln) + '" />') +
           formField("ОГРН", '<input type="text" id="whCpOgrn" value="' + esc(cp.ogrn) + '" />') +
           formField("ОКПО", '<input type="text" id="whCpOkpo" value="' + esc(cp.okpo) + '" />') +
           "</div></section>" +
@@ -745,6 +746,7 @@
       address_comment: "",
       fias_code: "",
       kpp: "",
+      gln: "",
       ogrn: "",
       okpo: "",
       price_type_id: null,
@@ -774,6 +776,7 @@
       address_comment: root.querySelector("#whCpAddressComment").value.trim(),
       fias_code: root.querySelector("#whCpFias").value.trim(),
       kpp: root.querySelector("#whCpKpp").value.trim(),
+      gln: root.querySelector("#whCpGln").value.trim(),
       ogrn: root.querySelector("#whCpOgrn").value.trim(),
       okpo: root.querySelector("#whCpOkpo").value.trim(),
       price_type_id: root.querySelector("#whCpPriceType").value || null,

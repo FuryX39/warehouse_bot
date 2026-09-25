@@ -77,6 +77,7 @@ class CrmCounterparty(_Base):
     address_comment: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     fias_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     kpp: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    gln: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     ogrn: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     okpo: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     price_type_id: Mapped[int] = mapped_column(Integer, ForeignKey("crm_price_types.id"), nullable=True)
@@ -134,6 +135,7 @@ class CounterpartyRow:
     address_comment: str
     fias_code: str
     kpp: str
+    gln: str
     ogrn: str
     okpo: str
     price_type_id: Optional[int]
@@ -165,7 +167,25 @@ class CrmRepository:
         _Base.metadata.create_all(self.engine)
         self._migrate_price_type_defaults()
         self._migrate_price_type_is_cost()
+        self._migrate_counterparty_gln()
         self._seed_defaults()
+
+    def _migrate_counterparty_gln(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "crm_counterparties" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("crm_counterparties")}
+        if "gln" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE crm_counterparties "
+                    "ADD COLUMN gln VARCHAR(32) NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
 
     def _migrate_price_type_defaults(self) -> None:
         from sqlalchemy import inspect, text
@@ -473,6 +493,7 @@ class CrmRepository:
             "address_comment": CrmCounterparty.address_comment,
             "fias_code": CrmCounterparty.fias_code,
             "kpp": CrmCounterparty.kpp,
+            "gln": CrmCounterparty.gln,
             "ogrn": CrmCounterparty.ogrn,
             "okpo": CrmCounterparty.okpo,
             "discount_card_number": CrmCounterparty.discount_card_number,
@@ -502,6 +523,7 @@ class CrmRepository:
                     CrmCounterparty.phone.ilike(pat),
                     CrmCounterparty.email.ilike(pat),
                     CrmCounterparty.inn.ilike(pat),
+                    CrmCounterparty.gln.ilike(pat),
                 )
             )
         contact_q = (filters.get("contact") or "").strip()
@@ -562,6 +584,7 @@ class CrmRepository:
         row.address_comment = str(data.get("address_comment") or "").strip()[:512]
         row.fias_code = str(data.get("fias_code") or "").strip()[:64]
         row.kpp = str(data.get("kpp") or "").strip()[:32]
+        row.gln = str(data.get("gln") or "").strip()[:32]
         row.ogrn = str(data.get("ogrn") or "").strip()[:32]
         row.okpo = str(data.get("okpo") or "").strip()[:32]
         row.price_type_id = _opt_int(data.get("price_type_id"))
@@ -635,6 +658,7 @@ class CrmRepository:
             address_comment=row.address_comment,
             fias_code=row.fias_code,
             kpp=row.kpp,
+            gln=row.gln,
             ogrn=row.ogrn,
             okpo=row.okpo,
             price_type_id=row.price_type_id,
@@ -667,6 +691,7 @@ class CrmRepository:
             "address_comment": row.address_comment,
             "fias_code": row.fias_code,
             "kpp": row.kpp,
+            "gln": row.gln,
             "ogrn": row.ogrn,
             "okpo": row.okpo,
             "price_type_id": row.price_type_id,

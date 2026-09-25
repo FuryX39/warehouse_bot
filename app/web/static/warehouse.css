@@ -400,6 +400,107 @@ body.wh-body {
   box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
 }
 
+.wh-pricat-section {
+  max-width: 1040px;
+}
+
+.wh-pricat-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.wh-pricat-head p {
+  margin-bottom: 0;
+}
+
+.wh-pricat-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.wh-pricat-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.wh-pricat-form legend {
+  padding: 0 0.4rem;
+  color: var(--wh-text);
+  font-weight: 650;
+}
+
+.wh-pricat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 0.85rem 1rem;
+}
+
+.wh-pricat-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--wh-muted);
+  font-size: 0.86rem;
+}
+
+.wh-pricat-form input,
+.wh-pricat-form select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--wh-border);
+  border-radius: 7px;
+  padding: 0.52rem 0.65rem;
+  background: #fff;
+  color: var(--wh-text);
+  font: inherit;
+}
+
+.wh-pricat-form input:focus,
+.wh-pricat-form select:focus {
+  border-color: var(--wh-primary);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.wh-pricat-party-status {
+  min-height: 1rem;
+  font-size: 0.75rem;
+}
+
+.wh-pricat-party-status.is-ok {
+  color: #15803d;
+}
+
+.wh-pricat-party-status.is-error {
+  color: #b91c1c;
+}
+
+.wh-pricat-file {
+  max-width: 520px;
+}
+
+.wh-pricat-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .wh-pricat-head {
+    flex-direction: column;
+  }
+
+  .wh-pricat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .wh-fbs-check {
   display: flex;
   align-items: center;

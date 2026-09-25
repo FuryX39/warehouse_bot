@@ -119,6 +119,7 @@ def _filters_from_query(params: Any) -> dict[str, str]:
         "address_comment",
         "fias_code",
         "kpp",
+        "gln",
         "ogrn",
         "okpo",
         "discount_card_number",
