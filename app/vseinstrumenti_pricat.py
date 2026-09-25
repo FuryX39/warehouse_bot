@@ -6,8 +6,9 @@ from datetime import date
 from io import BytesIO
 import math
 from pathlib import Path
-import xml.etree.ElementTree as ET
+import re
 from typing import Any
+from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -16,7 +17,7 @@ from openpyxl.utils import get_column_letter
 
 _TEMPLATE_PATH = Path(__file__).resolve().parent / "assets" / "vseinstrumenti_pricat.xlsx"
 _SHEET_XML = "xl/worksheets/sheet1.xml"
-_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_CELL_OPEN_RE = re.compile(rb'<c\b(?=[^>]*\br="(?P<r>[^"]+)")[^>]*/?>')
 
 
 def _article(value: Any) -> str:
@@ -141,41 +142,70 @@ def build_vseinstrumenti_quantity_template(product_names: list[str] | None = Non
     return output.getvalue()
 
 
+def _xml_text(value: str) -> bytes:
+    cleaned = "".join(
+        char for char in value if char in "\t\n\r" or ord(char) >= 32
+    )
+    return escape(cleaned).encode("utf-8")
+
+
+def _set_cell_type(open_tag: bytes, cell_type: str | None) -> bytes:
+    if open_tag.endswith(b"/>"):
+        open_tag = open_tag[:-2].rstrip() + b">"
+    elif open_tag.endswith(b">"):
+        open_tag = open_tag[:-1] + b">"
+    open_tag = re.sub(rb"\s+t=\"[^\"]*\"", b"", open_tag)
+    if cell_type:
+        open_tag = open_tag[:-1] + f' t="{cell_type}"'.encode("ascii") + b">"
+    return open_tag
+
+
+def _replace_sheet_cells(xml: bytes, values: dict[str, int | str]) -> bytes:
+    cells: dict[str, tuple[int, int, bytes]] = {}
+    for match in _CELL_OPEN_RE.finditer(xml):
+        coordinate = match.group("r").decode("ascii")
+        open_tag = match.group(0)
+        start = match.start()
+        if open_tag.endswith(b"/>"):
+            end = match.end()
+        else:
+            close_at = xml.find(b"</c>", match.end())
+            if close_at < 0:
+                raise ValueError(f"В шаблоне PRICAT повреждена ячейка {coordinate}")
+            end = close_at + 4
+        cells[coordinate] = (start, end, open_tag)
+    missing = [coord for coord in values if coord not in cells]
+    if missing:
+        raise ValueError(f"В шаблоне PRICAT отсутствует ячейка {missing[0]}")
+    parts: list[bytes] = []
+    cursor = 0
+    for coordinate, (start, end, open_tag) in sorted(cells.items(), key=lambda item: item[1][0]):
+        if coordinate not in values:
+            continue
+        value = values[coordinate]
+        if isinstance(value, str):
+            patched = _set_cell_type(open_tag, "inlineStr")
+            inner = b"<is><t>" + _xml_text(value) + b"</t></is>"
+        else:
+            patched = _set_cell_type(open_tag, None)
+            inner = b"<v>" + str(value).encode("ascii") + b"</v>"
+        parts.append(xml[cursor:start])
+        parts.append(patched + inner + b"</c>")
+        cursor = end
+    parts.append(xml[cursor:])
+    return b"".join(parts)
+
+
 def _patch_pricat_xml(template: bytes, values: dict[str, int | str]) -> bytes:
-    """Меняет только значения ячеек, сохраняя неподдерживаемые openpyxl расширения XLSX."""
+    """Меняет только значения ячеек, сохраняя исходный XML листа и расширения XLSX."""
     source = BytesIO(template)
     output = BytesIO()
     with ZipFile(source, "r") as src, ZipFile(output, "w", ZIP_DEFLATED) as dst:
         if _SHEET_XML not in src.namelist():
             raise ValueError("В шаблоне PRICAT не найден XML листа «Лист 1»")
-        tree = ET.fromstring(src.read(_SHEET_XML))
-        cells = {
-            cell.get("r"): cell
-            for cell in tree.iter(f"{{{_MAIN_NS}}}c")
-            if cell.get("r")
-        }
-        for coordinate, value in values.items():
-            cell = cells.get(coordinate)
-            if cell is None:
-                raise ValueError(f"В шаблоне PRICAT отсутствует ячейка {coordinate}")
-            for child in list(cell):
-                if child.tag in {f"{{{_MAIN_NS}}}v", f"{{{_MAIN_NS}}}is", f"{{{_MAIN_NS}}}f"}:
-                    cell.remove(child)
-            if isinstance(value, str):
-                cell.set("t", "inlineStr")
-                inline = ET.SubElement(cell, f"{{{_MAIN_NS}}}is")
-                text = ET.SubElement(inline, f"{{{_MAIN_NS}}}t")
-                text.text = value
-            else:
-                cell.attrib.pop("t", None)
-                node = ET.SubElement(cell, f"{{{_MAIN_NS}}}v")
-                node.text = str(value)
+        sheet_xml = _replace_sheet_cells(src.read(_SHEET_XML), values)
         for item in src.infolist():
-            data = (
-                ET.tostring(tree, encoding="utf-8", xml_declaration=True)
-                if item.filename == _SHEET_XML
-                else src.read(item.filename)
-            )
+            data = sheet_xml if item.filename == _SHEET_XML else src.read(item.filename)
             dst.writestr(item, data)
     return output.getvalue()
 

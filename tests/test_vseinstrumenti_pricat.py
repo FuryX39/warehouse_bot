@@ -266,5 +266,8 @@ def test_bundled_pricat_template_is_available() -> None:
     assert book.sheetnames == ["Лист 1", "Сертификаты и декларации", "Страны", "Единицы измерения"]
     with ZipFile(BytesIO(result)) as archive:
         sheet_xml = archive.read("xl/worksheets/sheet1.xml")
+    assert sheet_xml.startswith(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+    assert b"ns0:" not in sheet_xml
+    assert b'mc:Ignorable="x14ac xr xr2 xr3"' in sheet_xml
     assert b"dataValidations" in sheet_xml
     assert b"extLst" in sheet_xml
