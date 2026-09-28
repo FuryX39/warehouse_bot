@@ -8,8 +8,17 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.fbs_packing_repository import JOB_STATUS_DONE, FbsPackingJob, FbsPackingJobRow, FbsPackingLine
+from app.fbs_packing_repository import (
+    JOB_STATUS_DONE,
+    JOB_STATUS_IN_PROGRESS,
+    JOB_STATUS_OPEN,
+    FbsPackingJob,
+    FbsPackingJobRow,
+    FbsPackingLine,
+)
 from app.warehouse_orders_repository import WarehouseOrdersRepository, packing_source
+
+JOB_WMS_SHIPPABLE_STATUSES = (JOB_STATUS_OPEN, JOB_STATUS_IN_PROGRESS, JOB_STATUS_DONE)
 
 
 def _job_lines(job: FbsPackingJobRow | dict[str, Any]) -> list[Any]:
@@ -106,6 +115,27 @@ def release_packing_job_orders(
     if orders_repo is None:
         return
     orders_repo.clear_packing_job(int(job_id))
+
+
+def annotate_jobs_with_wms_ship_status(
+    job_dicts: list[dict[str, Any]],
+    flags: dict[int, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Добавляет wms_shipped / can_ship к словарям FBS-заданий."""
+    by_job = flags or {}
+    for item in job_dicts:
+        jid = int(item.get("id") or 0)
+        flag = by_job.get(jid) or {}
+        status = str(item.get("status") or "")
+        shipped = bool(flag.get("shipped"))
+        pending = int(flag.get("pending_count") or 0)
+        order_count = int(flag.get("order_count") or 0)
+        can_ship_orders = pending > 0 or order_count == 0
+        item["wms_shipped"] = shipped
+        item["wms_order_count"] = order_count
+        item["wms_shipped_count"] = int(flag.get("shipped_count") or 0)
+        item["can_ship"] = (not shipped) and can_ship_orders and status in JOB_WMS_SHIPPABLE_STATUSES
+    return job_dicts
 
 
 def mark_packed_if_done(

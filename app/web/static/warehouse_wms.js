@@ -732,34 +732,46 @@
           page = sliced.state.page;
           var rows = sliced.items
             .map(function (j) {
-              var canShip = j.status === "done" || j.status === "in_progress" || j.status === "open";
+              var shipped = !!j.wms_shipped;
+              var canShip = !!j.can_ship;
+              var flagClass = shipped ? "wh-badge-shipped" : "wh-badge-not-shipped";
+              var flagText = shipped ? "Отгружено" : "Не отгружено";
+              var action = canShip
+                ? '<button type="button" class="wh-btn wh-btn-sm wh-wave-ship" data-id="' +
+                  esc(j.id) +
+                  '">Отгрузить волну</button>'
+                : "";
               return (
                 "<tr data-id=\"" +
                 esc(j.id) +
-                "\"><td>" +
+                "\"" +
+                (shipped ? ' class="wh-wave-row-shipped"' : "") +
+                "><td>" +
                 esc(j.id) +
                 "</td><td>" +
                 esc(j.marketplace) +
                 "</td><td>" +
                 esc(j.status) +
-                "</td><td>" +
+                '</td><td><span class="wh-badge ' +
+                flagClass +
+                '">' +
+                flagText +
+                "</span></td><td>" +
                 esc(j.line_done) +
                 "/" +
                 esc(j.line_total) +
                 "</td><td>" +
                 formatTs(j.created_at_ts) +
-                '</td><td><button type="button" class="wh-btn wh-btn-sm wh-wave-ship" data-id="' +
-                esc(j.id) +
-                "\"" +
-                (canShip ? "" : " disabled") +
-                ">Отгрузить волну</button></td></tr>"
+                "</td><td>" +
+                action +
+                "</td></tr>"
               );
             })
             .join("");
           panelEl().innerHTML =
-            '<p class="wh-msg">Волны = FBS-задания. Сборка — в разделе «FBS».</p>' +
+            '<p class="wh-msg">Волны = FBS-задания. Сборка — в разделе «FBS». Кнопка «Отгрузить волну» только у строк «Не отгружено».</p>' +
             '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-            "<th>ID</th><th>МП</th><th>Статус</th><th>Строки</th><th>Создано</th><th></th>" +
+            "<th>ID</th><th>МП</th><th>Статус</th><th>Отгрузка</th><th>Строки</th><th>Создано</th><th></th>" +
             "</tr></thead><tbody>" +
             rows +
             "</tbody></table>" +

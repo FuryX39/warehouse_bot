@@ -986,6 +986,43 @@ class WarehouseOrdersRepository:
             ).all()
             return [self._order_row(session, r, load_lines=True) for r in rows]
 
+    def packing_job_ship_flags(self, job_ids: Iterable[int]) -> dict[int, dict[str, Any]]:
+        """Флаг складской отгрузки по волнам: все неотменённые заказы в shipped."""
+        ids = sorted({int(i) for i in job_ids if int(i) > 0})
+        empty: dict[str, Any] = {
+            "shipped": False,
+            "can_ship": True,
+            "order_count": 0,
+            "shipped_count": 0,
+            "pending_count": 0,
+        }
+        result = {jid: dict(empty) for jid in ids}
+        if not ids:
+            return result
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(WarehouseOrder.packing_job_id, WarehouseOrder.status).where(
+                    WarehouseOrder.packing_job_id.in_(ids)
+                )
+            ).all()
+        by_job: dict[int, list[str]] = {}
+        for packing_job_id, status in rows:
+            if packing_job_id is None:
+                continue
+            by_job.setdefault(int(packing_job_id), []).append(str(status or ""))
+        for jid, statuses in by_job.items():
+            order_count = len(statuses)
+            shipped_count = sum(1 for item in statuses if item == ORDER_SHIPPED)
+            pending_count = sum(1 for item in statuses if item not in TERMINAL_STATUSES)
+            result[jid] = {
+                "shipped": pending_count == 0 and shipped_count > 0,
+                "can_ship": pending_count > 0,
+                "order_count": order_count,
+                "shipped_count": shipped_count,
+                "pending_count": pending_count,
+            }
+        return result
+
     def get_by_posting(self, source: str, posting_id: str) -> WarehouseOrderRow | None:
         with Session(self.engine) as session:
             row = session.scalar(

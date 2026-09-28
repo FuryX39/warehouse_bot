@@ -989,6 +989,20 @@ body.wh-body {
   color: #a32020;
 }
 
+.wh-badge-shipped {
+  background: #e6f6ea;
+  color: #1a7a38;
+}
+
+.wh-badge-not-shipped {
+  background: #fff4e0;
+  color: #9a5b00;
+}
+
+.wh-wave-row-shipped td {
+  color: var(--wh-muted);
+}
+
 .wh-employee-editor {
   border: 1px solid var(--wh-border);
   border-radius: 8px;
