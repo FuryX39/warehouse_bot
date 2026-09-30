@@ -67,6 +67,11 @@ def test_normalize_scan_codes_keeps_duplicates_and_gs() -> None:
     assert codes == ["AAA", "AAA", f"01{GS}21"]
 
 
+def test_normalize_scan_codes_remaps_jcuken() -> None:
+    codes = normalize_scan_codes({"codes": ["ЫЫ907", "asdf"]})
+    assert codes == ["SS907", "asdf"]
+
+
 def test_build_scan_log_export_writes_raw_rows() -> None:
     raw = build_scan_log_export(["AAA", f"01{GS}21", "AAA"])
     wb = load_workbook(BytesIO(raw))

@@ -12,7 +12,11 @@ from typing import Any
 from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from app.warehouse_task_files import MAX_TASK_ATTACHMENT_BYTES, WarehouseTaskFileStorage
+from app.warehouse_task_files import (
+    MAX_TASK_ATTACHMENT_BYTES,
+    MAX_TASK_ATTACHMENT_MB,
+    WarehouseTaskFileStorage,
+)
 
 JOB_STATUS_OPEN = "open"
 JOB_STATUS_IN_PROGRESS = "in_progress"
@@ -335,7 +339,7 @@ class WbFboSheetRepository:
         if not content:
             raise ValueError("Файл пустой")
         if len(content) > MAX_TASK_ATTACHMENT_BYTES:
-            raise ValueError("Файл слишком большой (макс. 20 МБ)")
+            raise ValueError(f"Файл слишком большой (макс. {MAX_TASK_ATTACHMENT_MB} МБ)")
         name = str(original_filename or "").lower()
         if not content.startswith(b"PK") and not name.endswith(".xlsx"):
             raise ValueError("Нужен файл Excel (.xlsx)")
@@ -764,26 +768,30 @@ class WbFboSheetRepository:
                 for row in rows
             ]
 
-    def next_unprinted_boxes(self, job_id: int, count: int) -> list[WbFboSheetBoxRow]:
+    def next_unprinted_boxes(
+        self, job_id: int, count: int, *, all_free: bool = False
+    ) -> list[WbFboSheetBoxRow]:
         want = int(count)
         if want <= 0:
             raise ValueError("Укажите количество ШК для печати")
         with Session(self.engine) as session:
             self._require_active(session, job_id)
+            query = select(WbFboSheetBox).where(WbFboSheetBox.job_id == int(job_id))
+            if all_free:
+                # Свободные: ещё не присвоен товар (pending или уже печатали ШК).
+                query = query.where(WbFboSheetBox.status.in_((BOX_PENDING, BOX_PRINTED)))
+                empty_msg = "Нет свободных грузомест"
+            else:
+                query = query.where(
+                    WbFboSheetBox.printed_at_ts.is_(None),
+                    WbFboSheetBox.status == BOX_PENDING,
+                )
+                empty_msg = "Нет ещё не печатавшихся грузомест"
             rows = list(
-                session.scalars(
-                    select(WbFboSheetBox)
-                    .where(
-                        WbFboSheetBox.job_id == int(job_id),
-                        WbFboSheetBox.printed_at_ts.is_(None),
-                        WbFboSheetBox.status == BOX_PENDING,
-                    )
-                    .order_by(WbFboSheetBox.seq, WbFboSheetBox.id)
-                    .limit(want)
-                ).all()
+                session.scalars(query.order_by(WbFboSheetBox.seq, WbFboSheetBox.id).limit(want)).all()
             )
             if not rows:
-                raise ValueError("Нет ещё не печатавшихся грузомест")
+                raise ValueError(empty_msg)
             sku_by = self._sku_by_barcode(session, job_id)
             return [
                 self._box_row(row, items=self._items_for_box(session, int(row.id)), sku_by_barcode=sku_by)

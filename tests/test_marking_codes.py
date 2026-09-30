@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
-from app.marking.cis import GS, parse_cis, split_cis_input
+from app.marking.cis import GS, parse_cis, remap_jcuken_to_qwerty, split_cis_input
 from app.marking.export import build_marking_codes_export
 from app.marking.gtin import pad_gtin14
 from app.marking.match import match_datamatrix_codes
@@ -68,6 +68,23 @@ def test_bare_gtin_is_not_datamatrix() -> None:
     rec = parse_cis(GTIN13)
     assert not rec.ok
     assert "GTIN" in rec.error
+
+
+def test_remap_jcuken_to_qwerty_serial() -> None:
+    assert remap_jcuken_to_qwerty("ап?э") == "fg&'"
+    assert remap_jcuken_to_qwerty("fg&'") == "fg&'"
+    assert remap_jcuken_to_qwerty("???") == "???"
+    assert remap_jcuken_to_qwerty("asdf") == "asdf"
+    assert remap_jcuken_to_qwerty("ЫЫ907") == "SS907"
+    serial_ru = remap_jcuken_to_qwerty("Ab12Xy")
+    assert serial_ru == "Ab12Xy"
+    typed = "Фи12Чн"
+    assert remap_jcuken_to_qwerty(typed) == "Ab12Xy"
+    rec = parse_cis(f"01{GTIN14}21{typed}")
+    assert rec.ok
+    assert rec.gtin == GTIN14
+    assert rec.serial == "Ab12Xy"
+    assert "Фи" not in rec.raw
 
 
 def test_split_skips_blank_and_comments() -> None:

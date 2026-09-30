@@ -10,7 +10,7 @@ from openpyxl.styles import Font, PatternFill
 
 from app.catalog_repository import CatalogRepository
 from app.fbs_packing_service import CIS_REQUIRED_ERROR, PackingScanResolve, resolve_packing_scan
-from app.marking.cis import replace_gs_for_excel
+from app.marking.cis import remap_jcuken_to_qwerty, replace_gs_for_excel
 from app.marking.gtin import pad_gtin14
 from app.marking.match import build_gtin_index
 from app.marketplace_route_sheets import (
@@ -236,6 +236,7 @@ def _resolve_supply_scan(catalog: CatalogRepository, text: str) -> PackingScanRe
 
 def _lookup_equivalent_product(catalog: CatalogRepository, text: str) -> tuple[str, int | None] | None:
     """Тот же товар, если сканер прислал EAN-13 с нулём спереди или GTIN из карточки."""
+    text = remap_jcuken_to_qwerty(str(text or "").strip())
     by_sku, by_code, by_barcode = catalog.build_product_import_index()
     key = text.casefold()
     product = by_barcode.get(key) or by_sku.get(key) or by_code.get(key)

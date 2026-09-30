@@ -338,6 +338,11 @@
     loadGtinRows(root);
   }
 
+  function remapScanLayout(text) {
+    var fn = shell().remapJcukenToQwerty;
+    return fn ? fn(text) : String(text || "");
+  }
+
   function scanKey(raw) {
     return String(raw || "")
       .trim()
@@ -411,7 +416,7 @@
 
   function addScannedCode(root, raw) {
     var msg = root.querySelector("#whMarkingScanMsg");
-    var value = String(raw || "").trim();
+    var value = remapScanLayout(String(raw || "").trim());
     msg.className = "wh-msg";
     msg.textContent = "";
     if (!value) return;

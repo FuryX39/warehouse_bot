@@ -982,7 +982,8 @@
 
   function addScanLogCode(root, raw) {
     var msg = root.querySelector("#whToolScanMsg");
-    var value = String(raw || "").trim();
+    var remap = shell().remapJcukenToQwerty;
+    var value = remap ? remap(String(raw || "").trim()) : String(raw || "").trim();
     if (msg) {
       msg.className = "wh-msg";
       msg.textContent = "";

@@ -16,7 +16,7 @@ from app.fbs_packing_repository import (
     MARKETPLACE_YANDEX,
 )
 from app.google_sheet_write import fbs_list_sheet_title
-from app.marking.cis import parse_cis
+from app.marking.cis import parse_cis, remap_jcuken_to_qwerty
 from app.marking.match import build_gtin_index
 from app.yandex_fbs_labels import (
     YandexFbsListRow,
@@ -99,7 +99,7 @@ def resolve_catalog_products(
 def lookup_scan_product(
     catalog: CatalogRepository, raw: str
 ) -> tuple[str, int | None]:
-    text = str(raw or "").strip()
+    text = remap_jcuken_to_qwerty(str(raw or "").strip())
     if not text:
         raise ValueError("Пустой штрихкод")
     by_sku, by_code, by_barcode = catalog.build_product_import_index()
@@ -128,7 +128,7 @@ def resolve_packing_scan(catalog: CatalogRepository, raw: str) -> PackingScanRes
     КИЗ → товар по GTIN (или EAN как GTIN-14).
     Обычный EAN/SKU никогда не считается КИЗом и не пишет маркировку.
     """
-    text = str(raw or "").strip()
+    text = remap_jcuken_to_qwerty(str(raw or "").strip())
     if not text:
         raise ValueError("Пустой штрихкод")
     record = parse_cis(text)

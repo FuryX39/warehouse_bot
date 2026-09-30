@@ -25,6 +25,24 @@ _GS_ALIASES = (
     "^]",
 )
 
+# Скан при раскладке ЙЦУКЕН: те же физические клавиши, что у QWERTY.
+_JCUKEN = "ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ"
+_QWERTY = "`qwertyuiop[]asdfghjkl;'zxcvbnm,.~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>"
+# Знаки, которые на ЙЦУКЕН с тех же клавиш дают другой ASCII, чем QWERTY.
+_JCUKEN_PUNCT = '"№;:?.,'
+_QWERTY_PUNCT = "@#$^&/?"
+_JCUKEN_SET = frozenset(_JCUKEN)
+_JCUKEN_TO_QWERTY = str.maketrans(_JCUKEN + _JCUKEN_PUNCT, _QWERTY + _QWERTY_PUNCT)
+
+
+def remap_jcuken_to_qwerty(text: str) -> str:
+    """При кириллице в скане переписать всю строку с ЙЦУКЕН на QWERTY, включая знаки."""
+    if not text:
+        return ""
+    if not any(ch in _JCUKEN_SET for ch in text):
+        return text
+    return text.translate(_JCUKEN_TO_QWERTY)
+
 
 @dataclass(frozen=True)
 class CisRecord:
@@ -114,7 +132,7 @@ def _serial_and_crypto(after_gtin: str) -> tuple[str, str]:
 
 
 def parse_cis(raw: str) -> CisRecord:
-    original = (raw or "").strip()
+    original = remap_jcuken_to_qwerty((raw or "").strip())
     if not original:
         return CisRecord(raw="", cis="", gtin="", error="Пустая строка")
 

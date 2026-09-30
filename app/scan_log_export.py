@@ -9,7 +9,7 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.marking.cis import replace_gs_for_excel
+from app.marking.cis import remap_jcuken_to_qwerty, replace_gs_for_excel
 
 _CELL_LIMIT = 32000
 _MAX_CODES = 20000
@@ -56,7 +56,7 @@ def normalize_scan_codes(raw: object) -> list[str]:
             value = item.get("value") or item.get("code") or item.get("raw")
         else:
             value = item
-        text = str(value or "").strip(" \t\r\n")
+        text = remap_jcuken_to_qwerty(str(value or "").strip(" \t\r\n"))
         if not text:
             continue
         out.append(text)

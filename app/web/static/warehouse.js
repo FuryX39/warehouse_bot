@@ -15,6 +15,29 @@
   var activeTabId = "";
   var activeItemId = "";
 
+  function remapJcukenToQwerty(text) {
+    var letters = "ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ";
+    var from = letters + "\"№;:?.,";
+    var to = "`qwertyuiop[]asdfghjkl;'zxcvbnm,.~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>@#$^&/?";
+    var src = String(text || "");
+    var hasRu = false;
+    var i;
+    for (i = 0; i < src.length; i++) {
+      if (letters.indexOf(src.charAt(i)) >= 0) {
+        hasRu = true;
+        break;
+      }
+    }
+    if (!hasRu) return src;
+    var out = "";
+    for (i = 0; i < src.length; i++) {
+      var ch = src.charAt(i);
+      var idx = from.indexOf(ch);
+      out += idx >= 0 ? to.charAt(idx) : ch;
+    }
+    return out;
+  }
+
   function apiDetailText(detail) {
     if (detail == null || detail === "") return "";
     if (typeof detail === "string") return detail;
@@ -403,6 +426,7 @@
 
   window.WH_SHELL = {
     fetchJson: fetchJson,
+    remapJcukenToQwerty: remapJcukenToQwerty,
     contentPanelEl: contentPanelEl,
     contentTitleEl: contentTitleEl,
     contentBreadcrumbEl: contentBreadcrumbEl,

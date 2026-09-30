@@ -24,6 +24,7 @@ from app.catalog_price_type_import import (
 from app.barcode_label_pdf import generate_barcode_label_pdf
 from app.catalog_repository import CATALOG_LIST_PAGE_SIZE, CatalogRepository
 from app.crm_repository import CrmRepository
+from app.marking.cis import remap_jcuken_to_qwerty
 from app.warehouse_stock_repository import WarehouseStockRepository
 from app.warehouse_users_repository import WarehouseUserRow
 
@@ -278,7 +279,7 @@ def register_warehouse_catalog_routes(
         request: Request,
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
-        code = (request.query_params.get("barcode") or "").strip(" \t\r\n")
+        code = remap_jcuken_to_qwerty((request.query_params.get("barcode") or "").strip(" \t\r\n"))
         if not code:
             raise HTTPException(status_code=400, detail="Укажите штрихкод")
         row = catalog_repo.find_product_by_barcode(code)

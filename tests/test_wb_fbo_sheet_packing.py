@@ -269,6 +269,57 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert packing.get_job(job_id).pcs_assigned == 137
 
 
+def test_print_boxes_all_free_includes_already_printed(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=3), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+
+    first = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 2},
+    )
+    assert first.status_code == 200, first.text
+    first_ids = {box["id"] for box in first.json()["boxes"]}
+    assert len(first_ids) == 2
+
+    # По умолчанию — только ещё не печатавшиеся.
+    only_new = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 5},
+    )
+    assert only_new.status_code == 200, only_new.text
+    assert len(only_new.json()["boxes"]) == 1
+    assert only_new.json()["boxes"][0]["id"] not in first_ids
+
+    empty_new = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    assert empty_new.status_code == 400
+    assert "не печатавшихся" in empty_new.json()["detail"]
+
+    # all_free: все без товара, включая уже печатавшиеся ШК.
+    free = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 5, "all_free": True},
+    )
+    assert free.status_code == 200, free.text
+    free_ids = {box["id"] for box in free.json()["boxes"]}
+    assert len(free_ids) == 3
+    assert first_ids.issubset(free_ids)
+    assert all(box["status"] == BOX_PRINTED for box in free.json()["boxes"])
+
+
 def test_parse_mixed_articles_same_cargo_place() -> None:
     content = _workbook_bytes(
         [

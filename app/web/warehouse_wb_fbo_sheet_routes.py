@@ -227,9 +227,10 @@ def _register_sheet_packer_prefix(
             count = int(payload.get("count") or 0)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Некорректное количество") from exc
+        all_free = bool(payload.get("all_free") or payload.get("print_all_free"))
 
         def _run():
-            boxes = packing_repo.next_unprinted_boxes(job_id, count)
+            boxes = packing_repo.next_unprinted_boxes(job_id, count, all_free=all_free)
             printed = packing_repo.mark_boxes_printed(job_id, [box.id for box in boxes])
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
