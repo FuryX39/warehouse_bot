@@ -107,6 +107,16 @@ def test_task_file_storage_rejects_non_pdf(tmp_path) -> None:
         storage.store_pdf(content=b"not-a-pdf", original_filename="x.pdf")
 
 
+def test_task_file_storage_rejects_oversize(tmp_path, monkeypatch) -> None:
+    from app import warehouse_task_files as files_mod
+
+    monkeypatch.setattr(files_mod, "MAX_TASK_ATTACHMENT_BYTES", 32)
+    monkeypatch.setattr(files_mod, "MAX_TASK_ATTACHMENT_MB", 200)
+    storage = files_mod.WarehouseTaskFileStorage(tmp_path / "files")
+    with pytest.raises(ValueError, match="макс. 200 МБ"):
+        storage.store_pdf(content=b"%PDF" + b"x" * 40, original_filename="big.pdf")
+
+
 def test_task_description_saved_in_task_dict(db_url: str, tmp_path) -> None:
     tasks_repo, _users_repo, task_id, _packer_id = _make_tasks_repo(db_url, tmp_path)
     task = tasks_repo.get_task(task_id)

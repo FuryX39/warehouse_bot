@@ -8,7 +8,8 @@ from pathlib import Path
 
 TASK_ATTACHMENT_KINDS = frozenset({"a4", "label"})
 TASK_ATTACHMENT_KIND_LABELS = {"a4": "А4", "label": "Этикетки"}
-MAX_TASK_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_TASK_ATTACHMENT_MB = 200
+MAX_TASK_ATTACHMENT_BYTES = MAX_TASK_ATTACHMENT_MB * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,7 @@ class WarehouseTaskFileStorage:
         if not content:
             raise ValueError("Файл пустой")
         if len(content) > MAX_TASK_ATTACHMENT_BYTES:
-            raise ValueError("PDF слишком большой (макс. 20 МБ)")
+            raise ValueError(f"PDF слишком большой (макс. {MAX_TASK_ATTACHMENT_MB} МБ)")
         if not content.startswith(b"%PDF"):
             raise ValueError("Нужен файл PDF")
         stored_name = f"{uuid.uuid4().hex}.pdf"

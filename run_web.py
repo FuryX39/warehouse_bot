@@ -113,7 +113,13 @@ def main() -> None:
         settings.web_host,
         settings.web_port,
     )
-    uvicorn.run(app, host=settings.web_host, port=settings.web_port, log_level="info")
+    uvicorn.run(
+        app,
+        host=settings.web_host,
+        port=settings.web_port,
+        log_level="info",
+        timeout_keep_alive=75,
+    )
 
 
 if __name__ == "__main__":
