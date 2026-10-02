@@ -1171,3 +1171,214 @@
     renderSchedule: renderSchedule,
   };
 })(window);
+
+(function (global) {
+  var filters = {};
+  var rows = [];
+  var employees = [];
+  var taskTypes = [];
+  var totalQuantity = 0;
+  var page = 1;
+
+  function shell() {
+    return global.WH_SHELL || {};
+  }
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function ensureStyles() {
+    if (document.getElementById("whProductivityStyles")) return;
+    var style = document.createElement("style");
+    style.id = "whProductivityStyles";
+    style.textContent =
+      ".wh-productivity-summary{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0}" +
+      ".wh-productivity-summary span{padding:10px 14px;border:1px solid #d8dee8;border-radius:8px;background:#f8fafc}" +
+      ".wh-productivity-qty{font-size:1.05rem;font-weight:700;text-align:right;white-space:nowrap}" +
+      ".wh-productivity-table th:nth-child(1){width:120px}" +
+      ".wh-productivity-table th:nth-child(3){width:130px;text-align:right}";
+    document.head.appendChild(style);
+  }
+
+  function query() {
+    var parts = [];
+    Object.keys(filters).forEach(function (key) {
+      if (filters[key] !== "" && filters[key] != null) {
+        parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(filters[key]));
+      }
+    });
+    return parts.length ? "?" + parts.join("&") : "";
+  }
+
+  function load() {
+    return Promise.all([
+      shell().fetchJson("/api/warehouse/employees/productivity" + query()),
+      shell().fetchJson("/api/warehouse/employees"),
+    ]).then(function (result) {
+      var data = result[0] || {};
+      rows = data.rows || [];
+      totalQuantity = Number(data.total_quantity || 0);
+      taskTypes = data.task_types || [];
+      employees = (result[1] && result[1].employees) || [];
+    });
+  }
+
+  function optionList(items, selected, valueKey, nameKey) {
+    var html = '<option value="">Все</option>';
+    (items || []).forEach(function (item) {
+      var value = item[valueKey];
+      var selectedAttr = String(selected || "") === String(value) ? " selected" : "";
+      html +=
+        '<option value="' +
+        esc(value) +
+        '"' +
+        selectedAttr +
+        ">" +
+        esc(item[nameKey] || item.login || value) +
+        "</option>";
+    });
+    return html;
+  }
+
+  function filterHtml() {
+    return (
+      '<div class="wh-crm-toolbar">' +
+      '<input type="search" id="whProductivityQ" class="wh-crm-search" placeholder="Поиск по всем полям…" value="' +
+      esc(filters.q || "") +
+      '" />' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whProductivityApply">Применить</button>' +
+      '<button type="button" class="wh-btn" id="whProductivityReset">Сбросить</button>' +
+      "</div>" +
+      '<div class="wh-crm-filters" id="whProductivityFilters">' +
+      '<div class="wh-crm-filter-grid">' +
+      '<div><label>Дата с</label><input type="date" data-filter="date_from" value="' +
+      esc(filters.date_from || "") +
+      '" /></div>' +
+      '<div><label>Дата по</label><input type="date" data-filter="date_to" value="' +
+      esc(filters.date_to || "") +
+      '" /></div>' +
+      '<div><label>Сотрудник</label><select data-filter="user_id">' +
+      optionList(employees, filters.user_id, "id", "display_name") +
+      "</select></div>" +
+      '<div><label>Тип задачи</label><select data-filter="task_type">' +
+      optionList(taskTypes, filters.task_type, "id", "name") +
+      "</select></div>" +
+      '<div><label>Данные задачи</label><input type="text" data-filter="task_query" value="' +
+      esc(filters.task_query || "") +
+      '" placeholder="№, поставка, заказ, склад…" /></div>' +
+      '<div><label>Количество от</label><input type="number" min="0" data-filter="min_quantity" value="' +
+      esc(filters.min_quantity || "") +
+      '" /></div>' +
+      '<div><label>Количество до</label><input type="number" min="0" data-filter="max_quantity" value="' +
+      esc(filters.max_quantity || "") +
+      '" /></div>' +
+      "</div></div>"
+    );
+  }
+
+  function readFilters(root) {
+    var next = {};
+    var q = root.querySelector("#whProductivityQ");
+    if (q && q.value.trim()) next.q = q.value.trim();
+    root.querySelectorAll("[data-filter]").forEach(function (el) {
+      if (el.value.trim()) next[el.getAttribute("data-filter")] = el.value.trim();
+    });
+    return next;
+  }
+
+  function renderRows(root) {
+    var pager = global.WH_PAGER;
+    var sliced = pager ? pager.slice(rows, page) : { items: rows, state: null };
+    page = sliced.state ? sliced.state.page : 1;
+    var body = sliced.items
+      .map(function (row) {
+        return (
+          "<tr><td>" +
+          esc(row.date) +
+          "</td><td><strong>" +
+          esc(row.employee) +
+          "</strong>" +
+          (row.login ? '<div class="wh-muted">' + esc(row.login) + "</div>" : "") +
+          '</td><td class="wh-productivity-qty">' +
+          esc(row.quantity) +
+          "</td><td><strong>" +
+          esc(row.task_type_name) +
+          '</strong><div class="wh-muted">' +
+          esc(row.task_data) +
+          "</div></td></tr>"
+        );
+      })
+      .join("");
+    root.innerHTML =
+      filterHtml() +
+      '<div class="wh-productivity-summary"><span><strong>' +
+      esc(totalQuantity) +
+      "</strong> товаров</span><span><strong>" +
+      esc(rows.length) +
+      "</strong> строк выработки</span></div>" +
+      (body
+        ? '<table class="wh-crm-table wh-productivity-table"><thead><tr>' +
+          "<th>Дата</th><th>Сотрудник</th><th>Количество</th><th>Данные задачи</th>" +
+          "</tr></thead><tbody>" +
+          body +
+          "</tbody></table>"
+        : '<p class="wh-msg">Данные о выработке не найдены.</p>') +
+      (pager && sliced.state ? pager.html(sliced.state) : "");
+
+    root.querySelector("#whProductivityApply").addEventListener("click", function () {
+      filters = readFilters(root);
+      page = 1;
+      refresh(root);
+    });
+    root.querySelector("#whProductivityReset").addEventListener("click", function () {
+      filters = {};
+      page = 1;
+      refresh(root);
+    });
+    root.querySelector("#whProductivityQ").addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      filters = readFilters(root);
+      page = 1;
+      refresh(root);
+    });
+    if (pager) {
+      pager.bind(root, function (delta) {
+        page += delta;
+        renderRows(root);
+      });
+    }
+  }
+
+  function refresh(root) {
+    root.innerHTML = '<p class="wh-msg">Загрузка выработки…</p>';
+    load()
+      .then(function () {
+        renderRows(root);
+      })
+      .catch(function (error) {
+        root.innerHTML =
+          '<p class="wh-msg wh-msg-error">' +
+          esc(error.message || "Не удалось загрузить выработку") +
+          "</p>";
+      });
+  }
+
+  function render(tab, item) {
+    ensureStyles();
+    shell().contentTitleEl.textContent = item.title;
+    shell().contentBreadcrumbEl.textContent = tab.title + " → " + item.title;
+    shell().contentPlaceholderEl.hidden = true;
+    var root = shell().contentPanelEl;
+    root.hidden = false;
+    var card = document.querySelector(".wh-content-card");
+    if (card) card.classList.add("wh-content-card--wide");
+    refresh(root);
+  }
+
+  global.WhProductivity = { render: render };
+})(window);

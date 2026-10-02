@@ -68,6 +68,8 @@ class OtherMarketplaceLine(_Base):
     picked_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     require_cis: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=LINE_PENDING)
+    done_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    done_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class OtherMarketplaceCis(_Base):
@@ -127,6 +129,8 @@ class OtherMarketplaceLineRow:
     picked_qty: int
     require_cis: bool
     status: str
+    done_at_ts: int | None = None
+    done_by_user_id: int | None = None
     cis: list[OtherMarketplaceCisRow] = field(default_factory=list)
     mismatches: list[OtherMarketplaceMismatchRow] = field(default_factory=list)
 
@@ -156,6 +160,7 @@ class OtherMarketplaceRepository:
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
         self._migrate_purchase_status()
+        self._migrate_line_output_columns()
 
     def _migrate_purchase_status(self) -> None:
         from sqlalchemy import inspect, text
@@ -174,6 +179,29 @@ class OtherMarketplaceRepository:
                 )
             )
             session.commit()
+
+    def _migrate_line_output_columns(self) -> None:
+        from sqlalchemy import inspect, text
+
+        insp = inspect(self.engine)
+        if "other_marketplace_lines" not in insp.get_table_names():
+            return
+        columns = {col["name"] for col in insp.get_columns("other_marketplace_lines")}
+        with self.engine.begin() as conn:
+            if "done_at_ts" not in columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE other_marketplace_lines "
+                        "ADD COLUMN done_at_ts INTEGER"
+                    )
+                )
+            if "done_by_user_id" not in columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE other_marketplace_lines "
+                        "ADD COLUMN done_by_user_id INTEGER"
+                    )
+                )
 
     def create_job(
         self,
@@ -293,7 +321,9 @@ class OtherMarketplaceRepository:
             raise ValueError("Задание не найдено")
         return row
 
-    def set_line_status(self, job_id: int, line_id: int, status: str) -> OtherMarketplaceJobRow:
+    def set_line_status(
+        self, job_id: int, line_id: int, status: str, *, user_id: int | None = None
+    ) -> OtherMarketplaceJobRow:
         want = str(status or "").strip().casefold()
         if want not in {LINE_PENDING, LINE_DONE}:
             raise ValueError("Можно поставить только статус «в сборке» или «готово»")
@@ -308,8 +338,12 @@ class OtherMarketplaceRepository:
             if want == LINE_DONE:
                 line.status = LINE_DONE
                 line.picked_qty = int(line.quantity)
+                line.done_at_ts = now
+                line.done_by_user_id = int(user_id) if user_id is not None else None
             else:
                 line.status = LINE_PENDING
+                line.done_at_ts = None
+                line.done_by_user_id = None
                 if int(line.picked_qty) >= int(line.quantity):
                     line.picked_qty = 0
             pending = session.scalar(
@@ -335,6 +369,7 @@ class OtherMarketplaceRepository:
         line_id: int,
         *,
         add_qty: int,
+        user_id: int | None = None,
         cis_key: str = "",
         cis_raw: str = "",
         cis_gtin: str = "",
@@ -379,6 +414,8 @@ class OtherMarketplaceRepository:
             line.picked_qty = min(int(line.quantity), int(line.picked_qty) + max(0, int(add_qty)))
             if line.picked_qty >= int(line.quantity) and int(line.quantity) > 0:
                 line.status = LINE_DONE
+                line.done_at_ts = now
+                line.done_by_user_id = int(user_id) if user_id is not None else None
             if job.status == JOB_OPEN:
                 job.status = JOB_IN_PROGRESS
             pending = session.scalar(
@@ -525,6 +562,10 @@ class OtherMarketplaceRepository:
                         picked_qty=int(line.picked_qty),
                         require_cis=bool(line.require_cis),
                         status=line.status,
+                        done_at_ts=int(line.done_at_ts) if line.done_at_ts else None,
+                        done_by_user_id=(
+                            int(line.done_by_user_id) if line.done_by_user_id else None
+                        ),
                         cis=cis_by_line.get(int(line.id), []),
                         mismatches=mismatch_by_line.get(int(line.id), []),
                     )
@@ -546,6 +587,10 @@ class OtherMarketplaceRepository:
                     picked_qty=int(line.picked_qty),
                     require_cis=bool(line.require_cis),
                     status=line.status,
+                    done_at_ts=int(line.done_at_ts) if line.done_at_ts else None,
+                    done_by_user_id=(
+                        int(line.done_by_user_id) if line.done_by_user_id else None
+                    ),
                 )
                 for line in raw_lines
             ]

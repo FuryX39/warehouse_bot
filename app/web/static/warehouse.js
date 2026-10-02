@@ -219,6 +219,10 @@
       window.WhStaff.renderEmployees(tab, item);
       return;
     }
+    if (tab.id === "employees" && item.id === "productivity" && window.WhProductivity) {
+      window.WhProductivity.render(tab, item);
+      return;
+    }
     if (tab.id === "employees" && item.id === "roles" && window.WhStaff) {
       window.WhStaff.renderRoles(tab, item);
       return;

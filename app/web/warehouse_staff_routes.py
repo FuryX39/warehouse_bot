@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Request
 
 from app.warehouse_roles_repository import WarehouseRolesRepository
 from app.warehouse_schedule_repository import WarehouseScheduleRepository
+from app.warehouse_productivity_repository import WarehouseProductivityRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.warehouse_permissions import permissions_schema, sanitize_permissions
 
@@ -37,6 +38,8 @@ def register_warehouse_staff_routes(
     schedule_repo: WarehouseScheduleRepository,
     require_warehouse_admin,
 ) -> None:
+    productivity_repo = WarehouseProductivityRepository(engine=users_repo.engine)
+
     def _employee_dict(user: WarehouseUserRow) -> dict:
         roles = roles_repo.get_user_roles(user.id)
         role_items = [{"id": r.id, "name": r.name, "is_admin": r.is_admin} for r in roles]
@@ -181,6 +184,31 @@ def register_warehouse_staff_routes(
         _: WarehouseUserRow = Depends(require_warehouse_admin),
     ) -> dict:
         return users_repo.get_employee_meta()
+
+    @app.get("/api/warehouse/employees/productivity")
+    async def api_warehouse_employee_productivity(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        allowed = {
+            "q",
+            "date_from",
+            "date_to",
+            "user_id",
+            "task_type",
+            "task_query",
+            "min_quantity",
+            "max_quantity",
+        }
+        filters = {
+            key: str(value).strip()
+            for key, value in request.query_params.items()
+            if key in allowed and str(value).strip()
+        }
+        try:
+            return productivity_repo.list_rows(filters)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.put("/api/warehouse/employees/groups")
     async def api_warehouse_employee_groups_save(

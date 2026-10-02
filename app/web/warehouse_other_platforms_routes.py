@@ -187,7 +187,7 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
 
     @app.post(f"{prefix}/jobs/{{job_id}}/scan", name=f"other_mp_scan_{tag}")
     async def api_other_mp_scan(job_id: int, body: dict, actor: TasksApiActor = Depends(_actor)) -> dict:
-        _require(actor, job_id)
+        user_id = _require(actor, job_id)
         barcode = str((body or {}).get("barcode") or (body or {}).get("code") or "")
         try:
             result = await asyncio.to_thread(
@@ -196,6 +196,7 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
                 repo=repo,
                 job_id=job_id,
                 raw=barcode,
+                user_id=user_id,
             )
         except ValueError as exc:
             shown = barcode if len(barcode) <= 32 else f"{barcode[:16]}…({len(barcode)})"
@@ -208,7 +209,7 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
 
     @app.post(f"{prefix}/jobs/{{job_id}}/pick", name=f"other_mp_pick_{tag}")
     async def api_other_mp_pick(job_id: int, body: dict, actor: TasksApiActor = Depends(_actor)) -> dict:
-        _require(actor, job_id)
+        user_id = _require(actor, job_id)
         sku = str((body or {}).get("sku") or "")
         product_id = (body or {}).get("product_id")
         try:
@@ -224,6 +225,7 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
                 raw="",
                 sku=sku,
                 product_id=product_id,
+                user_id=user_id,
             )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
@@ -239,10 +241,12 @@ def _register_packer(app, prefix: str, repo, catalog_repo, auth_dep, job_dict) -
         body: dict,
         actor: TasksApiActor = Depends(_actor),
     ) -> dict:
-        _require(actor, job_id)
+        user_id = _require(actor, job_id)
         status = str((body or {}).get("status") or "")
         try:
-            job = await asyncio.to_thread(repo.set_line_status, job_id, line_id, status)
+            job = await asyncio.to_thread(
+                repo.set_line_status, job_id, line_id, status, user_id=user_id
+            )
         except ValueError as exc:
             raise _http_value_error(exc) from exc
         payload = job_dict(job, include_lines=True)

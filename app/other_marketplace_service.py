@@ -139,6 +139,7 @@ def pick_other_marketplace_line(
     raw: str,
     sku: str = "",
     product_id: int | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     job = repo.get_job(job_id)
     if job is None:
@@ -151,10 +152,14 @@ def pick_other_marketplace_line(
             if excel_line.require_cis:
                 raise ValueError(CIS_REQUIRED_ERROR)
             add_qty = max(0, excel_line.quantity - excel_line.picked_qty)
-            updated = repo.record_pick(job.id, excel_line.id, add_qty=add_qty)
+            updated = repo.record_pick(
+                job.id, excel_line.id, add_qty=add_qty, user_id=user_id
+            )
             return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=False)
         resolved = _resolve_supply_scan(catalog, text)
-        return _apply_resolved(repo, job, resolved.sku, resolved.product_id, text, resolved)
+        return _apply_resolved(
+            repo, job, resolved.sku, resolved.product_id, text, resolved, user_id=user_id
+        )
     target_sku = str(sku or "").strip()
     if not target_sku:
         raise ValueError("Пустой штрихкод")
@@ -165,6 +170,7 @@ def pick_other_marketplace_line(
         product_id,
         target_sku,
         _Tap(sku=target_sku, product_id=product_id),
+        user_id=user_id,
     )
 
 
@@ -178,7 +184,16 @@ class _Tap:
         self.cis_gtin = ""
 
 
-def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int | None, raw: str, resolved) -> dict[str, Any]:
+def _apply_resolved(
+    repo,
+    job: OtherMarketplaceJobRow,
+    sku: str,
+    product_id: int | None,
+    raw: str,
+    resolved,
+    *,
+    user_id: int | None = None,
+) -> dict[str, Any]:
     pending = [line for line in job.lines if line.status != LINE_DONE]
     if resolved.is_cis:
         line = _match_line(pending, sku, product_id)
@@ -190,6 +205,7 @@ def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int
             job.id,
             line.id,
             add_qty=1,
+            user_id=user_id,
             cis_key=resolved.cis_key,
             cis_raw=resolved.cis_raw,
             cis_gtin=resolved.cis_gtin,
@@ -215,6 +231,7 @@ def _apply_resolved(repo, job: OtherMarketplaceJobRow, sku: str, product_id: int
         job.id,
         line.id,
         add_qty=add_qty,
+        user_id=user_id,
         mismatch_barcode=mismatch,
     )
     return _pick_payload(repo, job.id, updated, copies=add_qty, mismatch=bool(mismatch))
