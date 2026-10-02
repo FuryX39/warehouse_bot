@@ -335,6 +335,7 @@ def _pick_payload(
         "job": repo.job_to_dict(job),
         "line_id": line.id,
         "barcode": barcode,
+        "picked_quantity": copies,
         "barcode_copies": copies if barcode else 0,
         "barcode_note": BARCODE_SOURCE_NOTE if barcode else "В строке заказа нет штрихкода",
         "mismatch": mismatch,

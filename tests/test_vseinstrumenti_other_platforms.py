@@ -132,6 +132,7 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
     )
     assert same["mismatch"] is False
     assert same["barcode"] == "4673746970683"
+    assert same["picked_quantity"] == 5
     assert same["barcode_copies"] == 5
 
     other = pick_other_marketplace_line(
@@ -142,6 +143,7 @@ def test_catalog_barcode_mismatch_goes_to_manager_sheet(db_url: str) -> None:
     )
     assert other["mismatch"] is True
     assert other["barcode"] == "9990000000002"
+    assert other["picked_quantity"] == 2
     assert other["barcode_copies"] == 2
     assert other["warning"] == ""
 
