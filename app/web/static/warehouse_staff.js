@@ -1197,11 +1197,33 @@
     var style = document.createElement("style");
     style.id = "whProductivityStyles";
     style.textContent =
-      ".wh-productivity-summary{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0}" +
-      ".wh-productivity-summary span{padding:10px 14px;border:1px solid #d8dee8;border-radius:8px;background:#f8fafc}" +
-      ".wh-productivity-qty{font-size:1.05rem;font-weight:700;text-align:right;white-space:nowrap}" +
-      ".wh-productivity-table th:nth-child(1){width:120px}" +
-      ".wh-productivity-table th:nth-child(3){width:130px;text-align:right}";
+      ".wh-prod-shell{display:grid;gap:16px}" +
+      ".wh-prod-filter-card{padding:16px;border:1px solid #dfe5ee;border-radius:10px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.04)}" +
+      ".wh-prod-search-row{display:grid;grid-template-columns:minmax(260px,1fr) auto auto;gap:10px;align-items:center}" +
+      ".wh-prod-search{box-sizing:border-box;width:100%;height:38px;padding:0 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}" +
+      ".wh-prod-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid #edf0f4}" +
+      ".wh-prod-field{min-width:0}.wh-prod-field--wide{grid-column:span 2}" +
+      ".wh-prod-field label{display:block;margin:0 0 5px;color:#526071;font-size:12px;font-weight:600}" +
+      ".wh-prod-field input,.wh-prod-field select{box-sizing:border-box;width:100%;height:36px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#182230;font:inherit}" +
+      ".wh-prod-field input:focus,.wh-prod-field select:focus,.wh-prod-search:focus{border-color:#5989d7;outline:2px solid rgba(47,111,211,.12)}" +
+      ".wh-productivity-summary{display:grid;grid-template-columns:repeat(2,minmax(180px,240px));gap:12px}" +
+      ".wh-prod-stat{padding:14px 16px;border:1px solid #dfe5ee;border-radius:10px;background:#f8fafc}" +
+      ".wh-prod-stat-label{display:block;margin-bottom:3px;color:#64748b;font-size:12px}" +
+      ".wh-prod-stat-value{color:#172033;font-size:24px;font-weight:700;line-height:1.2}" +
+      ".wh-prod-table-wrap{overflow:auto;border:1px solid #dfe5ee;border-radius:10px;background:#fff}" +
+      ".wh-productivity-table{width:100%;min-width:760px;margin:0!important;border:0!important;border-collapse:separate!important;border-spacing:0}" +
+      ".wh-productivity-table thead th{position:sticky;top:0;z-index:1;padding:11px 14px;border-bottom:1px solid #dfe5ee;background:#f5f7fa;color:#536174;font-size:12px;font-weight:700;text-align:left;white-space:nowrap}" +
+      ".wh-productivity-table tbody td{padding:14px;border-bottom:1px solid #edf0f4;vertical-align:middle}" +
+      ".wh-productivity-table tbody tr:last-child td{border-bottom:0}.wh-productivity-table tbody tr:hover td{background:#f8fbff}" +
+      ".wh-prod-date{display:inline-block;min-width:82px;color:#334155;font-variant-numeric:tabular-nums;white-space:nowrap}" +
+      ".wh-prod-employee{color:#172033;font-weight:600}" +
+      ".wh-productivity-qty{width:120px;text-align:center!important;white-space:nowrap}" +
+      ".wh-prod-qty-number{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}.wh-prod-qty-unit{margin-left:4px;color:#64748b;font-size:12px}" +
+      ".wh-prod-task{min-width:320px}.wh-prod-task-badge{display:inline-block;margin-bottom:5px;padding:3px 8px;border-radius:999px;background:#e8f0ff;color:#285ea8;font-size:11px;font-weight:700}" +
+      ".wh-prod-task-badge--wb_fbo,.wh-prod-task-badge--wb_fbo_new{background:#eee9ff;color:#6045a8}.wh-prod-task-badge--vseinstrumenti{background:#e4f6eb;color:#287544}" +
+      ".wh-prod-task-data{color:#526071;font-size:13px;line-height:1.4}.wh-prod-empty{padding:40px 20px;text-align:center;color:#64748b}" +
+      "@media(max-width:900px){.wh-prod-filter-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.wh-prod-field--wide{grid-column:span 2}}" +
+      "@media(max-width:620px){.wh-prod-search-row{grid-template-columns:1fr 1fr}.wh-prod-search{grid-column:1/-1}.wh-prod-filter-grid{grid-template-columns:1fr}.wh-prod-field--wide{grid-column:auto}.wh-productivity-summary{grid-template-columns:1fr 1fr}}";
     document.head.appendChild(style);
   }
 
@@ -1247,34 +1269,34 @@
 
   function filterHtml() {
     return (
-      '<div class="wh-crm-toolbar">' +
-      '<input type="search" id="whProductivityQ" class="wh-crm-search" placeholder="Поиск по всем полям…" value="' +
+      '<div class="wh-prod-filter-card">' +
+      '<div class="wh-prod-search-row">' +
+      '<input type="search" id="whProductivityQ" class="wh-prod-search" placeholder="Поиск по сотруднику и данным задачи" value="' +
       esc(filters.q || "") +
       '" />' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whProductivityApply">Применить</button>' +
       '<button type="button" class="wh-btn" id="whProductivityReset">Сбросить</button>' +
       "</div>" +
-      '<div class="wh-crm-filters" id="whProductivityFilters">' +
-      '<div class="wh-crm-filter-grid">' +
-      '<div><label>Дата с</label><input type="date" data-filter="date_from" value="' +
+      '<div class="wh-prod-filter-grid" id="whProductivityFilters">' +
+      '<div class="wh-prod-field"><label>Дата с</label><input type="date" data-filter="date_from" value="' +
       esc(filters.date_from || "") +
       '" /></div>' +
-      '<div><label>Дата по</label><input type="date" data-filter="date_to" value="' +
+      '<div class="wh-prod-field"><label>Дата по</label><input type="date" data-filter="date_to" value="' +
       esc(filters.date_to || "") +
       '" /></div>' +
-      '<div><label>Сотрудник</label><select data-filter="user_id">' +
+      '<div class="wh-prod-field"><label>Сотрудник</label><select data-filter="user_id">' +
       optionList(employees, filters.user_id, "id", "display_name") +
       "</select></div>" +
-      '<div><label>Тип задачи</label><select data-filter="task_type">' +
+      '<div class="wh-prod-field"><label>Тип задачи</label><select data-filter="task_type">' +
       optionList(taskTypes, filters.task_type, "id", "name") +
       "</select></div>" +
-      '<div><label>Данные задачи</label><input type="text" data-filter="task_query" value="' +
+      '<div class="wh-prod-field wh-prod-field--wide"><label>Данные задачи</label><input type="text" data-filter="task_query" value="' +
       esc(filters.task_query || "") +
-      '" placeholder="№, поставка, заказ, склад…" /></div>' +
-      '<div><label>Количество от</label><input type="number" min="0" data-filter="min_quantity" value="' +
+      '" placeholder="№ задания, поставка, заказ, склад" /></div>' +
+      '<div class="wh-prod-field"><label>Количество от</label><input type="number" min="0" data-filter="min_quantity" value="' +
       esc(filters.min_quantity || "") +
       '" /></div>' +
-      '<div><label>Количество до</label><input type="number" min="0" data-filter="max_quantity" value="' +
+      '<div class="wh-prod-field"><label>Количество до</label><input type="number" min="0" data-filter="max_quantity" value="' +
       esc(filters.max_quantity || "") +
       '" /></div>' +
       "</div></div>"
@@ -1297,38 +1319,48 @@
     page = sliced.state ? sliced.state.page : 1;
     var body = sliced.items
       .map(function (row) {
+        var dateParts = String(row.date || "").split("-");
+        var shownDate =
+          dateParts.length === 3
+            ? dateParts[2] + "." + dateParts[1] + "." + dateParts[0]
+            : row.date;
         return (
-          "<tr><td>" +
-          esc(row.date) +
-          "</td><td><strong>" +
+          '<tr><td><span class="wh-prod-date">' +
+          esc(shownDate) +
+          '</span></td><td><span class="wh-prod-employee">' +
           esc(row.employee) +
-          "</strong>" +
-          (row.login ? '<div class="wh-muted">' + esc(row.login) + "</div>" : "") +
+          "</span>" +
           '</td><td class="wh-productivity-qty">' +
+          '<span class="wh-prod-qty-number">' +
           esc(row.quantity) +
-          "</td><td><strong>" +
+          '</span><span class="wh-prod-qty-unit">шт.</span>' +
+          '</td><td class="wh-prod-task"><span class="wh-prod-task-badge wh-prod-task-badge--' +
+          esc(row.task_type) +
+          '">' +
           esc(row.task_type_name) +
-          '</strong><div class="wh-muted">' +
+          '</span><div class="wh-prod-task-data">' +
           esc(row.task_data) +
           "</div></td></tr>"
         );
       })
       .join("");
     root.innerHTML =
+      '<div class="wh-prod-shell">' +
       filterHtml() +
-      '<div class="wh-productivity-summary"><span><strong>' +
+      '<div class="wh-productivity-summary"><div class="wh-prod-stat"><span class="wh-prod-stat-label">Всего упаковано</span><strong class="wh-prod-stat-value">' +
       esc(totalQuantity) +
-      "</strong> товаров</span><span><strong>" +
+      ' шт.</strong></div><div class="wh-prod-stat"><span class="wh-prod-stat-label">Строк в отчёте</span><strong class="wh-prod-stat-value">' +
       esc(rows.length) +
-      "</strong> строк выработки</span></div>" +
+      "</strong></div></div>" +
       (body
-        ? '<table class="wh-crm-table wh-productivity-table"><thead><tr>' +
-          "<th>Дата</th><th>Сотрудник</th><th>Количество</th><th>Данные задачи</th>" +
+        ? '<div class="wh-prod-table-wrap"><table class="wh-productivity-table"><thead><tr>' +
+          "<th>Дата</th><th>Сотрудник</th><th>Выработка</th><th>Задача</th>" +
           "</tr></thead><tbody>" +
           body +
-          "</tbody></table>"
-        : '<p class="wh-msg">Данные о выработке не найдены.</p>') +
-      (pager && sliced.state ? pager.html(sliced.state) : "");
+          "</tbody></table></div>"
+        : '<div class="wh-prod-empty">По выбранным фильтрам данных нет.</div>') +
+      (pager && sliced.state ? pager.html(sliced.state) : "") +
+      "</div>";
 
     root.querySelector("#whProductivityApply").addEventListener("click", function () {
       filters = readFilters(root);
