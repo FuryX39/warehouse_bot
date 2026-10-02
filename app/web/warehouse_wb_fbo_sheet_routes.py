@@ -12,6 +12,10 @@ from fastapi.responses import Response
 from app.catalog_repository import CatalogRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.wb_fbo_sheet_repository import BOX_ASSIGNED, WbFboSheetRepository
+from app.wb_fbo_sheet_packing_sheets import (
+    WbFboPackingSheetData,
+    generate_wb_fbo_packing_sheets_pdf,
+)
 from app.wb_fbo_sheet_service import (
     assigned_expiry_for_barcode,
     attach_sheet_images,
@@ -30,6 +34,26 @@ from app.web.warehouse_wb_fbo_routes import (
     _http_value_error,
     _parse_packer_ids,
 )
+
+
+def _sheet_supply_qr_response(
+    packing_repo: WbFboSheetRepository,
+    job_id: int,
+) -> Response:
+    job = packing_repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+    if not job.supply_qr_stored_name:
+        raise HTTPException(status_code=404, detail="К заданию не прикреплён QR поставки")
+    try:
+        pdf = packing_repo.read_stored(job.supply_qr_stored_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": _attachment_disposition("supply_qr.pdf")},
+    )
 
 
 def register_warehouse_wb_fbo_sheet_routes(
@@ -76,6 +100,7 @@ def register_warehouse_wb_fbo_sheet_routes(
         async def api_wb_fbo_sheet_jobs_create(
             goods: UploadFile | None = File(None),
             boxes: UploadFile | None = File(None),
+            qr: UploadFile | None = File(None),
             packer_user_ids: str = Form("[]"),
             supply_id: str = Form(""),
             warehouse_name: str = Form(""),
@@ -87,13 +112,14 @@ def register_warehouse_wb_fbo_sheet_routes(
             packers = _parse_packer_ids(packer_user_ids)
             if not packers:
                 raise HTTPException(status_code=400, detail="Назначьте хотя бы одного упаковщика")
-            if goods is None or boxes is None:
+            if goods is None or boxes is None or qr is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="Прикрепите таблицу товаров и таблицу ШК коробов",
+                    detail="Прикрепите таблицу товаров, таблицу ШК коробов и PDF с QR поставки",
                 )
             goods_bytes = await goods.read()
             boxes_bytes = await boxes.read()
+            qr_bytes = await qr.read()
             try:
                 job = await asyncio.to_thread(
                     create_wb_fbo_sheet_job,
@@ -101,6 +127,7 @@ def register_warehouse_wb_fbo_sheet_routes(
                     packing_repo=packing_repo,
                     goods_xlsx=goods_bytes,
                     boxes_xlsx=boxes_bytes,
+                    supply_qr_pdf=qr_bytes,
                     packer_user_ids=packers,
                     created_by_user_id=int(user.id) if user else None,
                     supply_id=supply_id,
@@ -112,6 +139,13 @@ def register_warehouse_wb_fbo_sheet_routes(
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": packing_repo.job_to_dict(job, include_lines=True)}
+
+        @app.get("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/supply-qr.pdf")
+        async def api_wb_fbo_sheet_supply_qr(
+            job_id: int,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> Response:
+            return _sheet_supply_qr_response(packing_repo, job_id)
 
         @app.get("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}")
         async def api_wb_fbo_sheet_job_get(
@@ -214,6 +248,57 @@ def _register_sheet_packer_prefix(
         except ValueError as exc:
             raise _http_value_error(exc) from exc
         return {"job": job}
+
+    @app.get(f"{prefix}/jobs/{{job_id}}/supply-qr.pdf")
+    async def api_sheet_supply_qr(
+        job_id: int,
+        actor: TasksApiActor = Depends(auth_dep),
+    ) -> Response:
+        require_packer(actor, job_id)
+        return _sheet_supply_qr_response(packing_repo, job_id)
+
+    @app.post(f"{prefix}/jobs/{{job_id}}/pallet-sheets.pdf")
+    async def api_sheet_pallet_sheets(
+        job_id: int,
+        body: dict,
+        actor: TasksApiActor = Depends(auth_dep),
+    ) -> Response:
+        require_packer(actor, job_id)
+        payload = body if isinstance(body, dict) else {}
+
+        def _run() -> bytes:
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise ValueError("Задание не найдено")
+            occupied = int(job.occupied_pallet_count or 0)
+            try:
+                pallet_total = int(payload.get("pallet_total") or occupied)
+                print_count = int(payload.get("print_count") or pallet_total)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Количество паллет должно быть числом") from exc
+            if occupied <= 0 and not payload.get("pallet_total") and not payload.get("print_count"):
+                raise ValueError("Нет паллет с назначенными грузоместами")
+            return generate_wb_fbo_packing_sheets_pdf(
+                WbFboPackingSheetData(
+                    supply_id=job.supply_id,
+                    warehouse_name=job.warehouse_name,
+                    seller_name=job.seller_name,
+                    plan_date=job.plan_date,
+                    supply_type=job.supply_type,
+                    print_count=print_count,
+                    pallet_total=pallet_total,
+                )
+            )
+
+        try:
+            pdf = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise _http_value_error(exc) from exc
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": _attachment_disposition("pallet_sheets.pdf")},
+        )
 
     @app.post(f"{prefix}/jobs/{{job_id}}/print-boxes")
     async def api_sheet_print_boxes(

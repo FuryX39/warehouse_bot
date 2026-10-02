@@ -48,6 +48,10 @@ class WbFboSheetJob(_Base):
     box_type: Mapped[str] = mapped_column(String(64), nullable=False, default="Короб")
     goods_stored_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     boxes_stored_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    supply_qr_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    supply_qr_stored_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    supply_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    source_pallet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_STATUS_OPEN)
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
@@ -224,6 +228,10 @@ class WbFboSheetJobRow:
     box_type: str
     goods_stored_name: str
     boxes_stored_name: str
+    supply_qr_code: str
+    supply_qr_stored_name: str
+    supply_type: str
+    source_pallet_count: int
     status: str
     created_by_user_id: int | None
     warnings: list[str]
@@ -240,6 +248,7 @@ class WbFboSheetJobRow:
     box_pending: int
     pallet_total: int = 0
     pallet_closed: int = 0
+    occupied_pallet_count: int = 0
     products: list[WbFboSheetProductRow] = field(default_factory=list)
     boxes: list[WbFboSheetBoxRow] = field(default_factory=list)
     pallets: list[WbFboSheetPalletRow] = field(default_factory=list)
@@ -255,9 +264,34 @@ class WbFboSheetRepository:
 
     def init_schema(self) -> None:
         _Base.metadata.create_all(self.engine)
+        self._migrate_supply_qr()
         self._migrate_box_item_expiry()
         self._migrate_pallets()
         self._backfill_box_items()
+
+    def _migrate_supply_qr(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "wb_fbo_sheet_jobs" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("wb_fbo_sheet_jobs")}
+        definitions = {
+            "supply_qr_code": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "supply_qr_stored_name": "VARCHAR(256) NOT NULL DEFAULT ''",
+            "supply_type": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "source_pallet_count": "INTEGER NOT NULL DEFAULT 0",
+        }
+        with Session(self.engine) as session:
+            for name, definition in definitions.items():
+                if name in cols:
+                    continue
+                session.execute(
+                    text(
+                        f"ALTER TABLE wb_fbo_sheet_jobs "
+                        f"ADD COLUMN IF NOT EXISTS {name} {definition}"
+                    )
+                )
+            session.commit()
 
     def _migrate_box_item_expiry(self) -> None:
         from sqlalchemy import inspect, text
@@ -346,6 +380,13 @@ class WbFboSheetRepository:
         stored_name = f"{uuid.uuid4().hex}.xlsx"
         path = self.file_storage.data_dir / stored_name
         path.write_bytes(content)
+        return stored_name
+
+    def store_pdf(self, content: bytes, *, original_filename: str = "supply_qr.pdf") -> str:
+        stored_name, _size = self.file_storage.store_pdf(
+            content=content,
+            original_filename=original_filename,
+        )
         return stored_name
 
     def read_stored(self, stored_name: str) -> bytes:
@@ -558,6 +599,10 @@ class WbFboSheetRepository:
             box_type=str(job.box_type or "Короб"),
             goods_stored_name=str(job.goods_stored_name or ""),
             boxes_stored_name=str(job.boxes_stored_name or ""),
+            supply_qr_code=str(job.supply_qr_code or ""),
+            supply_qr_stored_name=str(job.supply_qr_stored_name or ""),
+            supply_type=str(job.supply_type or ""),
+            source_pallet_count=int(job.source_pallet_count or 0),
             status=str(job.status or ""),
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
             warnings=_parse_json_list(job.warnings_json),
@@ -574,6 +619,13 @@ class WbFboSheetRepository:
             box_pending=sum(1 for item in box_rows if item.status == BOX_PENDING),
             pallet_total=len(pallet_rows),
             pallet_closed=sum(1 for item in pallet_rows if item.status == PALLET_CLOSED),
+            occupied_pallet_count=len(
+                {
+                    int(item.pallet_id)
+                    for item in box_rows
+                    if item.pallet_id and any(line.item_qty > 0 for line in item.items)
+                }
+            ),
             products=product_rows if include_lines else [],
             boxes=box_rows if include_lines else [],
             pallets=pallet_rows if include_lines else [],
@@ -593,12 +645,17 @@ class WbFboSheetRepository:
         warnings: list[str],
         goods_xlsx: bytes,
         boxes_xlsx: bytes,
+        supply_qr_pdf: bytes,
+        supply_qr_code: str,
+        supply_type: str,
+        source_pallet_count: int,
         products: list[dict[str, Any]],
         boxes: list[dict[str, Any]],
     ) -> WbFboSheetJobRow:
         now = int(time.time())
         goods_name = self.store_xlsx(goods_xlsx, original_filename="goods.xlsx")
         boxes_name = self.store_xlsx(boxes_xlsx, original_filename="boxes.xlsx")
+        qr_name = self.store_pdf(supply_qr_pdf, original_filename="supply_qr.pdf")
         with Session(self.engine) as session:
             job = WbFboSheetJob(
                 supply_id=str(supply_id or ""),
@@ -608,6 +665,10 @@ class WbFboSheetRepository:
                 box_type=str(box_type or "Короб") or "Короб",
                 goods_stored_name=goods_name,
                 boxes_stored_name=boxes_name,
+                supply_qr_code=str(supply_qr_code or ""),
+                supply_qr_stored_name=qr_name,
+                supply_type=str(supply_type or ""),
+                source_pallet_count=max(0, int(source_pallet_count or 0)),
                 status=JOB_STATUS_OPEN,
                 created_by_user_id=created_by_user_id,
                 warnings_json=json.dumps(list(warnings or []), ensure_ascii=False),
@@ -1315,6 +1376,10 @@ class WbFboSheetRepository:
             "seller_name": job.seller_name,
             "plan_date": job.plan_date,
             "box_type": job.box_type,
+            "supply_qr_code": job.supply_qr_code,
+            "has_supply_qr": bool(job.supply_qr_stored_name),
+            "supply_type": job.supply_type,
+            "source_pallet_count": job.source_pallet_count,
             "status": job.status,
             "created_by_user_id": job.created_by_user_id,
             "warnings": job.warnings,
@@ -1331,6 +1396,7 @@ class WbFboSheetRepository:
             "box_pending": job.box_pending,
             "pallet_total": job.pallet_total,
             "pallet_closed": job.pallet_closed,
+            "occupied_pallet_count": job.occupied_pallet_count,
             "open_pallet": self.pallet_to_dict(job.open_pallet) if job.open_pallet else None,
             "line_total": job.box_total,
             "line_done": job.box_assigned,

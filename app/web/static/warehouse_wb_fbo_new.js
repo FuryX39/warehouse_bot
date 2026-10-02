@@ -111,6 +111,12 @@
             '/boxes.xlsx" download="wb_fbo_sheet_' +
             esc(job.id) +
             '_boxes.xlsx">Скачать таблицу грузомест</a>';
+          var qr =
+            job.has_supply_qr
+              ? '<a class="wh-btn wh-btn-sm" href="/api/warehouse/marketplaces/wb-fbo-new/jobs/' +
+                esc(job.id) +
+                '/supply-qr.pdf" target="_blank" rel="noopener">QR поставки</a>'
+              : "";
           return (
             "<tr><td>#" +
             esc(job.id) +
@@ -130,6 +136,8 @@
             esc((job.packer_names || []).join(", ") || "—") +
             "</td><td>" +
             xlsx +
+            " " +
+            qr +
             " " +
             cancel +
             "</td></tr>"
@@ -165,8 +173,9 @@
     if (busy) return;
     var goods = root.querySelector("#whWbFboNewGoods").files[0];
     var boxes = root.querySelector("#whWbFboNewBoxes").files[0];
-    if (!goods || !boxes) {
-      setMessage(root, "Прикрепите обе таблицы: товары и ШК коробов.", true);
+    var qr = root.querySelector("#whWbFboNewQr").files[0];
+    if (!goods || !boxes || !qr) {
+      setMessage(root, "Прикрепите таблицы товаров и ШК коробов, а также PDF с QR поставки.", true);
       return;
     }
     var packers = selectedPackerIds(root);
@@ -177,6 +186,7 @@
     var fd = new FormData();
     fd.append("goods", goods);
     fd.append("boxes", boxes);
+    fd.append("qr", qr);
     fd.append("packer_user_ids", JSON.stringify(packers));
     fd.append("supply_id", root.querySelector("#whWbFboNewSupplyId").value.trim());
     fd.append("warehouse_name", root.querySelector("#whWbFboNewWarehouse").value.trim());
@@ -246,15 +256,16 @@
         root.innerHTML =
           '<div class="wh-route-card">' +
           "<h3>FBO WB new</h3>" +
-          '<p class="wh-muted">Прикрепите таблицы из кабинета WB: товары и пустые ШК коробов. ' +
+          '<p class="wh-muted">Прикрепите таблицы из кабинета WB и PDF с QR поставки. ' +
           "Упаковщики раскладывают товар по грузоместам. Готовый файл грузомест скачивается в том же формате кабинета — загружаете его в WB сами.</p>" +
           '<div class="wh-route-form">' +
           '<label>Товары.xlsx<input type="file" id="whWbFboNewGoods" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
           '<label>Шк коробов.xlsx<input type="file" id="whWbFboNewBoxes" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
-          '<label>№ поставки (на этикетке)<input type="text" id="whWbFboNewSupplyId" placeholder="необязательно" /></label>' +
-          '<label>Склад<input type="text" id="whWbFboNewWarehouse" /></label>' +
-          '<label>Продавец<input type="text" id="whWbFboNewSeller" /></label>' +
-          '<label>Плановая дата<input type="text" id="whWbFboNewPlanDate" placeholder="ДД.ММ.ГГГГ" /></label>' +
+          '<label>QR поставки.pdf<input type="file" id="whWbFboNewQr" accept=".pdf,application/pdf" /></label>' +
+          '<label>№ поставки (резерв, если PDF не распознан)<input type="text" id="whWbFboNewSupplyId" placeholder="необязательно" /></label>' +
+          '<label>Склад (резерв)<input type="text" id="whWbFboNewWarehouse" /></label>' +
+          '<label>Продавец (резерв)<input type="text" id="whWbFboNewSeller" /></label>' +
+          '<label>Плановая дата (резерв)<input type="text" id="whWbFboNewPlanDate" placeholder="ДД.ММ.ГГГГ" /></label>' +
           "</div>" +
           '<p class="wh-muted">Упаковщики</p>' +
           packerPickerHtml() +

@@ -9,6 +9,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from pypdf import PdfReader
+from reportlab.pdfgen import canvas
 
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
@@ -57,6 +59,28 @@ def _boxes_xlsx(*, count: int = 50) -> bytes:
         box_id = str(4662171 + index)
         rows.append(["", 0, box_id, "", f"$Ts;0;0;1;box{index};TAS"])
     return _workbook_bytes(rows)
+
+
+def _qr_pdf() -> bytes:
+    from app.pdf_fonts import get_pdf_label_fonts
+
+    regular, _bold = get_pdf_label_fonts()
+    buf = BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=(500, 700))
+    pdf.setFont(regular, 11)
+    lines = [
+        "Тип поставки: Монопаллета",
+        "9 шт паллет",
+        "WB-GI-28734 1284",
+        "№ поставки: 41505518",
+        "Плановая дата: 11.10.26",
+        "Пункт отгрузки: СЦ Коледино 2",
+        'Продавец: ООО "ШАЙН СИСТЕМС"',
+    ]
+    for index, line in enumerate(lines):
+        pdf.drawString(20, 650 - index * 30, line)
+    pdf.save()
+    return buf.getvalue()
 
 
 def test_parse_example_wb_tables() -> None:
@@ -201,6 +225,7 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
         data={"packer_user_ids": "[7]", "supply_id": "41357389"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(), xlsx_type),
         },
     )
@@ -209,7 +234,15 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert job["pcs_plan"] == 2850
     assert job["box_total"] == 50
     assert job["box_assigned"] == 0
+    assert job["supply_id"] == "41505518"
+    assert job["warehouse_name"] == "СЦ Коледино 2"
+    assert job["source_pallet_count"] == 9
+    assert job["has_supply_qr"] is True
     job_id = job["id"]
+
+    qr = client.get(f"/api/v1/fbo-sheet-packing/jobs/{job_id}/supply-qr.pdf")
+    assert qr.status_code == 200
+    assert qr.content.startswith(b"%PDF")
 
     printed = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
@@ -256,6 +289,28 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert "37 товара" in leftover.json()["qty_warning"]
     assert "грузоместе" in leftover.json()["qty_warning"]
 
+    default_sheets = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/pallet-sheets.pdf",
+        json={},
+    )
+    assert default_sheets.status_code == 200, default_sheets.text
+    default_reader = PdfReader(BytesIO(default_sheets.content))
+    assert len(default_reader.pages) == 1
+    default_text = default_reader.pages[0].extract_text() or ""
+    assert "Количество паллет в поставке –" in default_text
+    assert "\n1\n" in default_text
+
+    selected_sheets = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/pallet-sheets.pdf",
+        json={"print_count": 2, "pallet_total": 9},
+    )
+    assert selected_sheets.status_code == 200, selected_sheets.text
+    selected_reader = PdfReader(BytesIO(selected_sheets.content))
+    assert len(selected_reader.pages) == 2
+    selected_text = selected_reader.pages[1].extract_text() or ""
+    assert "Количество паллет в поставке –" in selected_text
+    assert "\n9\n" in selected_text
+
     downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
     assert downloaded.status_code == 200
     parsed = parse_boxes_xlsx(downloaded.content)
@@ -278,6 +333,7 @@ def test_print_boxes_all_free_includes_already_printed(db_url: str, tmp_path) ->
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=3), xlsx_type),
         },
     )
@@ -436,6 +492,7 @@ def test_assign_ignores_production_date_without_shelf_life(db_url: str, tmp_path
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
         },
     )
@@ -475,6 +532,7 @@ def test_assign_requires_and_writes_expiry_when_shelf_life(db_url: str, tmp_path
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
         },
     )
@@ -532,6 +590,7 @@ def test_assign_reuses_sku_expiry_and_rewrites_on_new_date(db_url: str, tmp_path
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=4), xlsx_type),
         },
     )
@@ -607,6 +666,7 @@ def test_assign_multiple_skus_to_one_cargo_place(db_url: str, tmp_path) -> None:
         data={"packer_user_ids": "[7]", "supply_id": "41357389"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=3), xlsx_type),
         },
     )
@@ -686,6 +746,7 @@ def test_create_job_groups_prefilled_mixed_cargo(db_url: str, tmp_path) -> None:
                 _goods_xlsx(),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": (
                 "boxes.xlsx",
                 mixed,
@@ -713,6 +774,7 @@ def test_assign_requires_open_pallet(db_url: str, tmp_path) -> None:
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
         },
     )
@@ -744,6 +806,7 @@ def test_print_open_close_pallet_and_bind_box(db_url: str, tmp_path) -> None:
         data={"packer_user_ids": "[7]", "supply_id": "41357389"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
         },
     )
@@ -818,6 +881,7 @@ def test_rescan_open_pallet_closes_and_closed_pallet_reopens(db_url: str, tmp_pa
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
         },
     )
@@ -876,6 +940,7 @@ def test_unassign_product_from_cargo_place(db_url: str, tmp_path) -> None:
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
         },
     )
@@ -954,6 +1019,7 @@ def test_unassign_empty_cargo_place_rejected(db_url: str, tmp_path) -> None:
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
         },
     )
@@ -980,6 +1046,7 @@ def test_unbind_cargo_from_pallet_keeps_product(db_url: str, tmp_path) -> None:
         data={"packer_user_ids": "[7]"},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
             "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
         },
     )

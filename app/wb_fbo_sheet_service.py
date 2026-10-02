@@ -20,6 +20,7 @@ from app.wb_fbo_sheet_repository import (
 )
 from app.wb_fbo_sheet_pallet_pdf import generate_wb_fbo_sheet_pallet_labels_pdf
 from app.wb_fbo_sheet_xlsx import digits_only, parse_boxes_xlsx, parse_goods_xlsx
+from app.wb_fbw_supply_qr import extract_wb_supply_data_from_pdf
 from app.wb_fbw_box_label_pdf import (
     format_fbw_box_human_id,
     generate_wb_fbw_box_labels_pdf,
@@ -33,6 +34,7 @@ def create_wb_fbo_sheet_job(
     packing_repo: WbFboSheetRepository,
     goods_xlsx: bytes,
     boxes_xlsx: bytes,
+    supply_qr_pdf: bytes,
     packer_user_ids: list[int],
     created_by_user_id: int | None,
     supply_id: str = "",
@@ -41,6 +43,9 @@ def create_wb_fbo_sheet_job(
     plan_date: str = "",
     box_type: str = "Короб",
 ) -> WbFboSheetJobRow:
+    if not supply_qr_pdf or not supply_qr_pdf.startswith(b"%PDF"):
+        raise ValueError("Прикрепите PDF с QR поставки из кабинета WB")
+    supply_data = extract_wb_supply_data_from_pdf(supply_qr_pdf)
     goods = parse_goods_xlsx(goods_xlsx)
     boxes = parse_boxes_xlsx(boxes_xlsx)
     products: list[dict[str, Any]] = []
@@ -66,16 +71,20 @@ def create_wb_fbo_sheet_job(
             }
         )
     return packing_repo.create_job(
-        supply_id=str(supply_id or "").strip(),
-        warehouse_name=str(warehouse_name or "").strip(),
-        seller_name=str(seller_name or "").strip(),
-        plan_date=str(plan_date or "").strip(),
+        supply_id=supply_data.supply_id or str(supply_id or "").strip(),
+        warehouse_name=supply_data.warehouse_name or str(warehouse_name or "").strip(),
+        seller_name=supply_data.seller_name or str(seller_name or "").strip(),
+        plan_date=supply_data.plan_date or str(plan_date or "").strip(),
         box_type=str(box_type or "Короб").strip() or "Короб",
         packer_user_ids=packer_user_ids,
         created_by_user_id=created_by_user_id,
         warnings=warnings,
         goods_xlsx=goods_xlsx,
         boxes_xlsx=boxes_xlsx,
+        supply_qr_pdf=supply_qr_pdf,
+        supply_qr_code=supply_data.qr_code,
+        supply_type=supply_data.supply_type,
+        source_pallet_count=supply_data.pallet_count,
         products=products,
         boxes=_boxes_for_job(boxes),
     )
