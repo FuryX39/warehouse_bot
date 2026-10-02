@@ -1217,11 +1217,13 @@
       ".wh-productivity-table tbody tr:last-child td{border-bottom:0}.wh-productivity-table tbody tr:hover td{background:#f8fbff}" +
       ".wh-prod-date{display:inline-block;min-width:82px;color:#334155;font-variant-numeric:tabular-nums;white-space:nowrap}" +
       ".wh-prod-employee{color:#172033;font-weight:600}" +
+      ".wh-prod-edit{display:block;margin-top:4px;padding:0;border:0;background:transparent;color:#2f6fd3;font:inherit;font-size:12px;cursor:pointer}.wh-prod-edit:hover{text-decoration:underline}" +
       ".wh-productivity-qty{width:120px;text-align:center!important;white-space:nowrap}" +
       ".wh-prod-qty-number{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}.wh-prod-qty-unit{margin-left:4px;color:#64748b;font-size:12px}" +
       ".wh-prod-task{min-width:320px}.wh-prod-task-badge{display:inline-block;margin-bottom:5px;padding:3px 8px;border-radius:999px;background:#e8f0ff;color:#285ea8;font-size:11px;font-weight:700}" +
       ".wh-prod-task-badge--wb_fbo,.wh-prod-task-badge--wb_fbo_new{background:#eee9ff;color:#6045a8}.wh-prod-task-badge--vseinstrumenti{background:#e4f6eb;color:#287544}" +
       ".wh-prod-task-data{color:#526071;font-size:13px;line-height:1.4}.wh-prod-empty{padding:40px 20px;text-align:center;color:#64748b}" +
+      ".wh-prod-reassign-info{margin:0 0 14px;color:#526071;line-height:1.5}.wh-prod-reassign-field label{display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#526071}.wh-prod-reassign-field select{box-sizing:border-box;width:100%;height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}" +
       "@media(max-width:900px){.wh-prod-filter-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.wh-prod-field--wide{grid-column:span 2}}" +
       "@media(max-width:620px){.wh-prod-search-row{grid-template-columns:1fr 1fr}.wh-prod-search{grid-column:1/-1}.wh-prod-filter-grid{grid-template-columns:1fr}.wh-prod-field--wide{grid-column:auto}.wh-productivity-summary{grid-template-columns:1fr 1fr}}";
     document.head.appendChild(style);
@@ -1313,12 +1315,94 @@
     return next;
   }
 
+  function employeeOptions(selectedId) {
+    return employees
+      .map(function (employee) {
+        var selected = String(employee.id) === String(selectedId) ? " selected" : "";
+        var name = employee.display_name || employee.login || "Сотрудник #" + employee.id;
+        if (employee.is_active === false) name += " (неактивен)";
+        return '<option value="' + esc(employee.id) + '"' + selected + ">" + esc(name) + "</option>";
+      })
+      .join("");
+  }
+
+  function openEmployeeEditor(row, root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal" role="dialog" aria-modal="true">' +
+      '<div class="wh-modal-header"><h3>Изменить сотрудника</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-prod-reassign-info"><strong>' +
+      esc(row.task_type_name) +
+      "</strong><br>" +
+      esc(row.task_data) +
+      "<br>" +
+      esc(row.quantity) +
+      " шт. за " +
+      esc(row.date) +
+      "</p>" +
+      '<div class="wh-prod-reassign-field"><label for="whProdNewEmployee">Сотрудник</label><select id="whProdNewEmployee">' +
+      employeeOptions(row.user_id) +
+      "</select></div>" +
+      '<p class="wh-msg" id="whProdReassignMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer"><button type="button" class="wh-btn wh-btn-primary wh-modal-save">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) close();
+    });
+    var select = backdrop.querySelector("#whProdNewEmployee");
+    select.focus();
+    backdrop.querySelector(".wh-modal-save").addEventListener("click", function () {
+      var toUserId = parseInt(select.value, 10);
+      var msg = backdrop.querySelector("#whProdReassignMsg");
+      if (!toUserId || String(toUserId) === String(row.user_id)) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите другого сотрудника.";
+        return;
+      }
+      var save = backdrop.querySelector(".wh-modal-save");
+      save.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сохранение…";
+      shell()
+        .fetchJson("/api/warehouse/employees/productivity/employee", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: row.date,
+            task_type: row.task_type,
+            task_id: row.task_id,
+            from_user_id: row.user_id,
+            to_user_id: toUserId,
+          }),
+        })
+        .then(function () {
+          close();
+          return refresh(root);
+        })
+        .catch(function (error) {
+          save.disabled = false;
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = error.message || "Не удалось изменить сотрудника";
+        });
+    });
+  }
+
   function renderRows(root) {
     var pager = global.WH_PAGER;
     var sliced = pager ? pager.slice(rows, page) : { items: rows, state: null };
     page = sliced.state ? sliced.state.page : 1;
     var body = sliced.items
-      .map(function (row) {
+      .map(function (row, index) {
         var dateParts = String(row.date || "").split("-");
         var shownDate =
           dateParts.length === 3
@@ -1329,7 +1413,9 @@
           esc(shownDate) +
           '</span></td><td><span class="wh-prod-employee">' +
           esc(row.employee) +
-          "</span>" +
+          '</span><button type="button" class="wh-prod-edit" data-row-index="' +
+          esc(index) +
+          '">Изменить</button>' +
           '</td><td class="wh-productivity-qty">' +
           '<span class="wh-prod-qty-number">' +
           esc(row.quantity) +
@@ -1362,6 +1448,12 @@
       (pager && sliced.state ? pager.html(sliced.state) : "") +
       "</div>";
 
+    root.querySelectorAll(".wh-prod-edit").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var row = sliced.items[parseInt(button.getAttribute("data-row-index"), 10)];
+        if (row) openEmployeeEditor(row, root);
+      });
+    });
     root.querySelector("#whProductivityApply").addEventListener("click", function () {
       filters = readFilters(root);
       page = 1;

@@ -235,6 +235,124 @@ class WarehouseProductivityRepository:
             ],
         }
 
+    def reassign_row(
+        self,
+        *,
+        event_date: str,
+        task_type: str,
+        task_id: int,
+        from_user_id: int,
+        to_user_id: int,
+    ) -> dict[str, Any]:
+        try:
+            date_from_ts = _date_start_ts(event_date)
+            date_to_ts = _date_start_ts(event_date, end=True)
+            task_id = int(task_id)
+            from_user_id = int(from_user_id)
+            to_user_id = int(to_user_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Некорректные данные строки выработки") from exc
+        if date_from_ts is None or date_to_ts is None:
+            raise ValueError("Дата строки обязательна")
+        if task_id <= 0 or from_user_id <= 0 or to_user_id <= 0:
+            raise ValueError("Задание и сотрудники должны быть указаны")
+        if from_user_id == to_user_id:
+            raise ValueError("Этот сотрудник уже назначен")
+
+        updates = {
+            "fbs": text(
+                """
+                UPDATE fbs_packing_lines
+                SET done_by_user_id = :to_user_id
+                WHERE job_id = :task_id AND status = 'done'
+                  AND done_by_user_id = :from_user_id
+                  AND done_at_ts >= :date_from_ts AND done_at_ts <= :date_to_ts
+                """
+            ),
+            "wb_fbo": text(
+                """
+                UPDATE wb_fbo_packing_lines
+                SET done_by_user_id = :to_user_id
+                WHERE job_id = :task_id AND status = 'done'
+                  AND done_by_user_id = :from_user_id
+                  AND done_at_ts >= :date_from_ts AND done_at_ts <= :date_to_ts
+                """
+            ),
+            "wb_fbo_new": text(
+                """
+                UPDATE wb_fbo_sheet_box_items
+                SET assigned_by_user_id = :to_user_id
+                WHERE job_id = :task_id AND item_qty > 0
+                  AND assigned_by_user_id = :from_user_id
+                  AND assigned_at_ts >= :date_from_ts AND assigned_at_ts <= :date_to_ts
+                """
+            ),
+            "vseinstrumenti": text(
+                """
+                UPDATE other_marketplace_lines
+                SET done_by_user_id = :to_user_id
+                WHERE job_id = :task_id AND status = 'done' AND picked_qty > 0
+                  AND done_by_user_id = :from_user_id
+                  AND done_at_ts >= :date_from_ts AND done_at_ts <= :date_to_ts
+                  AND EXISTS (
+                      SELECT 1 FROM other_marketplace_jobs j
+                      WHERE j.id = other_marketplace_lines.job_id
+                        AND j.platform = 'vseinstrumenti'
+                  )
+                """
+            ),
+        }
+        if task_type not in updates:
+            raise ValueError("Неизвестный тип задачи")
+
+        params = {
+            "date_from_ts": date_from_ts,
+            "date_to_ts": date_to_ts,
+            "task_id": task_id,
+            "from_user_id": from_user_id,
+            "to_user_id": to_user_id,
+        }
+        with self.engine.begin() as conn:
+            target = conn.execute(
+                text(
+                    "SELECT id, display_name, login FROM warehouse_users "
+                    "WHERE id = :to_user_id"
+                ),
+                {"to_user_id": to_user_id},
+            ).mappings().first()
+            if target is None:
+                raise ValueError("Выбранный сотрудник не найден")
+            result = conn.execute(updates[task_type], params)
+            updated_count = int(result.rowcount or 0)
+            if updated_count <= 0:
+                raise LookupError("Строка выработки не найдена или уже была изменена")
+            if task_type == "wb_fbo_new":
+                conn.execute(
+                    text(
+                        """
+                        UPDATE wb_fbo_sheet_boxes b
+                        SET assigned_by_user_id = :to_user_id
+                        WHERE b.job_id = :task_id
+                          AND b.assigned_by_user_id = :from_user_id
+                          AND b.assigned_at_ts >= :date_from_ts
+                          AND b.assigned_at_ts <= :date_to_ts
+                          AND EXISTS (
+                              SELECT 1 FROM wb_fbo_sheet_box_items i
+                              WHERE i.box_id = b.id
+                                AND i.assigned_by_user_id = :to_user_id
+                          )
+                        """
+                    ),
+                    params,
+                )
+        employee = str(target["display_name"] or target["login"] or to_user_id)
+        return {
+            "ok": True,
+            "updated_count": updated_count,
+            "user_id": to_user_id,
+            "employee": employee,
+        }
+
     @staticmethod
     def _task_data(task_type: str, task_id: int, item: dict[str, Any]) -> str:
         parts = [f"Задание #{task_id}"]

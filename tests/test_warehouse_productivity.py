@@ -163,6 +163,7 @@ def test_productivity_aggregates_all_packing_types_and_filters(db_url, tmp_path)
         )
         session.add(box)
         session.flush()
+        box_id = int(box.id)
         session.add(
             WbFboSheetBoxItem(
                 job_id=sheet_job.id,
@@ -235,6 +236,32 @@ def test_productivity_aggregates_all_packing_types_and_filters(db_url, tmp_path)
     assert by_quantity["row_count"] == 2
 
     assert repo.list_rows({"date_from": "2026-10-02"})["rows"] == []
+
+    replacement = users.create_user(
+        login="replacement",
+        password="secret",
+        display_name="Мария Упаковщик",
+    )
+    for row in result["rows"]:
+        changed = repo.reassign_row(
+            event_date=row["date"],
+            task_type=row["task_type"],
+            task_id=row["task_id"],
+            from_user_id=worker.id,
+            to_user_id=replacement.id,
+        )
+        assert changed["updated_count"] == (2 if row["task_type"] == "fbs" else 1)
+        assert changed["employee"] == "Мария Упаковщик"
+
+    reassigned = repo.list_rows({"user_id": str(replacement.id)})
+    assert reassigned["row_count"] == 4
+    assert reassigned["total_quantity"] == 15
+    assert all(row["employee"] == "Мария Упаковщик" for row in reassigned["rows"])
+    assert repo.list_rows({"user_id": str(worker.id)})["rows"] == []
+    with Session(users.engine) as session:
+        saved_box = session.get(WbFboSheetBox, box_id)
+        assert saved_box is not None
+        assert saved_box.assigned_by_user_id == replacement.id
 
 
 def test_vseinstrumenti_records_worker_and_clears_on_reopen(db_url, tmp_path):
