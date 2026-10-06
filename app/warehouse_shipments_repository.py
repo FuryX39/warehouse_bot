@@ -324,13 +324,32 @@ class WarehouseShipmentsRepository:
         title: str = "",
         post: bool = True,
     ) -> ShipmentRow:
-        from app.warehouse_wave import ensure_packing_job_attached
+        from app.warehouse_wave import ensure_packing_job_attached, link_shipped_orders_to_packing_job
 
         wh_id = self.inventory_repo.get_sync_source_warehouse_id()
         ensure_packing_job_attached(self.orders_repo, self.engine, int(job_id), wh_id)
         orders = self.orders_repo.list_by_packing_job(int(job_id))
         ids = [int(o.id) for o in orders if o.status not in (ORDER_SHIPPED, ORDER_CANCELLED)]
         if not ids:
+            # Заказы могли уйти в shipped через синк МП без packing_job_id.
+            linked = link_shipped_orders_to_packing_job(
+                self.orders_repo, self.engine, int(job_id)
+            )
+            orders = self.orders_repo.list_by_packing_job(int(job_id)) or linked
+            if orders and all(o.status == ORDER_SHIPPED for o in orders):
+                now = int(time.time())
+                return ShipmentRow(
+                    id=0,
+                    number="",
+                    title=title or f"Отгрузка волны {int(job_id)}",
+                    status=SHIP_POSTED,
+                    origin="wave",
+                    created_at_ts=now,
+                    posted_at_ts=now,
+                    order_ids=[int(o.id) for o in orders],
+                    posting_ids=[str(o.posting_id) for o in orders],
+                    warnings=["Заказы волны уже были отгружены ранее"],
+                )
             raise ValueError("В волне нет заказов для отгрузки")
         return self.create_draft(
             ids,

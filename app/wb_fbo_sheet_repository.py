@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, func, select
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.warehouse_task_files import (
@@ -772,6 +772,29 @@ class WbFboSheetRepository:
         with Session(self.engine) as session:
             row = session.get(WbFboSheetJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_assignees(self, job_id: int, user_ids: list[int]) -> WbFboSheetJobRow:
+        ids = list(dict.fromkeys(int(value) for value in user_ids if int(value) > 0))
+        if not ids:
+            raise ValueError("Назначьте хотя бы одного упаковщика")
+        with Session(self.engine) as session:
+            job = session.get(WbFboSheetJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            session.execute(
+                delete(WbFboSheetJobAssignee).where(
+                    WbFboSheetJobAssignee.job_id == int(job_id)
+                )
+            )
+            session.add_all(
+                [WbFboSheetJobAssignee(job_id=int(job_id), user_id=uid) for uid in ids]
+            )
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def cancel_job(self, job_id: int) -> WbFboSheetJobRow | None:
         with Session(self.engine) as session:

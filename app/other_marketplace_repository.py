@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.db import create_db_engine
@@ -314,6 +314,29 @@ class OtherMarketplaceRepository:
             if job is None:
                 raise ValueError("Задание не найдено")
             job.purchase_status = str(purchase_status or "")[:64]
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
+
+    def set_assignees(self, job_id: int, user_ids: list[int]) -> OtherMarketplaceJobRow:
+        ids = list(dict.fromkeys(int(value) for value in user_ids if int(value) > 0))
+        if not ids:
+            raise ValueError("Назначьте хотя бы одного упаковщика")
+        with Session(self.engine) as session:
+            job = session.get(OtherMarketplaceJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            session.execute(
+                delete(OtherMarketplaceAssignee).where(
+                    OtherMarketplaceAssignee.job_id == int(job_id)
+                )
+            )
+            session.add_all(
+                [OtherMarketplaceAssignee(job_id=int(job_id), user_id=uid) for uid in ids]
+            )
             job.updated_at_ts = int(time.time())
             session.commit()
         row = self.get_job(job_id, include_lines=False)

@@ -31,11 +31,14 @@ from app.warehouse_task_summary_repository import WarehouseTaskSummaryRepository
 from app.warehouse_tasks_repository import WarehouseTasksRepository
 from app.warehouse_transfers_repository import WarehouseTransfersRepository
 from app.warehouse_orders_repository import WarehouseOrdersRepository
+from app.warehouse_productivity_repository import WarehouseProductivityRepository
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.warehouse_writeoffs_repository import WarehouseWriteoffsRepository
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_wb_fbo_routes import register_warehouse_wb_fbo_routes
 from app.web.warehouse_wb_fbo_sheet_routes import register_warehouse_wb_fbo_sheet_routes
+from app.web.warehouse_yandex_fbo_routes import register_warehouse_yandex_fbo_routes
+from app.yandex_fbo_repository import YandexFboRepository
 from app.web.warehouse_tasks_api_auth import make_require_tasks_access
 from app.web.warehouse_tasks_routes import register_warehouse_tasks_routes
 
@@ -51,6 +54,12 @@ class Utf8JSONResponse(JSONResponse):
 class LoginBody(BaseModel):
     login: str = Field(default="")
     password: str = Field(default="")
+
+
+class ProductivityBody(BaseModel):
+    password: str = Field(default="")
+    year: int | None = None
+    month: int | None = None
 
 
 def _session_signing_key(secret: str) -> str:
@@ -84,6 +93,8 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
 
     warehouse_users_repo = WarehouseUsersRepository(settings.db_url)
     warehouse_users_repo.init_schema()
+    productivity_repo = WarehouseProductivityRepository(engine=warehouse_users_repo.engine)
+    productivity_repo.init_schema()
 
     warehouse_schedule_repo = WarehouseScheduleRepository(settings.db_url)
     warehouse_schedule_repo.init_schema()
@@ -135,6 +146,10 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     wb_fbo_sheet_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_sheet"
     wb_fbo_sheet_repo = WbFboSheetRepository(settings.db_url, files_data_dir=wb_fbo_sheet_dir)
     wb_fbo_sheet_repo.init_schema()
+
+    yandex_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "yandex_fbo_packing"
+    yandex_fbo_repo = YandexFboRepository(settings.db_url, files_data_dir=yandex_fbo_files_dir)
+    yandex_fbo_repo.init_schema()
 
     orders_repo = WarehouseOrdersRepository(settings.db_url)
     orders_repo.init_schema()
@@ -221,6 +236,19 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     async def api_health() -> dict:
         return {"ok": True, "service": "warehouse-desktop-api"}
 
+    @app.get("/api/v1/login/users")
+    async def api_login_users() -> dict:
+        users = warehouse_users_repo.list_users({"is_active": "true"})
+        return {
+            "users": [
+                {
+                    "login": user.login,
+                    "display_name": user.display_name or user.login,
+                }
+                for user in users
+            ]
+        }
+
     @app.post("/api/v1/login")
     async def api_login_json(body: LoginBody, request: Request) -> dict:
         user = _login_user(body.login.strip(), body.password.strip())
@@ -246,6 +274,23 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
     async def api_session(user: WarehouseUserRow = Depends(require_warehouse_user)) -> dict:
         fresh = warehouse_users_repo.get_by_id(user.id) or user
         return {"user": _public_user(fresh)}
+
+    @app.post("/api/v1/productivity/my")
+    async def api_my_productivity(
+        body: ProductivityBody,
+        user: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        confirmed = warehouse_users_repo.authenticate(user.login, body.password)
+        if confirmed is None or confirmed.id != user.id:
+            raise HTTPException(status_code=401, detail="Неверный пароль")
+        try:
+            return productivity_repo.list_user_month(
+                user_id=user.id,
+                year=body.year,
+                month=body.month,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     register_warehouse_tasks_routes(
         app,
@@ -302,5 +347,16 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
         require_tasks_access,
         include_manager=False,
         packer_prefixes=("/api/v1/fbo-sheet-packing",),
+    )
+    register_warehouse_yandex_fbo_routes(
+        app,
+        yandex_fbo_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        settings,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=False,
+        packer_prefixes=("/api/v1/yandex-fbo-packing",),
     )
     return app

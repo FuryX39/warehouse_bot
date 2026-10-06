@@ -52,6 +52,9 @@
   }
 
   function selectedPackerIds(root) {
+    if (global.WhPackerAssignment) {
+      return global.WhPackerAssignment.collect(root, "wh-fbs-packer-cb");
+    }
     var ids = [];
     root.querySelectorAll(".wh-fbs-packer-cb:checked").forEach(function (cb) {
       var id = parseInt(cb.value, 10);
@@ -63,6 +66,11 @@
   function packerPickerHtml() {
     if (!assignees.length) {
       return '<p class="wh-muted">Нет сотрудников для назначения.</p>';
+    }
+    if (global.WhPackerAssignment) {
+      return global.WhPackerAssignment.pickerHtml(assignees, {
+        checkboxClass: "wh-fbs-packer-cb",
+      });
     }
     return (
       '<div class="wh-fbs-packers">' +
@@ -254,6 +262,9 @@
             esc(job.line_pending) +
             ")</td><td>" +
             esc((job.packer_names || []).join(", ") || "—") +
+            '<br><button type="button" class="wh-btn wh-btn-sm wh-fbs-packers-edit" data-id="' +
+            esc(job.id) +
+            '">Изменить</button>' +
             "</td><td>" +
             sheet +
             "</td><td>" +
@@ -282,6 +293,11 @@
         downloadMarking(root, parseInt(btn.getAttribute("data-id"), 10));
       });
     });
+    wrap.querySelectorAll(".wh-fbs-packers-edit").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        editJobPackers(root, parseInt(btn.getAttribute("data-id"), 10));
+      });
+    });
     wrap.querySelectorAll(".wh-fbs-transfer").forEach(function (input) {
       input.addEventListener("input", function () {
         var editor = input.closest(".wh-fbs-transfer-editor");
@@ -304,6 +320,30 @@
         var input = editor && editor.querySelector(".wh-fbs-transfer");
         if (input) saveTransfer(root, input);
       });
+    });
+  }
+
+  function editJobPackers(root, jobId) {
+    var job = jobsCache.find(function (item) {
+      return Number(item.id) === Number(jobId);
+    });
+    if (!job || !global.WhPackerAssignment) return;
+    global.WhPackerAssignment.openEditor({
+      title: "Упаковщики задания #" + job.id,
+      assignees: assignees,
+      selectedIds: job.packer_user_ids || [],
+      onSave: function (ids) {
+        return shell()
+          .fetchJson("/api/warehouse/fbs-packing/jobs/" + job.id + "/assignees", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ packer_user_ids: ids }),
+          })
+          .then(function () {
+            setMessage(root, "Упаковщики задания #" + job.id + " обновлены.", false);
+            loadJobs(root);
+          });
+      },
     });
   }
 
@@ -755,6 +795,7 @@
   }
 
   function bindPanel(root) {
+    if (global.WhPackerAssignment) global.WhPackerAssignment.bind(root);
     root.querySelectorAll(".wh-fbs-marketplace-tab").forEach(function (button) {
       button.addEventListener("click", function () {
         activeMarketplace = button.getAttribute("data-marketplace") || "yandex";

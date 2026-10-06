@@ -30,6 +30,12 @@ def test_desktop_api_health_login_and_packing_my(db_url: str, tmp_path) -> None:
     assert health.status_code == 200
     assert health.json()["ok"] is True
 
+    login_users = client.get("/api/v1/login/users")
+    assert login_users.status_code == 200
+    assert login_users.json() == {
+        "users": [{"login": "packer", "display_name": "Упаковщик"}]
+    }
+
     denied = client.get("/api/v1/fbs-packing/my")
     assert denied.status_code == 401
 
@@ -43,6 +49,24 @@ def test_desktop_api_health_login_and_packing_my(db_url: str, tmp_path) -> None:
     mine = client.get("/api/v1/fbs-packing/my")
     assert mine.status_code == 200, mine.text
     assert mine.json()["jobs"] == []
+
+    wrong_password = client.post(
+        "/api/v1/productivity/my",
+        json={"password": "wrong", "year": 2026, "month": 10},
+    )
+    assert wrong_password.status_code == 401
+
+    productivity = client.post(
+        "/api/v1/productivity/my",
+        json={"password": "secret", "year": 2026, "month": 10},
+    )
+    assert productivity.status_code == 200, productivity.text
+    assert productivity.json() == {
+        "month": "2026-10",
+        "total_quantity": 0,
+        "total_pay": "",
+        "days": [],
+    }
 
     schema = client.get("/api/v1/tasks/schema")
     assert schema.status_code == 200, schema.text

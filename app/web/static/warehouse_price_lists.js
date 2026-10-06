@@ -40,10 +40,60 @@
   }
 
   function today() {
-    var value = new Date();
+    return isoDate(new Date());
+  }
+
+  function isoDate(value) {
     var month = String(value.getMonth() + 1).padStart(2, "0");
     var day = String(value.getDate()).padStart(2, "0");
     return value.getFullYear() + "-" + month + "-" + day;
+  }
+
+  function addDays(iso, days) {
+    var parts = String(iso || "").split("-").map(Number);
+    var value = new Date(parts[0], (parts[1] || 1) - 1, parts[2] || 1);
+    value.setDate(value.getDate() + days);
+    return isoDate(value);
+  }
+
+  function normalizePartyName(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[«»"']/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function findCounterpartyId(needles) {
+    var items = meta.counterparties || [];
+    var exact = [];
+    var partial = [];
+    var normalizedNeedles = needles.map(function (item) {
+      return normalizePartyName(item);
+    });
+    items.forEach(function (item) {
+      var name = normalizePartyName(item.name);
+      normalizedNeedles.forEach(function (needle) {
+        if (!needle) return;
+        if (name === needle) exact.push(item);
+        else if (name.indexOf(needle) !== -1) partial.push(item);
+      });
+    });
+    var pool = exact.length ? exact : partial;
+    if (!pool.length) return "";
+    pool.sort(function (a, b) {
+      return String(a.name || "").length - String(b.name || "").length;
+    });
+    return pool[0].id;
+  }
+
+  function applyPartyDefaults(root) {
+    var buyer = findCounterpartyId(["всеинструменты", "все инструменты"]);
+    var supplier = findCounterpartyId(["шайн системс", "shine systems", "shine sistems"]);
+    if (buyer) root.querySelector("#whViBuyer").value = String(buyer);
+    if (supplier) root.querySelector("#whViSupplier").value = String(supplier);
+    partyStatus(root, "#whViBuyer", "#whViBuyerStatus");
+    partyStatus(root, "#whViSupplier", "#whViSupplierStatus");
   }
 
   function counterpartyOptions() {
@@ -171,6 +221,7 @@
 
   function formHtml() {
     var current = today();
+    var weekAhead = addDays(current, 7);
     var options = counterpartyOptions();
     return (
       '<section class="wh-crm-section wh-pricat-section">' +
@@ -185,11 +236,14 @@
       '<fieldset><legend>2. Документ и договор</legend><div class="wh-pricat-grid">' +
       '<label>Название или номер документа<input id="whViDocumentName" value="Остатки" required></label>' +
       '<label>Дата документа<input id="whViDocumentDate" type="date" value="' + current + '" required></label>' +
-      '<label>Номер договора<input id="whViContractNumber" required></label>' +
+      '<label>Номер договора<input id="whViContractNumber" value="Остатки" required></label>' +
       '<label>Дата договора<input id="whViContractDate" type="date" value="' + current + '" required></label>' +
-      '<label>Тип прайса<select id="whViPriceListType"><option>Основной</option><option>Акционный</option></select></label>' +
+      '<label>Тип ценового листа<select id="whViPriceListType">' +
+      '<option value="Основной" selected>Основной</option>' +
+      '<option value="Акционный">Акционный</option>' +
+      "</select></label>" +
       '<label>Цены действуют с<input id="whViValidFrom" type="date" value="' + current + '" required></label>' +
-      '<label>Цены действуют по<input id="whViValidTo" type="date" value="' + current + '" required></label>' +
+      '<label>Цены действуют по<input id="whViValidTo" type="date" value="' + weekAhead + '" required></label>' +
       "</div></fieldset>" +
       '<fieldset><legend>3. Комментарии</legend><div class="wh-pricat-grid">' +
       '<label>Комментарий для себя<input id="whViInternalComment"></label>' +
@@ -197,7 +251,7 @@
       "</div></fieldset>" +
       '<fieldset><legend>4. Количество</legend>' +
       '<label class="wh-pricat-file">Заполненный шаблон количества<input id="whViQuantityFile" type="file" accept=".xlsx" required></label>' +
-      '<p class="wh-muted">Скачайте шаблон: в нём уже названия из каталога. Заполните столбец «Количество». Допустимы значения вида 889&nbsp;826,000. Дробная часть отбрасывается. Ненайденные, неоднозначные и отсутствующие в PRICAT строки пропускаются. Комплекты считаются из компонентов.</p>' +
+      '<p class="wh-muted">Скачайте шаблон: в нём уже названия из каталога, включая компоненты комплектов. Заполните столбец «Количество». Допустимы значения вида 889&nbsp;826,000. Дробная часть отбрасывается. Ненайденные и неоднозначные строки пропускаются. Комплекты считаются из компонентов, даже если компоненты отсутствуют отдельными строками в PRICAT.</p>' +
       "</fieldset>" +
       '<div class="wh-pricat-actions"><button id="whViPricatSubmit" class="wh-btn wh-btn-primary" type="submit">Сформировать PRICAT</button></div>' +
       '<p id="whViPricatMessage" class="wh-msg"></p>' +
@@ -217,6 +271,7 @@
         meta.counterparties = data.counterparties || [];
         panelEl().innerHTML = formHtml();
         bind(panelEl());
+        applyPartyDefaults(panelEl());
       })
       .catch(function (error) {
         panelEl().innerHTML =

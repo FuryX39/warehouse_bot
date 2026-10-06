@@ -135,8 +135,11 @@ def test_annotate_jobs_with_wms_ship_status() -> None:
     assert out[1]["can_ship"] is False
     assert out[2]["wms_shipped"] is False
     assert out[2]["can_ship"] is False
+    # Без привязанных заказов кнопку отгрузки оставляем только у open/in_progress.
     assert out[3]["wms_shipped"] is False
     assert out[3]["can_ship"] is True
+    done_empty = annotate_jobs_with_wms_ship_status([{"id": 5, "status": "done"}], {})
+    assert done_empty[0]["can_ship"] is False
 
 
 def test_packing_job_ship_flags(db_url: str) -> None:
@@ -182,6 +185,31 @@ def test_packing_job_ship_flags(db_url: str) -> None:
     after = stack["orders"].packing_job_ship_flags([11])
     assert after[11]["shipped"] is True
     assert after[11]["can_ship"] is False
+
+
+def test_wave_ship_already_shipped_via_sync(db_url: str) -> None:
+    """Синк МП уже пометил заказы shipped, packing_job_id пуст — волна закрывается без ошибки."""
+    stack = _wms_stack(db_url)
+    stack["storage"].set_stock(stack["wh_id"], "SKU-Z", 0, skip_recalc=True)
+    stack["orders"].upsert_from_posting(
+        source="wildberries",
+        posting_id="WB-ALREADY",
+        warehouse_id=stack["wh_id"],
+        lines=[{"sku": "SKU-Z", "quantity": 1, "name": "Z"}],
+    )
+    stack["orders"].mark_shipped("wildberries", "WB-ALREADY")
+    assert stack["orders"].get_by_posting("wildberries", "WB-ALREADY").packing_job_id is None
+    job_id = _add_packing_job(
+        stack["inventory"].engine, status=JOB_STATUS_DONE, order_id="WB-ALREADY", sku="SKU-Z"
+    )
+    shipped = stack["shipments"].create_from_packing_job(job_id, post=True)
+    assert shipped.status == "posted"
+    assert any("уже были отгружены" in w for w in shipped.warnings)
+    order = stack["orders"].get_by_posting("wildberries", "WB-ALREADY")
+    assert order.status == ORDER_SHIPPED
+    assert order.packing_job_id == job_id
+    flags = stack["orders"].packing_job_ship_flags([job_id])
+    assert flags[job_id]["shipped"] is True
 
 
 def test_pick_waves_api_ship_flag(db_url: str, tmp_path) -> None:

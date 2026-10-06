@@ -28,6 +28,7 @@ from app.wb_fbo_sheet_service import (
     resolve_sheet_scan,
 )
 from app.wb_fbo_sheet_xlsx import fill_boxes_xlsx
+from app.web.warehouse_assignment_helpers import requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.web.warehouse_wb_fbo_routes import (
     _attachment_disposition,
@@ -166,6 +167,19 @@ def register_warehouse_wb_fbo_sheet_routes(
             if job is None:
                 raise HTTPException(status_code=404, detail="Задание не найдено")
             return {"job": packing_repo.job_to_dict(job)}
+
+        @app.put("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/assignees")
+        async def api_wb_fbo_sheet_job_assignees(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> dict:
+            try:
+                ids = requested_packer_ids(body, users_repo)
+                await asyncio.to_thread(packing_repo.set_assignees, job_id, ids)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"ok": True, "packer_user_ids": ids}
 
         @app.get("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
         async def api_wb_fbo_sheet_boxes_xlsx(

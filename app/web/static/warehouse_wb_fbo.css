@@ -9,3 +9,21 @@
 .wh-wb-fbo-preview p {
   margin: 0.2rem 0;
 }
+
+.wh-link-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #2f6fed;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.wh-link-btn:hover {
+  text-decoration: underline;
+}
+
+.wh-row-selected td {
+  background: #e8f0fe;
+}

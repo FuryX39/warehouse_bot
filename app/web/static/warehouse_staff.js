@@ -1173,11 +1173,26 @@
 })(window);
 
 (function (global) {
-  var filters = {};
+  function currentMonthRange() {
+    var now = new Date();
+    var from = new Date(now.getFullYear(), now.getMonth(), 1);
+    var to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    function iso(value) {
+      var month = String(value.getMonth() + 1);
+      var day = String(value.getDate());
+      if (month.length < 2) month = "0" + month;
+      if (day.length < 2) day = "0" + day;
+      return value.getFullYear() + "-" + month + "-" + day;
+    }
+    return { date_from: iso(from), date_to: iso(to) };
+  }
+
+  var filters = currentMonthRange();
   var rows = [];
   var employees = [];
   var taskTypes = [];
   var totalQuantity = 0;
+  var totalPay = "";
   var page = 1;
 
   function shell() {
@@ -1199,33 +1214,49 @@
     style.textContent =
       ".wh-prod-shell{display:grid;gap:16px}" +
       ".wh-prod-filter-card{padding:16px;border:1px solid #dfe5ee;border-radius:10px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.04)}" +
-      ".wh-prod-search-row{display:grid;grid-template-columns:minmax(260px,1fr) auto auto;gap:10px;align-items:center}" +
+      ".wh-prod-search-row{display:grid;grid-template-columns:minmax(180px,1fr) auto auto auto auto;gap:10px;align-items:center}" +
       ".wh-prod-search{box-sizing:border-box;width:100%;height:38px;padding:0 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}" +
       ".wh-prod-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid #edf0f4}" +
       ".wh-prod-field{min-width:0}.wh-prod-field--wide{grid-column:span 2}" +
       ".wh-prod-field label{display:block;margin:0 0 5px;color:#526071;font-size:12px;font-weight:600}" +
       ".wh-prod-field input,.wh-prod-field select{box-sizing:border-box;width:100%;height:36px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#182230;font:inherit}" +
       ".wh-prod-field input:focus,.wh-prod-field select:focus,.wh-prod-search:focus{border-color:#5989d7;outline:2px solid rgba(47,111,211,.12)}" +
-      ".wh-productivity-summary{display:grid;grid-template-columns:repeat(2,minmax(180px,240px));gap:12px}" +
+      ".wh-productivity-summary{display:grid;grid-template-columns:repeat(3,minmax(160px,240px));gap:12px}" +
       ".wh-prod-stat{padding:14px 16px;border:1px solid #dfe5ee;border-radius:10px;background:#f8fafc}" +
       ".wh-prod-stat-label{display:block;margin-bottom:3px;color:#64748b;font-size:12px}" +
       ".wh-prod-stat-value{color:#172033;font-size:24px;font-weight:700;line-height:1.2}" +
       ".wh-prod-table-wrap{overflow:auto;border:1px solid #dfe5ee;border-radius:10px;background:#fff}" +
-      ".wh-productivity-table{width:100%;min-width:760px;margin:0!important;border:0!important;border-collapse:separate!important;border-spacing:0}" +
+      ".wh-productivity-table{width:100%;min-width:860px;margin:0!important;border:0!important;border-collapse:separate!important;border-spacing:0}" +
       ".wh-productivity-table thead th{position:sticky;top:0;z-index:1;padding:11px 14px;border-bottom:1px solid #dfe5ee;background:#f5f7fa;color:#536174;font-size:12px;font-weight:700;text-align:left;white-space:nowrap}" +
       ".wh-productivity-table tbody td{padding:14px;border-bottom:1px solid #edf0f4;vertical-align:middle}" +
       ".wh-productivity-table tbody tr:last-child td{border-bottom:0}.wh-productivity-table tbody tr:hover td{background:#f8fbff}" +
+      ".wh-prod-main-row.is-excluded td,.wh-productivity-table tbody tr.wh-prod-detail-row.is-excluded .wh-prod-detail-cell{background:#eceff3!important;color:#8a93a0}" +
+      ".wh-productivity-table tbody tr.wh-prod-main-row.is-excluded:hover td{background:#e4e8ee!important}" +
+      ".wh-prod-main-row.is-excluded .wh-prod-date,.wh-prod-main-row.is-excluded .wh-prod-employee,.wh-prod-main-row.is-excluded .wh-prod-qty-number,.wh-prod-main-row.is-excluded .wh-prod-qty-unit,.wh-prod-main-row.is-excluded .wh-prod-task-data,.wh-prod-main-row.is-excluded .wh-prod-pay{color:#8a93a0}" +
+      ".wh-prod-main-row.is-excluded .wh-prod-task-badge{background:#e2e6ec;color:#6b7280}" +
+      ".wh-prod-main-row.is-excluded .wh-prod-edit,.wh-prod-main-row.is-excluded .wh-prod-details-toggle{color:#6b7280}" +
       ".wh-prod-date{display:inline-block;min-width:82px;color:#334155;font-variant-numeric:tabular-nums;white-space:nowrap}" +
       ".wh-prod-employee{color:#172033;font-weight:600}" +
       ".wh-prod-edit{display:block;margin-top:4px;padding:0;border:0;background:transparent;color:#2f6fd3;font:inherit;font-size:12px;cursor:pointer}.wh-prod-edit:hover{text-decoration:underline}" +
       ".wh-productivity-qty{width:120px;text-align:center!important;white-space:nowrap}" +
       ".wh-prod-qty-number{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}.wh-prod-qty-unit{margin-left:4px;color:#64748b;font-size:12px}" +
+      ".wh-prod-pay-cell{width:130px;text-align:right!important;white-space:nowrap}" +
+      ".wh-prod-pay{color:#1d4d3b;font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}" +
+      ".wh-prod-pay--empty{color:#94a3b8;font-size:13px;font-weight:500}.wh-prod-pay--off{color:#6b7280;font-size:12px;font-weight:600}" +
       ".wh-prod-task{min-width:320px}.wh-prod-task-badge{display:inline-block;margin-bottom:5px;padding:3px 8px;border-radius:999px;background:#e8f0ff;color:#285ea8;font-size:11px;font-weight:700}" +
-      ".wh-prod-task-badge--wb_fbo,.wh-prod-task-badge--wb_fbo_new{background:#eee9ff;color:#6045a8}.wh-prod-task-badge--vseinstrumenti{background:#e4f6eb;color:#287544}" +
+      ".wh-prod-task-badge--wb_fbo,.wh-prod-task-badge--wb_fbo_new,.wh-prod-task-badge--ym_fbo{background:#eee9ff;color:#6045a8}.wh-prod-task-badge--vseinstrumenti{background:#e4f6eb;color:#287544}.wh-prod-task-badge--rework{background:#fff3e0;color:#9a5b12}" +
       ".wh-prod-task-data{color:#526071;font-size:13px;line-height:1.4}.wh-prod-empty{padding:40px 20px;text-align:center;color:#64748b}" +
-      ".wh-prod-reassign-info{margin:0 0 14px;color:#526071;line-height:1.5}.wh-prod-reassign-field label{display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#526071}.wh-prod-reassign-field select{box-sizing:border-box;width:100%;height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}" +
+      ".wh-prod-details-toggle{display:inline-flex;align-items:center;gap:5px;margin-top:7px;padding:3px 0;border:0;background:transparent;color:#2f6fd3;font:inherit;font-size:12px;font-weight:600;cursor:pointer}.wh-prod-details-toggle:hover{text-decoration:underline}" +
+      ".wh-prod-details-caret{display:inline-block;font-size:11px;transition:transform .15s ease}.wh-prod-details-toggle[aria-expanded=true] .wh-prod-details-caret{transform:rotate(90deg)}" +
+      ".wh-prod-detail-row[hidden]{display:none}.wh-productivity-table tbody .wh-prod-detail-cell{padding:0!important;background:#f8fafc!important}" +
+      ".wh-prod-detail-panel{padding:12px 16px 16px 48px;border-bottom:1px solid #dfe5ee}.wh-prod-detail-status{padding:8px 0;color:#64748b;font-size:13px}" +
+      ".wh-prod-detail-table{width:100%;border-collapse:collapse;font-size:13px}.wh-prod-detail-table th{padding:7px 10px;border-bottom:1px solid #dbe3ee;color:#64748b;font-size:11px;text-align:left;white-space:nowrap}.wh-prod-detail-table td{padding:9px 10px!important;border-bottom:1px solid #e8edf3!important;background:transparent!important;vertical-align:top!important}.wh-prod-detail-table tr:last-child td{border-bottom:0!important}" +
+      ".wh-prod-detail-time{width:150px;font-variant-numeric:tabular-nums;white-space:nowrap}.wh-prod-detail-qty{width:80px;text-align:right!important;font-weight:700;font-variant-numeric:tabular-nums}.wh-prod-detail-product{color:#526071}.wh-prod-detail-ref{font-weight:600;color:#253247}" +
+      ".wh-prod-reassign-info{margin:0 0 14px;color:#526071;line-height:1.5}.wh-prod-reassign-field{margin-bottom:12px}.wh-prod-reassign-field label{display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#526071}.wh-prod-reassign-field select,.wh-prod-reassign-field input[type=date],.wh-prod-reassign-field input[type=number],.wh-prod-reassign-field textarea{box-sizing:border-box;width:100%;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}.wh-prod-reassign-field select,.wh-prod-reassign-field input[type=date],.wh-prod-reassign-field input[type=number]{height:38px}.wh-prod-reassign-field textarea{min-height:88px;padding:8px 10px;resize:vertical}" +
+      ".wh-prod-rate-list{display:grid;gap:12px}.wh-prod-rate-row{display:grid;grid-template-columns:minmax(140px,1fr) 140px;gap:10px;align-items:center}.wh-prod-rate-row label{margin:0;color:#334155;font-size:14px;font-weight:600}.wh-prod-rate-row input{box-sizing:border-box;width:100%;height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}" +
+      ".wh-prod-rate-hint{margin:0 0 14px;color:#64748b;font-size:13px;line-height:1.45}" +
       "@media(max-width:900px){.wh-prod-filter-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.wh-prod-field--wide{grid-column:span 2}}" +
-      "@media(max-width:620px){.wh-prod-search-row{grid-template-columns:1fr 1fr}.wh-prod-search{grid-column:1/-1}.wh-prod-filter-grid{grid-template-columns:1fr}.wh-prod-field--wide{grid-column:auto}.wh-productivity-summary{grid-template-columns:1fr 1fr}}";
+      "@media(max-width:620px){.wh-prod-search-row{grid-template-columns:1fr 1fr}.wh-prod-search{grid-column:1/-1}.wh-prod-filter-grid{grid-template-columns:1fr}.wh-prod-field--wide{grid-column:auto}.wh-productivity-summary{grid-template-columns:1fr 1fr}.wh-prod-detail-panel{padding-left:10px}.wh-prod-rate-row{grid-template-columns:1fr}}";
     document.head.appendChild(style);
   }
 
@@ -1247,6 +1278,7 @@
       var data = result[0] || {};
       rows = data.rows || [];
       totalQuantity = Number(data.total_quantity || 0);
+      totalPay = data.total_pay == null ? "" : String(data.total_pay);
       taskTypes = data.task_types || [];
       employees = (result[1] && result[1].employees) || [];
     });
@@ -1278,6 +1310,8 @@
       '" />' +
       '<button type="button" class="wh-btn wh-btn-primary" id="whProductivityApply">Применить</button>' +
       '<button type="button" class="wh-btn" id="whProductivityReset">Сбросить</button>' +
+      '<button type="button" class="wh-btn" id="whProductivityAdd">Добавить строку</button>' +
+      '<button type="button" class="wh-btn" id="whProductivitySettings">Настройки</button>' +
       "</div>" +
       '<div class="wh-prod-filter-grid" id="whProductivityFilters">' +
       '<div class="wh-prod-field"><label>Дата с</label><input type="date" data-filter="date_from" value="' +
@@ -1397,6 +1431,363 @@
     });
   }
 
+  function openDateEditor(row, root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal" role="dialog" aria-modal="true">' +
+      '<div class="wh-modal-header"><h3>Изменить дату</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-prod-reassign-info"><strong>' +
+      esc(row.task_type_name) +
+      "</strong><br>" +
+      esc(row.task_data) +
+      "<br>" +
+      esc(row.quantity) +
+      " шт. · время операций сохранится</p>" +
+      '<div class="wh-prod-reassign-field"><label for="whProdNewDate">Дата</label>' +
+      '<input type="date" id="whProdNewDate" value="' +
+      esc(row.date) +
+      '" /></div>' +
+      '<p class="wh-msg" id="whProdDateMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer"><button type="button" class="wh-btn wh-btn-primary wh-modal-save">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) close();
+    });
+    var input = backdrop.querySelector("#whProdNewDate");
+    input.focus();
+    backdrop.querySelector(".wh-modal-save").addEventListener("click", function () {
+      var toDate = String(input.value || "").trim();
+      var msg = backdrop.querySelector("#whProdDateMsg");
+      if (!toDate || toDate === String(row.date)) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Укажите другую дату.";
+        return;
+      }
+      var save = backdrop.querySelector(".wh-modal-save");
+      save.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сохранение…";
+      shell()
+        .fetchJson("/api/warehouse/employees/productivity/date", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: row.date,
+            to_date: toDate,
+            task_type: row.task_type,
+            task_id: row.task_id,
+            user_id: row.user_id,
+          }),
+        })
+        .then(function () {
+          close();
+          return refresh(root);
+        })
+        .catch(function (error) {
+          save.disabled = false;
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = error.message || "Не удалось изменить дату";
+        });
+    });
+  }
+
+  function todayIso() {
+    var now = new Date();
+    var month = String(now.getMonth() + 1);
+    var day = String(now.getDate());
+    if (month.length < 2) month = "0" + month;
+    if (day.length < 2) day = "0" + day;
+    return now.getFullYear() + "-" + month + "-" + day;
+  }
+
+  function openAddRow(root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal" role="dialog" aria-modal="true">' +
+      '<div class="wh-modal-header"><h3>Добавить строку</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-prod-reassign-info">Тип задания будет <strong>Доработка</strong>. Подробности вписываются как комментарий.</p>' +
+      '<div class="wh-prod-reassign-field"><label for="whProdAddEmployee">Сотрудник</label><select id="whProdAddEmployee">' +
+      employeeOptions(employees[0] && employees[0].id) +
+      "</select></div>" +
+      '<div class="wh-prod-reassign-field"><label for="whProdAddDate">Дата</label>' +
+      '<input type="date" id="whProdAddDate" value="' +
+      esc(todayIso()) +
+      '" /></div>' +
+      '<div class="wh-prod-reassign-field"><label for="whProdAddQty">Количество</label>' +
+      '<input type="number" min="1" step="1" id="whProdAddQty" value="" /></div>' +
+      '<div class="wh-prod-reassign-field"><label for="whProdAddComment">Подробности задания</label>' +
+      '<textarea id="whProdAddComment" maxlength="2000" placeholder="Комментарий к доработке"></textarea></div>' +
+      '<p class="wh-msg" id="whProdAddMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer"><button type="button" class="wh-btn wh-btn-primary wh-modal-save">Добавить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) close();
+    });
+    var qty = backdrop.querySelector("#whProdAddQty");
+    qty.focus();
+    backdrop.querySelector(".wh-modal-save").addEventListener("click", function () {
+      var msg = backdrop.querySelector("#whProdAddMsg");
+      var userId = parseInt(backdrop.querySelector("#whProdAddEmployee").value, 10);
+      var eventDate = String(backdrop.querySelector("#whProdAddDate").value || "").trim();
+      var quantity = parseInt(qty.value, 10);
+      var comment = String(backdrop.querySelector("#whProdAddComment").value || "").trim();
+      if (!userId) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите сотрудника.";
+        return;
+      }
+      if (!eventDate) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Укажите дату.";
+        return;
+      }
+      if (!quantity || quantity < 1) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Укажите количество больше нуля.";
+        return;
+      }
+      var save = backdrop.querySelector(".wh-modal-save");
+      save.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сохранение…";
+      shell()
+        .fetchJson("/api/warehouse/employees/productivity/rows", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: eventDate,
+            user_id: userId,
+            quantity: quantity,
+            comment: comment,
+          }),
+        })
+        .then(function () {
+          close();
+          return refresh(root);
+        })
+        .catch(function (error) {
+          save.disabled = false;
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = error.message || "Не удалось добавить строку";
+        });
+    });
+  }
+
+  function payHtml(row) {
+    if (row.counted === false) {
+      return '<div class="wh-prod-pay wh-prod-pay--off">не учитывается</div>';
+    }
+    if (row.pay == null || row.pay === "") {
+      return '<div class="wh-prod-pay wh-prod-pay--empty"></div>';
+    }
+    return '<div class="wh-prod-pay">' + esc(row.pay) + " ₽</div>";
+  }
+
+  function openSettings(root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal" role="dialog" aria-modal="true">' +
+      '<div class="wh-modal-header"><h3>Настройки выработки</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-prod-rate-hint">Оплата за одну штуку в рублях. Если поле пустое, сумма по заданию не показывается.</p>' +
+      '<div class="wh-prod-rate-list" id="whProdRateList"><div class="wh-prod-detail-status">Загрузка…</div></div>' +
+      '<p class="wh-msg" id="whProdSettingsMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer"><button type="button" class="wh-btn wh-btn-primary wh-modal-save">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) close();
+    });
+    var list = backdrop.querySelector("#whProdRateList");
+    var save = backdrop.querySelector(".wh-modal-save");
+    save.disabled = true;
+    shell()
+      .fetchJson("/api/warehouse/employees/productivity/settings")
+      .then(function (data) {
+        var rates = (data && data.rates) || [];
+        list.innerHTML = rates
+          .map(function (item) {
+            return (
+              '<div class="wh-prod-rate-row"><label for="whProdRate-' +
+              esc(item.id) +
+              '">' +
+              esc(item.name) +
+              '</label><input type="number" min="0" step="0.01" id="whProdRate-' +
+              esc(item.id) +
+              '" data-rate-id="' +
+              esc(item.id) +
+              '" value="' +
+              esc(item.rate || "") +
+              '" placeholder="пусто" /></div>'
+            );
+          })
+          .join("");
+        save.disabled = false;
+      })
+      .catch(function (error) {
+        list.innerHTML =
+          '<div class="wh-prod-detail-status wh-msg-error">' +
+          esc(error.message || "Не удалось загрузить настройки") +
+          "</div>";
+      });
+    save.addEventListener("click", function () {
+      var msg = backdrop.querySelector("#whProdSettingsMsg");
+      var payload = [];
+      backdrop.querySelectorAll("[data-rate-id]").forEach(function (input) {
+        payload.push({
+          id: input.getAttribute("data-rate-id"),
+          rate: String(input.value || "").trim(),
+        });
+      });
+      save.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сохранение…";
+      shell()
+        .fetchJson("/api/warehouse/employees/productivity/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rates: payload }),
+        })
+        .then(function () {
+          close();
+          return refresh(root);
+        })
+        .catch(function (error) {
+          save.disabled = false;
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = error.message || "Не удалось сохранить настройки";
+        });
+    });
+  }
+
+  function setRowCounted(row, root, counted) {
+    return shell()
+      .fetchJson("/api/warehouse/employees/productivity/counted", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: row.date,
+          task_type: row.task_type,
+          task_id: row.task_id,
+          user_id: row.user_id,
+          counted: counted,
+        }),
+      })
+      .then(function () {
+        return refresh(root);
+      });
+  }
+
+  function detailReference(row, detail) {
+    var reference = String(detail.reference || "").trim();
+    if (!reference) return "Строка #" + detail.line_id;
+    if (row.task_type === "rework") {
+      return String(detail.reference || detail.product_name || "Доработка").trim() || "Доработка";
+    }
+    if (row.task_type === "fbs" || row.task_type === "vseinstrumenti") {
+      return "Заказ " + reference;
+    }
+    return "Грузоместо " + reference;
+  }
+
+  function detailProduct(detail) {
+    var name = String(detail.product_name || "").trim();
+    var sku = String(detail.sku || "").trim();
+    if (name && sku) return esc(name) + '<br><span class="wh-muted">' + esc(sku) + "</span>";
+    return esc(name || sku || "Товар не указан");
+  }
+
+  function renderDetailPanel(row, data) {
+    var details = (data && data.details) || [];
+    if (!details.length) {
+      return '<div class="wh-prod-detail-status">Детализация для этой строки не найдена.</div>';
+    }
+    var body = details
+      .map(function (detail) {
+        return (
+          "<tr><td class=\"wh-prod-detail-time\">" +
+          esc(detail.completed_at) +
+          '</td><td><span class="wh-prod-detail-ref">' +
+          esc(detailReference(row, detail)) +
+          '</span></td><td class="wh-prod-detail-product">' +
+          detailProduct(detail) +
+          '</td><td class="wh-prod-detail-qty">' +
+          esc(detail.quantity) +
+          " шт.</td></tr>"
+        );
+      })
+      .join("");
+    return (
+      '<div class="wh-prod-detail-status">Операций: ' +
+      esc(data.row_count || details.length) +
+      " · всего: " +
+      esc(data.quantity || 0) +
+      " шт.</div>" +
+      '<table class="wh-prod-detail-table"><thead><tr><th>Выполнено</th><th>Заказ / грузоместо</th><th>Товар</th><th>Количество</th></tr></thead><tbody>' +
+      body +
+      "</tbody></table>"
+    );
+  }
+
+  function toggleDetails(button, row) {
+    var mainRow = button.closest("tr");
+    var detailRow = mainRow && mainRow.nextElementSibling;
+    if (!detailRow || !detailRow.classList.contains("wh-prod-detail-row")) return;
+    var expanded = button.getAttribute("aria-expanded") === "true";
+    button.setAttribute("aria-expanded", expanded ? "false" : "true");
+    detailRow.hidden = expanded;
+    if (expanded || detailRow.getAttribute("data-loaded") === "true") return;
+
+    var panel = detailRow.querySelector(".wh-prod-detail-panel");
+    panel.innerHTML = '<div class="wh-prod-detail-status">Загрузка детализации…</div>';
+    var params = [
+      "date=" + encodeURIComponent(row.date),
+      "task_type=" + encodeURIComponent(row.task_type),
+      "task_id=" + encodeURIComponent(row.task_id),
+      "user_id=" + encodeURIComponent(row.user_id),
+    ].join("&");
+    shell()
+      .fetchJson("/api/warehouse/employees/productivity/details?" + params)
+      .then(function (data) {
+        detailRow.setAttribute("data-loaded", "true");
+        panel.innerHTML = renderDetailPanel(row, data);
+      })
+      .catch(function (error) {
+        panel.innerHTML =
+          '<div class="wh-prod-detail-status wh-msg-error">' +
+          esc(error.message || "Не удалось загрузить детализацию") +
+          "</div>";
+      });
+  }
+
   function renderRows(root) {
     var pager = global.WH_PAGER;
     var sliced = pager ? pager.slice(rows, page) : { items: rows, state: null };
@@ -1408,25 +1799,44 @@
           dateParts.length === 3
             ? dateParts[2] + "." + dateParts[1] + "." + dateParts[0]
             : row.date;
+        var excluded = row.counted === false;
         return (
-          '<tr><td><span class="wh-prod-date">' +
+          '<tr class="wh-prod-main-row' +
+          (excluded ? " is-excluded" : "") +
+          '"><td><span class="wh-prod-date">' +
           esc(shownDate) +
-          '</span></td><td><span class="wh-prod-employee">' +
+          '</span><button type="button" class="wh-prod-edit" data-edit="date" data-row-index="' +
+          esc(index) +
+          '">Изменить</button></td><td><span class="wh-prod-employee">' +
           esc(row.employee) +
-          '</span><button type="button" class="wh-prod-edit" data-row-index="' +
+          '</span><button type="button" class="wh-prod-edit" data-edit="employee" data-row-index="' +
           esc(index) +
           '">Изменить</button>' +
           '</td><td class="wh-productivity-qty">' +
           '<span class="wh-prod-qty-number">' +
           esc(row.quantity) +
           '</span><span class="wh-prod-qty-unit">шт.</span>' +
+          '</td><td class="wh-prod-pay-cell">' +
+          payHtml(row) +
           '</td><td class="wh-prod-task"><span class="wh-prod-task-badge wh-prod-task-badge--' +
           esc(row.task_type) +
           '">' +
           esc(row.task_type_name) +
           '</span><div class="wh-prod-task-data">' +
           esc(row.task_data) +
-          "</div></td></tr>"
+          '</div><button type="button" class="wh-prod-details-toggle" aria-expanded="false" data-row-index="' +
+          esc(index) +
+          '"><span class="wh-prod-details-caret">▶</span>Детализация</button>' +
+          '<button type="button" class="wh-prod-edit" data-edit="counted" data-row-index="' +
+          esc(index) +
+          '">' +
+          (excluded ? "Учитывать" : "Не учитывать") +
+          "</button></td></tr>" +
+          '<tr class="wh-prod-detail-row' +
+          (excluded ? " is-excluded" : "") +
+          '" data-row-index="' +
+          esc(index) +
+          '" hidden><td class="wh-prod-detail-cell" colspan="5"><div class="wh-prod-detail-panel"></div></td></tr>'
         );
       })
       .join("");
@@ -1435,12 +1845,14 @@
       filterHtml() +
       '<div class="wh-productivity-summary"><div class="wh-prod-stat"><span class="wh-prod-stat-label">Всего упаковано</span><strong class="wh-prod-stat-value">' +
       esc(totalQuantity) +
-      ' шт.</strong></div><div class="wh-prod-stat"><span class="wh-prod-stat-label">Строк в отчёте</span><strong class="wh-prod-stat-value">' +
+      ' шт.</strong></div><div class="wh-prod-stat"><span class="wh-prod-stat-label">К оплате</span><strong class="wh-prod-stat-value">' +
+      (totalPay === "" ? "—" : esc(totalPay) + " ₽") +
+      '</strong></div><div class="wh-prod-stat"><span class="wh-prod-stat-label">Строк в отчёте</span><strong class="wh-prod-stat-value">' +
       esc(rows.length) +
       "</strong></div></div>" +
       (body
         ? '<div class="wh-prod-table-wrap"><table class="wh-productivity-table"><thead><tr>' +
-          "<th>Дата</th><th>Сотрудник</th><th>Выработка</th><th>Задача</th>" +
+          "<th>Дата</th><th>Сотрудник</th><th>Выработка</th><th>Оплата</th><th>Задача</th>" +
           "</tr></thead><tbody>" +
           body +
           "</tbody></table></div>"
@@ -1451,7 +1863,22 @@
     root.querySelectorAll(".wh-prod-edit").forEach(function (button) {
       button.addEventListener("click", function () {
         var row = sliced.items[parseInt(button.getAttribute("data-row-index"), 10)];
-        if (row) openEmployeeEditor(row, root);
+        if (!row) return;
+        if (button.getAttribute("data-edit") === "date") openDateEditor(row, root);
+        else if (button.getAttribute("data-edit") === "employee") openEmployeeEditor(row, root);
+        else if (button.getAttribute("data-edit") === "counted") {
+          button.disabled = true;
+          setRowCounted(row, root, row.counted === false).catch(function (error) {
+            button.disabled = false;
+            window.alert(error.message || "Не удалось изменить учёт строки");
+          });
+        }
+      });
+    });
+    root.querySelectorAll(".wh-prod-details-toggle").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var row = sliced.items[parseInt(button.getAttribute("data-row-index"), 10)];
+        if (row) toggleDetails(button, row);
       });
     });
     root.querySelector("#whProductivityApply").addEventListener("click", function () {
@@ -1460,9 +1887,15 @@
       refresh(root);
     });
     root.querySelector("#whProductivityReset").addEventListener("click", function () {
-      filters = {};
+      filters = currentMonthRange();
       page = 1;
       refresh(root);
+    });
+    root.querySelector("#whProductivitySettings").addEventListener("click", function () {
+      openSettings(root);
+    });
+    root.querySelector("#whProductivityAdd").addEventListener("click", function () {
+      openAddRow(root);
     });
     root.querySelector("#whProductivityQ").addEventListener("keydown", function (event) {
       if (event.key !== "Enter") return;

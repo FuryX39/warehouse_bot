@@ -1,6 +1,7 @@
 (function (global) {
   var meta = { assignees: [], purchase_statuses: [] };
   var platform = "vseinstrumenti";
+  var jobsCache = [];
 
   function esc(s) {
     return String(s || "")
@@ -43,6 +44,11 @@
   }
 
   function packerHtml() {
+    if (global.WhPackerAssignment) {
+      return global.WhPackerAssignment.pickerHtml(meta.assignees || [], {
+        checkboxClass: "wh-om-packer",
+      });
+    }
     return (meta.assignees || [])
       .map(function (user) {
         return (
@@ -74,6 +80,7 @@
   }
 
   function renderJobs(jobs) {
+    jobsCache = jobs || [];
     if (!jobs.length) return '<p class="wh-msg">Заданий пока нет.</p>';
     var rows = jobs
       .map(function (job) {
@@ -96,6 +103,9 @@
           esc((job.line_done || 0) + "/" + (job.line_total || 0)) +
           "</td><td>" +
           esc((job.packer_names || []).join(", ")) +
+          '<br><button type="button" class="wh-btn wh-btn-sm" data-packers="' +
+          esc(job.id) +
+          '">Изменить</button>' +
           '</td><td><a href="/api/warehouse/other-platforms/jobs/' +
           esc(job.id) +
           '/marking.xlsx">КИЗ</a></td><td>' +
@@ -113,7 +123,33 @@
     );
   }
 
+  function editJobPackers(root, jobId) {
+    var job = jobsCache.find(function (item) {
+      return Number(item.id) === Number(jobId);
+    });
+    if (!job || !global.WhPackerAssignment) return;
+    global.WhPackerAssignment.openEditor({
+      title: "Упаковщики задания #" + job.id,
+      assignees: meta.assignees || [],
+      selectedIds: job.packer_user_ids || [],
+      onSave: function (ids) {
+        return fetchJson("/api/warehouse/other-platforms/jobs/" + job.id + "/assignees", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ packer_user_ids: ids }),
+        })
+          .then(function () {
+            return fetchJson("/api/warehouse/other-platforms/vseinstrumenti/jobs");
+          })
+          .then(function (data) {
+            root.querySelector("#whOmJobs").innerHTML = renderJobs(data.jobs || []);
+          });
+      },
+    });
+  }
+
   function bind(root) {
+    if (global.WhPackerAssignment) global.WhPackerAssignment.bind(root);
     root.querySelector("#whOmCreate").addEventListener("click", function () {
       var msg = root.querySelector("#whOmMsg");
       var file = root.querySelector("#whOmFile").files[0];
@@ -201,6 +237,11 @@
         });
     });
     root.querySelector("#whOmJobs").addEventListener("click", function (event) {
+      var packersButton = event.target.closest("[data-packers]");
+      if (packersButton) {
+        editJobPackers(root, parseInt(packersButton.getAttribute("data-packers"), 10));
+        return;
+      }
       var button = event.target.closest("[data-cancel]");
       if (!button) return;
       fetchJson("/api/warehouse/other-platforms/jobs/" + button.getAttribute("data-cancel") + "/cancel", {

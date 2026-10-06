@@ -23,6 +23,7 @@ from app.wb_fbo_packing_service import (
     resolve_fbo_scan,
 )
 from app.wb_fbs_labels import get_configured_wb_adapter
+from app.web.warehouse_assignment_helpers import requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 
 
@@ -203,6 +204,19 @@ def register_warehouse_wb_fbo_routes(
             if job is None:
                 raise HTTPException(status_code=404, detail="Задание не найдено")
             return {"job": packing_repo.job_to_dict(job)}
+
+        @app.put("/api/warehouse/marketplaces/wb-fbo/jobs/{job_id}/assignees")
+        async def api_wb_fbo_job_assignees(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> dict:
+            try:
+                ids = requested_packer_ids(body, users_repo)
+                await asyncio.to_thread(packing_repo.set_assignees, job_id, ids)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"ok": True, "packer_user_ids": ids}
 
         def _manager_pdf(job_id: int, kind: str, filename: str) -> Response:
             try:

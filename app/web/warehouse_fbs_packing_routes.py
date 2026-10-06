@@ -30,6 +30,7 @@ from app.fbs_packing_service import (
     resolve_packing_scan,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
+from app.web.warehouse_assignment_helpers import requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.yandex_fbs_labels import (
     get_configured_yandex_adapter,
@@ -461,6 +462,19 @@ def register_warehouse_fbs_packing_routes(
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": packing_repo.job_to_dict(job)}
+
+        @app.put("/api/warehouse/fbs-packing/jobs/{job_id}/assignees")
+        async def api_fbs_packing_job_assignees(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            try:
+                ids = requested_packer_ids(body, users_repo)
+                await asyncio.to_thread(packing_repo.set_assignees, job_id, ids)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"ok": True, "packer_user_ids": ids}
 
         @app.get("/api/warehouse/fbs-packing/jobs/{job_id}")
         async def api_fbs_packing_job_get(

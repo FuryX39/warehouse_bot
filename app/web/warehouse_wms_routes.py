@@ -11,7 +11,7 @@ from app.crm_repository import CrmRepository
 from app.warehouse_orders_repository import ORDERS_LIST_PAGE_SIZE, WarehouseOrdersRepository
 from app.warehouse_shipments_repository import WarehouseShipmentsRepository
 from app.warehouse_users_repository import WarehouseUserRow
-from app.warehouse_wave import annotate_jobs_with_wms_ship_status
+from app.warehouse_wave import annotate_jobs_with_wms_ship_status, resolve_packing_job_ship_flags
 
 
 def register_warehouse_wms_routes(
@@ -332,5 +332,10 @@ def register_warehouse_wms_routes(
         mp = str(marketplace or "").strip().lower() or None
         jobs = packing_repo.list_jobs(packer_names=names, marketplace=mp) if packing_repo else []
         payloads = [packing_repo.job_to_dict(job) for job in jobs]
-        flags = orders_repo.packing_job_ship_flags(int(item["id"]) for item in payloads)
+        engine = getattr(packing_repo, "engine", None) or getattr(orders_repo, "engine", None)
+        flags = resolve_packing_job_ship_flags(
+            orders_repo,
+            engine,
+            [int(item["id"]) for item in payloads],
+        )
         return {"jobs": annotate_jobs_with_wms_ship_status(payloads, flags)}

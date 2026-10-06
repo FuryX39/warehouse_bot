@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, func, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.warehouse_task_files import WarehouseTaskFileStorage
@@ -456,6 +456,29 @@ class FbsPackingRepository:
             job.updated_at_ts = int(time.time())
             session.commit()
         row = self.get_job(job_id, include_lines=True)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
+
+    def set_assignees(self, job_id: int, user_ids: list[int]) -> FbsPackingJobRow:
+        ids = list(dict.fromkeys(int(value) for value in user_ids if int(value) > 0))
+        if not ids:
+            raise ValueError("Назначьте хотя бы одного упаковщика")
+        with Session(self.engine) as session:
+            job = session.get(FbsPackingJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            session.execute(
+                delete(FbsPackingJobAssignee).where(
+                    FbsPackingJobAssignee.job_id == int(job_id)
+                )
+            )
+            session.add_all(
+                [FbsPackingJobAssignee(job_id=int(job_id), user_id=uid) for uid in ids]
+            )
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
         if row is None:
             raise ValueError("Задание не найдено")
         return row

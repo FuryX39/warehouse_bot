@@ -25,6 +25,7 @@ from app.other_marketplace_service import (
     require_purchase_status,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
+from app.web.warehouse_assignment_helpers import requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,19 @@ def register_warehouse_other_platform_routes(
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": _job_dict(job, include_lines=False)}
+
+        @app.put("/api/warehouse/other-platforms/jobs/{job_id}/assignees")
+        async def api_other_platform_job_assignees(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_access),
+        ) -> dict:
+            try:
+                ids = requested_packer_ids(body, users_repo)
+                await asyncio.to_thread(repo.set_assignees, job_id, ids)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"ok": True, "packer_user_ids": ids}
 
         @app.get("/api/warehouse/other-platforms/jobs/{job_id}/marking.xlsx")
         async def api_vi_marking(

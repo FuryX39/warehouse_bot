@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 import re
 from typing import Any
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape, unescape
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -17,7 +17,19 @@ from openpyxl.utils import get_column_letter
 
 _TEMPLATE_PATH = Path(__file__).resolve().parent / "assets" / "vseinstrumenti_pricat.xlsx"
 _SHEET_XML = "xl/worksheets/sheet1.xml"
+_SHARED_STRINGS_XML = "xl/sharedStrings.xml"
 _CELL_OPEN_RE = re.compile(rb'<c\b(?=[^>]*\br="(?P<r>[^"]+)")[^>]*/?>')
+_SI_RE = re.compile(rb"<si>.*?</si>", re.DOTALL)
+_T_RE = re.compile(rb"<t(?:\s[^>]*)?>(.*?)</t>", re.DOTALL)
+_SST_COUNTS_RE = re.compile(rb'count="(\d+)" uniqueCount="(\d+)"')
+_LIST_CELLS = {"C3"}
+
+
+class _SharedString:
+    __slots__ = ("index",)
+
+    def __init__(self, index: int) -> None:
+        self.index = int(index)
 
 
 def _article(value: Any) -> str:
@@ -93,6 +105,8 @@ def quantity_template_names(
     template_bytes: bytes | None = None,
 ) -> list[str]:
     pricat_skus = list_vseinstrumenti_pricat_skus(template_bytes)
+    _, products_by_sku = _catalog_indexes(products)
+    accepted_skus = pricat_skus | _pricat_kit_leaf_skus(pricat_skus, products_by_sku)
     names: list[str] = []
     seen: set[str] = set()
     for product in sorted(
@@ -105,7 +119,7 @@ def quantity_template_names(
         if bool(product.get("is_kit")):
             continue
         sku = _article(product.get("sku")).casefold()
-        if sku not in pricat_skus:
+        if sku not in accepted_skus:
             continue
         name = str(product.get("name") or "").strip()
         key = _normalize_name(name)
@@ -160,7 +174,34 @@ def _set_cell_type(open_tag: bytes, cell_type: str | None) -> bytes:
     return open_tag
 
 
-def _replace_sheet_cells(xml: bytes, values: dict[str, int | str]) -> bytes:
+def _shared_string_text(si: bytes) -> str:
+    return unescape("".join(part.decode("utf-8") for part in _T_RE.findall(si)))
+
+
+def _ensure_shared_string(sst: bytes, value: str) -> tuple[bytes, int]:
+    items = list(_SI_RE.finditer(sst))
+    for index, match in enumerate(items):
+        if _shared_string_text(match.group(0)) == value:
+            return sst, index
+    inserted = b"<si><t>" + _xml_text(value) + b"</t></si>"
+    close_at = sst.rfind(b"</sst>")
+    if close_at < 0:
+        raise ValueError("В шаблоне PRICAT повреждена таблица строк")
+    patched = sst[:close_at] + inserted + sst[close_at:]
+    counts = _SST_COUNTS_RE.search(patched)
+    if counts:
+        patched = (
+            patched[: counts.start()]
+            + (
+                f'count="{int(counts.group(1)) + 1}" '
+                f'uniqueCount="{int(counts.group(2)) + 1}"'
+            ).encode("ascii")
+            + patched[counts.end() :]
+        )
+    return patched, len(items)
+
+
+def _replace_sheet_cells(xml: bytes, values: dict[str, int | str | _SharedString]) -> bytes:
     cells: dict[str, tuple[int, int, bytes]] = {}
     for match in _CELL_OPEN_RE.finditer(xml):
         coordinate = match.group("r").decode("ascii")
@@ -183,7 +224,10 @@ def _replace_sheet_cells(xml: bytes, values: dict[str, int | str]) -> bytes:
         if coordinate not in values:
             continue
         value = values[coordinate]
-        if isinstance(value, str):
+        if isinstance(value, _SharedString):
+            patched = _set_cell_type(open_tag, "s")
+            inner = b"<v>" + str(value.index).encode("ascii") + b"</v>"
+        elif isinstance(value, str):
             patched = _set_cell_type(open_tag, "inlineStr")
             inner = b"<is><t>" + _xml_text(value) + b"</t></is>"
         else:
@@ -200,12 +244,27 @@ def _patch_pricat_xml(template: bytes, values: dict[str, int | str]) -> bytes:
     """Меняет только значения ячеек, сохраняя исходный XML листа и расширения XLSX."""
     source = BytesIO(template)
     output = BytesIO()
+    patched_values: dict[str, int | str | _SharedString] = dict(values)
     with ZipFile(source, "r") as src, ZipFile(output, "w", ZIP_DEFLATED) as dst:
-        if _SHEET_XML not in src.namelist():
+        names = src.namelist()
+        if _SHEET_XML not in names:
             raise ValueError("В шаблоне PRICAT не найден XML листа «Лист 1»")
-        sheet_xml = _replace_sheet_cells(src.read(_SHEET_XML), values)
+        sst = src.read(_SHARED_STRINGS_XML) if _SHARED_STRINGS_XML in names else None
+        if sst is not None:
+            for coordinate in _LIST_CELLS:
+                raw = patched_values.get(coordinate)
+                if not isinstance(raw, str) or not raw.strip():
+                    continue
+                sst, index = _ensure_shared_string(sst, raw.strip())
+                patched_values[coordinate] = _SharedString(index)
+        sheet_xml = _replace_sheet_cells(src.read(_SHEET_XML), patched_values)
         for item in src.infolist():
-            data = sheet_xml if item.filename == _SHEET_XML else src.read(item.filename)
+            if item.filename == _SHEET_XML:
+                data = sheet_xml
+            elif sst is not None and item.filename == _SHARED_STRINGS_XML:
+                data = sst
+            else:
+                data = src.read(item.filename)
             dst.writestr(item, data)
     return output.getvalue()
 
@@ -286,6 +345,18 @@ def _leaf_bom(
     return result
 
 
+def _pricat_kit_leaf_skus(
+    pricat_skus: set[str],
+    products_by_sku: dict[str, dict[str, Any]],
+) -> set[str]:
+    leaves: set[str] = set()
+    for sku in pricat_skus:
+        product = products_by_sku.get(sku)
+        if product and bool(product.get("is_kit")):
+            leaves.update(_leaf_bom(sku, products_by_sku))
+    return leaves
+
+
 def _format_date(value: date, prefix: str) -> str:
     return f"{prefix} {value:%d.%m.%Y}"
 
@@ -341,6 +412,9 @@ def build_vseinstrumenti_pricat(
             raise ValueError(f"В PRICAT повторяется артикул «{sheet.cell(row, 5).value}»")
         pricat_rows[sku] = row
 
+    pricat_skus = set(pricat_rows)
+    required_leaf_skus = _pricat_kit_leaf_skus(pricat_skus, by_sku)
+    accepted_quantity_skus = pricat_skus | required_leaf_skus
     ordinary_quantities: dict[str, int] = {}
     unknown_names: list[str] = []
     ambiguous_names: list[str] = []
@@ -356,11 +430,14 @@ def build_vseinstrumenti_pricat(
             continue
         product = candidates[0]
         sku = _article(product.get("sku")).casefold()
-        if sku not in pricat_rows:
-            outside_pricat.append(str(product.get("name") or normalized_name))
-            continue
         if bool(product.get("is_kit")):
-            ignored_kit_inputs += 1
+            if sku in pricat_rows:
+                ignored_kit_inputs += 1
+            else:
+                outside_pricat.append(str(product.get("name") or normalized_name))
+            continue
+        if sku not in accepted_quantity_skus:
+            outside_pricat.append(str(product.get("name") or normalized_name))
             continue
         ordinary_quantities[sku] = quantity
 
@@ -420,4 +497,5 @@ def build_vseinstrumenti_pricat(
         "rows_written": len(pricat_rows),
         "kits_calculated": kits_calculated,
         "ignored_kit_inputs": ignored_kit_inputs,
+        "kit_component_inputs": len(set(ordinary_quantities) & (required_leaf_skus - pricat_skus)),
     }

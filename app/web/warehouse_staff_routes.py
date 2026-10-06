@@ -39,6 +39,7 @@ def register_warehouse_staff_routes(
     require_warehouse_admin,
 ) -> None:
     productivity_repo = WarehouseProductivityRepository(engine=users_repo.engine)
+    productivity_repo.init_schema()
 
     def _employee_dict(user: WarehouseUserRow) -> dict:
         roles = roles_repo.get_user_roles(user.id)
@@ -210,6 +211,21 @@ def register_warehouse_staff_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/warehouse/employees/productivity/details")
+    async def api_warehouse_employee_productivity_details(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        try:
+            return productivity_repo.list_details(
+                event_date=str(request.query_params.get("date") or "").strip(),
+                task_type=str(request.query_params.get("task_type") or "").strip(),
+                task_id=int(request.query_params.get("task_id") or 0),
+                user_id=int(request.query_params.get("user_id") or 0),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.put("/api/warehouse/employees/productivity/employee")
     async def api_warehouse_employee_productivity_employee(
         body: dict,
@@ -222,6 +238,80 @@ def register_warehouse_staff_routes(
                 task_id=int(body.get("task_id")),
                 from_user_id=int(body.get("from_user_id")),
                 to_user_id=int(body.get("to_user_id")),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.put("/api/warehouse/employees/productivity/date")
+    async def api_warehouse_employee_productivity_date(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        try:
+            return productivity_repo.reschedule_row(
+                event_date=str(body.get("date") or "").strip(),
+                task_type=str(body.get("task_type") or "").strip(),
+                task_id=int(body.get("task_id")),
+                user_id=int(body.get("user_id")),
+                to_date=str(body.get("to_date") or "").strip(),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/warehouse/employees/productivity/rows")
+    async def api_warehouse_employee_productivity_add_row(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        try:
+            return productivity_repo.add_manual_row(
+                event_date=str(body.get("date") or "").strip(),
+                user_id=int(body.get("user_id")),
+                quantity=int(body.get("quantity")),
+                comment=str(body.get("comment") or ""),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/warehouse/employees/productivity/settings")
+    async def api_warehouse_employee_productivity_settings(
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        return productivity_repo.get_rates()
+
+    @app.put("/api/warehouse/employees/productivity/settings")
+    async def api_warehouse_employee_productivity_settings_save(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        items = body.get("rates")
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            raise HTTPException(status_code=400, detail="Ставки должны быть списком")
+        try:
+            return productivity_repo.save_rates(items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/warehouse/employees/productivity/counted")
+    async def api_warehouse_employee_productivity_counted(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        if "counted" not in body:
+            raise HTTPException(status_code=400, detail="Признак учёта обязателен")
+        try:
+            return productivity_repo.set_row_counted(
+                event_date=str(body.get("date") or "").strip(),
+                task_type=str(body.get("task_type") or "").strip(),
+                task_id=int(body.get("task_id")),
+                user_id=int(body.get("user_id")),
+                counted=bool(body.get("counted")),
             )
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

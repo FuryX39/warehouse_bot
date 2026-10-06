@@ -117,6 +117,95 @@ def release_packing_job_orders(
     orders_repo.clear_packing_job(int(job_id))
 
 
+def link_shipped_orders_to_packing_job(
+    orders_repo: WarehouseOrdersRepository | None,
+    engine,
+    job_id: int,
+) -> list[Any]:
+    """Привязать уже shipped-заказы к волне по order_id из строк FBS."""
+    if orders_repo is None:
+        return []
+    payload = packing_job_payload_from_db(engine, int(job_id))
+    if payload is None:
+        return []
+    source = packing_source(str(payload.get("marketplace") or ""))
+    ids: list[int] = []
+    linked: list[Any] = []
+    for line in payload.get("lines") or []:
+        pid = str(line.get("order_id") or "").strip()
+        if not pid:
+            continue
+        row = orders_repo.get_by_posting(source, pid)
+        if row is None:
+            continue
+        linked.append(row)
+        ids.append(int(row.id))
+    if ids:
+        orders_repo.set_packing_job(ids, int(job_id))
+        linked = orders_repo.list_by_packing_job(int(job_id))
+    return linked
+
+
+def resolve_packing_job_ship_flags(
+    orders_repo: WarehouseOrdersRepository | None,
+    engine,
+    job_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Флаги отгрузки: сначала по packing_job_id, иначе по posting из строк FBS."""
+    ids = sorted({int(i) for i in job_ids if int(i) > 0})
+    empty: dict[str, Any] = {
+        "shipped": False,
+        "can_ship": True,
+        "order_count": 0,
+        "shipped_count": 0,
+        "pending_count": 0,
+    }
+    if orders_repo is None:
+        return {jid: dict(empty) for jid in ids}
+    flags = orders_repo.packing_job_ship_flags(ids)
+    missing = [jid for jid in ids if int((flags.get(jid) or {}).get("order_count") or 0) == 0]
+    if not missing or engine is None:
+        return flags
+    from app.warehouse_orders_repository import ORDER_SHIPPED, TERMINAL_STATUSES
+
+    with Session(engine) as session:
+        jobs = {
+            int(j.id): j
+            for j in session.scalars(select(FbsPackingJob).where(FbsPackingJob.id.in_(missing))).all()
+        }
+        lines = session.scalars(
+            select(FbsPackingLine).where(FbsPackingLine.job_id.in_(missing))
+        ).all()
+    postings_by_job: dict[int, set[str]] = {jid: set() for jid in missing}
+    for line in lines:
+        pid = str(line.order_id or "").strip()
+        if pid:
+            postings_by_job.setdefault(int(line.job_id), set()).add(pid)
+    for jid in missing:
+        job = jobs.get(jid)
+        if job is None:
+            continue
+        source = packing_source(str(job.marketplace or ""))
+        statuses: list[str] = []
+        for pid in sorted(postings_by_job.get(jid) or []):
+            row = orders_repo.get_by_posting(source, pid)
+            if row is not None:
+                statuses.append(str(row.status or ""))
+        if not statuses:
+            continue
+        order_count = len(statuses)
+        shipped_count = sum(1 for item in statuses if item == ORDER_SHIPPED)
+        pending_count = sum(1 for item in statuses if item not in TERMINAL_STATUSES)
+        flags[jid] = {
+            "shipped": pending_count == 0 and shipped_count > 0,
+            "can_ship": pending_count > 0,
+            "order_count": order_count,
+            "shipped_count": shipped_count,
+            "pending_count": pending_count,
+        }
+    return flags
+
+
 def annotate_jobs_with_wms_ship_status(
     job_dicts: list[dict[str, Any]],
     flags: dict[int, dict[str, Any]] | None,
@@ -130,7 +219,11 @@ def annotate_jobs_with_wms_ship_status(
         shipped = bool(flag.get("shipped"))
         pending = int(flag.get("pending_count") or 0)
         order_count = int(flag.get("order_count") or 0)
-        can_ship_orders = pending > 0 or order_count == 0
+        # Пустая привязка: для open/in_progress оставляем can_ship (отгрузка сама привяжет).
+        # Для done пустая привязка не даёт кнопку — иначе висят уже отгруженные через синк МП волны.
+        can_ship_orders = pending > 0 or (
+            order_count == 0 and status in (JOB_STATUS_OPEN, JOB_STATUS_IN_PROGRESS)
+        )
         item["wms_shipped"] = shipped
         item["wms_order_count"] = order_count
         item["wms_shipped_count"] = int(flag.get("shipped_count") or 0)

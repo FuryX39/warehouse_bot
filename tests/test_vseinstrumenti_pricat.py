@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from io import BytesIO
+import re
 from zipfile import ZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -133,6 +134,7 @@ def test_build_vseinstrumenti_pricat_with_kits_and_full_header() -> None:
     assert sheet["D1"].value == "от 24.09.2026"
     assert sheet["C2"].value == "Д-15"
     assert sheet["D2"].value == "от 10.01.2026"
+    assert sheet["C3"].value == "Основной"
     assert sheet["C4"].value == "с 25.09.2026"
     assert sheet["D4"].value == "по 31.12.2026"
     assert sheet["C6"].value == "Актуальные остатки 24.09"
@@ -234,6 +236,35 @@ def test_quantity_template_contains_catalog_names() -> None:
     assert sheet.max_row == 4
 
 
+def test_kit_uses_components_that_are_not_separate_pricat_rows() -> None:
+    template_book = load_workbook(BytesIO(_pricat()))
+    template_sheet = template_book["Лист 1"]
+    template_sheet["E13"] = "UNRELATED-1"
+    template_sheet["E14"] = "UNRELATED-2"
+    template_output = BytesIO()
+    template_book.save(template_output)
+    template = template_output.getvalue()
+
+    names = quantity_template_names(_products(), template_bytes=template)
+    assert "Первый товар" in names
+    assert "Второй товар" in names
+
+    result, stats = build_vseinstrumenti_pricat(
+        _quantities([
+            ["Первый товар", 8],
+            ["Второй товар", 5],
+        ]),
+        catalog_products=_products(),
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+        template_bytes=template,
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["AB15"].value == 4
+    assert stats["kit_component_inputs"] == 2
+
+
 def test_counterparty_gln_round_trip(db_url: str) -> None:
     repo = CrmRepository(db_url)
     repo.init_schema()
@@ -271,3 +302,46 @@ def test_bundled_pricat_template_is_available() -> None:
     assert b'mc:Ignorable="x14ac xr xr2 xr3"' in sheet_xml
     assert b"dataValidations" in sheet_xml
     assert b"extLst" in sheet_xml
+
+
+def _c3_cell(sheet_xml: bytes) -> bytes:
+    match = re.search(rb'<c\b[^>]*\br="C3"[^>]*>.*?</c>', sheet_xml)
+    assert match is not None
+    return match.group(0)
+
+
+def test_price_list_type_uses_template_list_shared_string() -> None:
+
+    result, _ = build_vseinstrumenti_pricat(
+        _quantities(),
+        catalog_products=[],
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+        actual_date=date(2026, 9, 24),
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["C3"].value == "Основной"
+    with ZipFile(BytesIO(result)) as archive:
+        cell = _c3_cell(archive.read("xl/worksheets/sheet1.xml"))
+        sst = archive.read("xl/sharedStrings.xml").decode("utf-8")
+    assert b't="s"' in cell
+    assert b"inlineStr" not in cell
+    assert "<t>Основной</t>" in sst
+
+    promo, _ = build_vseinstrumenti_pricat(
+        _quantities(),
+        catalog_products=[],
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header={**_header(), "price_list_type": "Акционный"},
+        actual_date=date(2026, 9, 24),
+    )
+    promo_sheet = load_workbook(BytesIO(promo), data_only=True)["Лист 1"]
+    assert promo_sheet["C3"].value == "Акционный"
+    with ZipFile(BytesIO(promo)) as archive:
+        cell = _c3_cell(archive.read("xl/worksheets/sheet1.xml"))
+        sst = archive.read("xl/sharedStrings.xml").decode("utf-8")
+    assert b't="s"' in cell
+    assert b"inlineStr" not in cell
+    assert "<t>Акционный</t>" in sst

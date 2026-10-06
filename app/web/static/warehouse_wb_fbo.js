@@ -41,6 +41,9 @@
   }
 
   function selectedPackerIds(root) {
+    if (global.WhPackerAssignment) {
+      return global.WhPackerAssignment.collect(root, "wh-fbs-packer-cb");
+    }
     var ids = [];
     root.querySelectorAll(".wh-fbs-packer-cb:checked").forEach(function (cb) {
       var id = parseInt(cb.value, 10);
@@ -52,6 +55,11 @@
   function packerPickerHtml() {
     if (!assignees.length) {
       return '<p class="wh-muted">Нет сотрудников для назначения.</p>';
+    }
+    if (global.WhPackerAssignment) {
+      return global.WhPackerAssignment.pickerHtml(assignees, {
+        checkboxClass: "wh-fbs-packer-cb",
+      });
     }
     return (
       '<div class="wh-fbs-packers">' +
@@ -170,6 +178,9 @@
             esc(job.line_total) +
             "</td><td>" +
             esc((job.packer_names || []).join(", ") || "—") +
+            '<br><button type="button" class="wh-btn wh-btn-sm wh-wb-fbo-packers-edit" data-id="' +
+            esc(job.id) +
+            '">Изменить</button>' +
             "</td><td>" +
             files +
             " " +
@@ -190,6 +201,36 @@
       btn.addEventListener("click", function () {
         cancelJob(root, parseInt(btn.getAttribute("data-id"), 10));
       });
+    });
+    wrap.querySelectorAll(".wh-wb-fbo-packers-edit").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        editJobPackers(root, parseInt(btn.getAttribute("data-id"), 10));
+      });
+    });
+  }
+
+  function editJobPackers(root, jobId) {
+    var job = jobsCache.find(function (item) {
+      return Number(item.id) === Number(jobId);
+    });
+    if (!job || !global.WhPackerAssignment) return;
+    global.WhPackerAssignment.openEditor({
+      title: "Упаковщики задания #" + job.id,
+      assignees: assignees,
+      selectedIds: job.packer_user_ids || [],
+      onSave: function (ids) {
+        return fetchJson(
+          "/api/warehouse/marketplaces/wb-fbo/jobs/" + job.id + "/assignees",
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ packer_user_ids: ids }),
+          }
+        ).then(function () {
+          setMessage(root, "Упаковщики задания #" + job.id + " обновлены.", false);
+          loadJobs(root);
+        });
+      },
     });
   }
 
@@ -291,6 +332,7 @@
   }
 
   function bindPanel(root) {
+    if (global.WhPackerAssignment) global.WhPackerAssignment.bind(root);
     root.querySelector("#whWbFboPreviewBtn").addEventListener("click", function () {
       loadPreview(root);
     });

@@ -131,8 +131,10 @@ from app.other_marketplace_repository import OtherMarketplaceRepository
 from app.web.warehouse_other_platforms_routes import register_warehouse_other_platform_routes
 from app.web.warehouse_wb_fbo_routes import register_warehouse_wb_fbo_routes
 from app.web.warehouse_wb_fbo_sheet_routes import register_warehouse_wb_fbo_sheet_routes
+from app.web.warehouse_yandex_fbo_routes import register_warehouse_yandex_fbo_routes
 from app.wb_fbo_packing_repository import WbFboPackingRepository
 from app.wb_fbo_sheet_repository import WbFboSheetRepository
+from app.yandex_fbo_repository import YandexFboRepository
 from app.web.warehouse_tools_routes import register_warehouse_tools_routes
 
 _FBS_SHIP_DISABLED_DETAIL = (
@@ -343,6 +345,10 @@ def create_dashboard_app(
     wb_fbo_sheet_dir = Path(settings.warehouse_task_files_data_dir) / "wb_fbo_sheet"
     wb_fbo_sheet_repo = WbFboSheetRepository(settings.db_url, files_data_dir=wb_fbo_sheet_dir)
     wb_fbo_sheet_repo.init_schema()
+
+    yandex_fbo_files_dir = Path(settings.warehouse_task_files_data_dir) / "yandex_fbo_packing"
+    yandex_fbo_repo = YandexFboRepository(settings.db_url, files_data_dir=yandex_fbo_files_dir)
+    yandex_fbo_repo.init_schema()
 
     ozon_fbo_repo = OzonFboSupplyRepository(settings.db_url, catalog_repo, warehouse_users_repo)
     ozon_fbo_repo.init_schema()
@@ -749,6 +755,17 @@ def create_dashboard_app(
         wb_fbo_sheet_repo,
         catalog_repo,
         warehouse_users_repo,
+        require_warehouse_user,
+        require_tasks_access,
+        include_manager=True,
+        packer_prefixes=(),
+    )
+    register_warehouse_yandex_fbo_routes(
+        app,
+        yandex_fbo_repo,
+        catalog_repo,
+        warehouse_users_repo,
+        settings,
         require_warehouse_user,
         require_tasks_access,
         include_manager=True,

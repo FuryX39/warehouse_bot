@@ -279,6 +279,10 @@
       window.WhWbFbo.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "yandex-fbo-supplies" && window.WhYandexFbo) {
+      window.WhYandexFbo.render(tab, item);
+      return;
+    }
     if (tab.id === "marketplaces" && item.id === "wb-fbo-new" && window.WhWbFboNew) {
       window.WhWbFboNew.render(tab, item);
       return;
