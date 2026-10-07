@@ -14,7 +14,7 @@ from app.crm_repository import CrmRepository
 from app.warehouse_users_repository import WarehouseUsersRepository
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.web.warehouse_yandex_fbo_routes import register_warehouse_yandex_fbo_routes
-from app.yandex_fbo_api import parse_cargo_units_pdf
+from app.yandex_fbo_api import normalize_supply_item, normalize_supply_request, parse_cargo_units_pdf
 from app.yandex_fbo_repository import YandexFboRepository
 from app.yandex_fbo_service import create_yandex_fbo_job
 
@@ -173,6 +173,42 @@ def test_parse_cargo_units_pdf_missing_code() -> None:
         assert "не найден код грузоместа" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_normalize_official_fby_item_and_request() -> None:
+    item = normalize_supply_item(
+        {
+            "offerId": "SS694",
+            "name": "Shine Systems FastQuartz, 200 мл",
+            "counters": {"planCount": 40, "factCount": 0},
+        }
+    )
+    assert item["sku"] == "SS694"
+    assert item["planned_qty"] == 40
+
+    supply = normalize_supply_request(
+        {
+            "id": {
+                "id": REQUEST_ID,
+                "marketplaceRequestId": "33388649",
+                "warehouseRequestId": "0001142103",
+            },
+            "type": "SUPPLY",
+            "subtype": "VIRTUAL_DISTRIBUTION_CENTER_CHILD",
+            "status": "ACCEPTED_AT_WAREHOUSE",
+            "counters": {"planCount": 40},
+            "parentLink": {"id": {"id": 10180419}},
+            "targetWarehouse": {"name": "МО Софьино"},
+            "transitWarehouse": {"name": "ПВЗ Одоевского"},
+        }
+    )
+    assert supply["request_id"] == REQUEST_ID
+    assert supply["marketplace_request_id"] == "33388649"
+    assert supply["warehouse_request_id"] == "0001142103"
+    assert supply["parent_request_id"] == 10180419
+    assert supply["planned_qty"] == 40
+    assert supply["is_child"] is True
+    assert "ВРЦ-10180419" in supply["display_id"]
 
 
 def test_create_job_rejects_missing_items_and_pdf(db_url: str, tmp_path) -> None:

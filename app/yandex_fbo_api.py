@@ -131,15 +131,46 @@ def _warehouse_name(raw: Any) -> str:
     ) or _text(raw)
 
 
+def _plan_count(raw: dict[str, Any]) -> int:
+    """Количество из FBY DTO: counters.planCount (не counts.planned)."""
+    data = _as_dict(raw)
+    counters = _as_dict(
+        data.get("counters")
+        or data.get("counts")
+        or data.get("itemsCount")
+        or data.get("count")
+    )
+    qty = _int(
+        counters.get("planCount")
+        or counters.get("planned")
+        or data.get("plannedCount")
+        or data.get("itemsPlanned")
+        or data.get("count")
+        or data.get("quantity")
+    )
+    return int(qty or 0)
+
+
+def _next_page_token(payload: dict[str, Any]) -> str:
+    result = _as_dict(payload.get("result") or payload)
+    paging = _as_dict(result.get("paging") or payload.get("paging"))
+    return _text(paging.get("nextPageToken") or paging.get("next_page_token"))
+
+
 def normalize_supply_request(raw: dict[str, Any]) -> dict[str, Any]:
     """Свести заявку FBY Partner API к полям панели и задания."""
     data = _as_dict(raw)
+    id_obj = data.get("id") if isinstance(data.get("id"), dict) else {}
     request_id = _int(data.get("id") or data.get("requestId"))
     marketplace_request_id = _text(
-        data.get("marketplaceRequestId") or data.get("marketplace_request_id")
+        id_obj.get("marketplaceRequestId")
+        or data.get("marketplaceRequestId")
+        or data.get("marketplace_request_id")
     )
     warehouse_request_id = _text(
-        data.get("warehouseRequestId") or data.get("warehouse_request_id")
+        id_obj.get("warehouseRequestId")
+        or data.get("warehouseRequestId")
+        or data.get("warehouse_request_id")
     )
     subtype = _text(data.get("subtype") or data.get("subType")).upper()
     parent_raw = _as_dict(data.get("parentLink") or data.get("parent"))
@@ -152,12 +183,7 @@ def normalize_supply_request(raw: dict[str, Any]) -> dict[str, Any]:
     is_child = any(marker in subtype for marker in CHILD_SUBTYPE_MARKERS) or (
         bool(parent_id) and bool(marketplace_request_id)
     )
-    planned = _int(
-        _walk(data, "itemsCount", "planned")
-        or _walk(data, "counts", "planned")
-        or data.get("plannedCount")
-        or data.get("itemsPlanned")
-    )
+    planned = _plan_count(data)
     status = _text(data.get("status") or data.get("requestStatus"))
     transit_wh = data.get("transitWarehouse") or data.get("firstMileWarehouse")
     target_wh = (
@@ -221,13 +247,13 @@ def normalize_supply_item(raw: dict[str, Any]) -> dict[str, Any]:
         or data.get("vendorCode")
     )
     name = _text(data.get("name") or data.get("offerName") or data.get("title"))
-    qty = _int(
-        _walk(data, "counts", "planned")
-        or _walk(data, "count", "planned")
-        or data.get("plannedCount")
-        or data.get("count")
-        or data.get("quantity")
-    )
+    qty = _plan_count(data)
+    nested = data.get("offer")
+    if isinstance(nested, dict):
+        sku = sku or _text(nested.get("offerId") or nested.get("shopSku"))
+        name = name or _text(nested.get("name") or nested.get("title"))
+        if qty <= 0:
+            qty = _plan_count(nested)
     barcodes: list[str] = []
     for key in ("barcode", "ean", "barcodes"):
         value = data.get(key)
@@ -360,8 +386,7 @@ class YandexFboApi:
                 or payload.get("requests")
             )
             rows.extend(_as_dict(item) for item in items if isinstance(item, dict))
-            paging = _as_dict(result.get("paging") or payload.get("paging"))
-            token = _text(paging.get("nextPageToken") or paging.get("next_page_token"))
+            token = _next_page_token(payload)
             if not token:
                 break
         return rows
@@ -394,12 +419,22 @@ class YandexFboApi:
         return rows
 
     def get_items(self, request_id: int) -> list[dict[str, Any]]:
-        payload = self._post(
-            self._requests_path("/items"),
-            {"requestId": int(request_id)},
-        )
-        result = _as_dict(payload.get("result") or payload)
-        raw_items = _as_list(result.get("items") or payload.get("items"))
+        token = ""
+        raw_items: list[Any] = []
+        for _ in range(50):
+            params: dict[str, Any] = {"limit": 250}
+            if token:
+                params["page_token"] = token
+            payload = self._post(
+                self._requests_path("/items"),
+                {"requestId": int(request_id)},
+                params=params,
+            )
+            result = _as_dict(payload.get("result") or payload)
+            raw_items.extend(_as_list(result.get("items") or payload.get("items")))
+            token = _next_page_token(payload)
+            if not token:
+                break
         items = [normalize_supply_item(_as_dict(row)) for row in raw_items]
         return [item for item in items if item["sku"] and item["planned_qty"] > 0]
 
