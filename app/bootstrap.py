@@ -56,7 +56,7 @@ def create_inventory_stack() -> tuple[
     crm_repo = CrmRepository(settings.db_url)
     crm_repo.init_schema()
 
-    # Колонки catalog_products (срок годности, ТН ВЭД) должны существовать
+    # Колонки catalog_products (срок годности, ТН ВЭД, ОКПД 2) должны существовать
     # до backfill заказов: он читает товары через ORM.
     CatalogRepository(settings.db_url).init_schema()
 

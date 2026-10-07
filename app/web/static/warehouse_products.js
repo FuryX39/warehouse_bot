@@ -1234,6 +1234,7 @@
           boxes: [],
           links: [],
           tnved: "",
+          okpd2: "",
           components: [],
         });
     load
@@ -1294,6 +1295,7 @@
           '<div><label>Страна</label><input type="text" id="whPrCountry" value="' + esc(p.country) + '" /></div>' +
           '<div><label>Артикул</label><input type="text" id="whPrSku" value="' + esc(p.sku) + '" /></div>' +
           '<div><label>ТН ВЭД</label><input type="text" id="whPrTnved" value="' + esc(p.tnved || "") + '" placeholder="10 цифр" inputmode="numeric" /></div>' +
+          '<div><label>ОКПД 2</label><input type="text" id="whPrOkpd2" value="' + esc(p.okpd2 || "") + '" placeholder="XX.XX.XX.XXX" /></div>' +
           '<div><label>Код</label><div class="wh-form-input-with-btn">' +
           '<input type="text" id="whPrCode" value="' + esc(p.code) + '" />' +
           '<button type="button" class="wh-btn wh-btn-sm" id="whPrGenCode" title="Сгенерировать уникальный код">↻</button></div></div>' +
@@ -1576,6 +1578,7 @@
       code: root.querySelector("#whPrCode").value.trim(),
       external_code: root.querySelector("#whPrExtCode").value.trim(),
       tnved: root.querySelector("#whPrTnved").value.trim(),
+      okpd2: ((root.querySelector("#whPrOkpd2") || {}).value || "").trim(),
       unit_id: root.querySelector("#whPrUnit").value || null,
       weight: root.querySelector("#whPrWeight").value.trim(),
       width_mm: root.querySelector("#whPrWidth").value.trim(),

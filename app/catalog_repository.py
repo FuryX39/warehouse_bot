@@ -124,6 +124,7 @@ class CatalogProduct(_Base):
     has_shelf_life: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     shelf_life_years: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tnved: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    okpd2: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -258,6 +259,7 @@ class CatalogProductRow:
     has_shelf_life: bool = False
     shelf_life_years: int = 0
     tnved: str = ""
+    okpd2: str = ""
     barcodes: list[dict[str, str]] = field(default_factory=list)
     links: list[dict[str, str]] = field(default_factory=list)
     gtins: list[str] = field(default_factory=list)
@@ -295,6 +297,13 @@ def _normalize_tnved(value: object) -> str:
     text = str(value or "").strip().replace(" ", "")
     if len(text) > 32:
         raise ValueError("ТН ВЭД слишком длинный (макс. 32 символа)")
+    return text
+
+
+def _normalize_okpd2(value: object) -> str:
+    text = str(value or "").strip().replace(" ", "")
+    if len(text) > 32:
+        raise ValueError("ОКПД 2 слишком длинный (макс. 32 символа)")
     return text
 
 
@@ -410,6 +419,7 @@ class CatalogRepository:
         self._migrate_product_dimensions()
         self._migrate_product_shelf_life()
         self._migrate_product_tnved()
+        self._migrate_product_okpd2()
         self._cleanup_orphan_product_rows()
         self._seed_defaults()
 
@@ -601,6 +611,23 @@ class CatalogRepository:
                         "ADD COLUMN tnved VARCHAR(32) NOT NULL DEFAULT ''"
                     )
                 )
+            session.commit()
+
+    def _migrate_product_okpd2(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "catalog_products" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("catalog_products")}
+        if "okpd2" in cols:
+            return
+        with Session(self.engine) as session:
+            session.execute(
+                text(
+                    "ALTER TABLE catalog_products "
+                    "ADD COLUMN IF NOT EXISTS okpd2 VARCHAR(32) NOT NULL DEFAULT ''"
+                )
+            )
             session.commit()
 
     def _migrate_product_group_cost(self) -> None:
@@ -1807,6 +1834,7 @@ class CatalogRepository:
         row.country = str(data.get("country") or "").strip()[:128]
         row.external_code = str(data.get("external_code") or "").strip()[:128]
         row.tnved = _normalize_tnved(data.get("tnved"))
+        row.okpd2 = _normalize_okpd2(data.get("okpd2"))
         row.unit_id = _opt_int(data.get("unit_id"))
         row.weight = str(data.get("weight") or "").strip()[:32]
         row.width_mm = _parse_optional_mm(data.get("width_mm"), field_label="Ширина")
@@ -2414,6 +2442,7 @@ class CatalogRepository:
             has_shelf_life=bool(row.has_shelf_life),
             shelf_life_years=int(row.shelf_life_years or 0),
             tnved=row.tnved or "",
+            okpd2=row.okpd2 or "",
             links=links,
             created_at_ts=int(row.created_at_ts),
             updated_at_ts=int(row.updated_at_ts),
@@ -2445,6 +2474,7 @@ class CatalogRepository:
             "has_shelf_life": bool(row.has_shelf_life),
             "shelf_life_years": int(row.shelf_life_years or 0),
             "tnved": row.tnved or "",
+            "okpd2": row.okpd2 or "",
             "barcode_count": row.barcode_count,
             "created_at_ts": row.created_at_ts,
             "updated_at_ts": row.updated_at_ts,

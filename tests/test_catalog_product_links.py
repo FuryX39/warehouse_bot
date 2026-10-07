@@ -26,6 +26,7 @@ def test_product_tnved_and_links(db_url: str) -> None:
             "sku": "SS100",
             "code": "00100",
             "tnved": "3402 500000",
+            "okpd2": "20. 41.32.110",
             "links": [
                 {
                     "counterparty": "Wildberries",
@@ -38,6 +39,7 @@ def test_product_tnved_and_links(db_url: str) -> None:
         }
     )
     assert product.tnved == "3402500000"
+    assert product.okpd2 == "20.41.32.110"
     assert product.links == [
         {
             "counterparty": "Wildberries",
@@ -48,6 +50,7 @@ def test_product_tnved_and_links(db_url: str) -> None:
     ]
     payload = repo.product_to_dict(product)
     assert payload["tnved"] == "3402500000"
+    assert payload["okpd2"] == "20.41.32.110"
     assert payload["links"] == product.links
 
     updated = repo.update_product(
@@ -57,11 +60,13 @@ def test_product_tnved_and_links(db_url: str) -> None:
             "sku": "SS100",
             "code": "00100",
             "tnved": "",
+            "okpd2": "",
             "links": [{"counterparty": "", "counterparty_sku": "OZ-1", "url": "https://ozon.ru/p/1"}],
         },
     )
     assert updated is not None
     assert updated.tnved == ""
+    assert updated.okpd2 == ""
     assert updated.links == [
         {"counterparty": "", "counterparty_sku": "OZ-1", "url": "https://ozon.ru/p/1"}
     ]
@@ -84,4 +89,12 @@ def test_tnved_too_long(db_url: str) -> None:
     with pytest.raises(ValueError, match="ТН ВЭД"):
         repo.create_product(
             {"name": "X", "sku": "X1", "code": "00001", "tnved": "1" * 33}
+        )
+
+
+def test_okpd2_too_long(db_url: str) -> None:
+    repo = _repo(db_url)
+    with pytest.raises(ValueError, match="ОКПД 2"):
+        repo.create_product(
+            {"name": "X", "sku": "X2", "code": "00002", "okpd2": "1" * 33}
         )
