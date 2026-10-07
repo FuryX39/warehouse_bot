@@ -107,6 +107,8 @@ class Settings:
     yandex_label_format: str = "A9_HORIZONTALLY"
     # Поворот PDF-этикеток Yandex: 0 = без поворота.
     yandex_label_rotate_degrees: int = 0
+    # Поворот PDF грузомест FBO YM (CARGO_UNITS): 90 — альбомная печать на термопринтере.
+    yandex_fbo_label_rotate_degrees: int = 90
     # Анализ заказов дилера (/dealer-analysis): отдельная БД и каталог файлов.
     dealer_analysis_db_url: str = ""
     dealer_analysis_data_dir: str = ""
@@ -193,6 +195,7 @@ def load_settings() -> Settings:
         ozon_label_rotate_degrees=_ozon_label_rotate_degrees(),
         yandex_label_format=_yandex_label_format(),
         yandex_label_rotate_degrees=_yandex_label_rotate_degrees(),
+        yandex_fbo_label_rotate_degrees=_yandex_fbo_label_rotate_degrees(),
         dealer_analysis_db_url=dealer_analysis_db_url_default(),
         dealer_analysis_data_dir=str(dealer_analysis_data_dir_default()),
         warehouse_tasks_api_token=os.getenv("WAREHOUSE_TASKS_API_TOKEN", "").strip(),
@@ -212,6 +215,14 @@ def _yandex_label_rotate_degrees() -> int:
         return int(raw)
     except ValueError:
         return 0
+
+
+def _yandex_fbo_label_rotate_degrees() -> int:
+    raw = os.getenv("YANDEX_FBO_LABEL_ROTATE_DEGREES", "90").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return 90
 
 
 def _ozon_label_rotate_degrees() -> int:

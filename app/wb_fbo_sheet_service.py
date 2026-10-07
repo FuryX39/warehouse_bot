@@ -70,11 +70,26 @@ def create_wb_fbo_sheet_job(
                 "qty_plan": item.qty,
             }
         )
+    resolved_supply_id = supply_data.supply_id or str(supply_id or "").strip()
+    resolved_warehouse = supply_data.warehouse_name or str(warehouse_name or "").strip()
+    resolved_seller = supply_data.seller_name or str(seller_name or "").strip()
+    resolved_date = supply_data.plan_date or str(plan_date or "").strip()
+    resolved_type = str(supply_data.supply_type or "").strip()
+    if not resolved_supply_id:
+        raise ValueError("В QR поставки нет номера поставки")
+    if not resolved_warehouse:
+        raise ValueError("В QR поставки нет склада назначения")
+    if not resolved_seller:
+        raise ValueError("В QR поставки нет наименования юридического лица")
+    if not resolved_date:
+        raise ValueError("В QR поставки нет даты поставки")
+    if not resolved_type:
+        raise ValueError("В QR поставки нет типа упаковки")
     return packing_repo.create_job(
-        supply_id=supply_data.supply_id or str(supply_id or "").strip(),
-        warehouse_name=supply_data.warehouse_name or str(warehouse_name or "").strip(),
-        seller_name=supply_data.seller_name or str(seller_name or "").strip(),
-        plan_date=supply_data.plan_date or str(plan_date or "").strip(),
+        supply_id=resolved_supply_id,
+        warehouse_name=resolved_warehouse,
+        seller_name=resolved_seller,
+        plan_date=resolved_date,
         box_type=str(box_type or "Короб").strip() or "Короб",
         packer_user_ids=packer_user_ids,
         created_by_user_id=created_by_user_id,
@@ -83,7 +98,7 @@ def create_wb_fbo_sheet_job(
         boxes_xlsx=boxes_xlsx,
         supply_qr_pdf=supply_qr_pdf,
         supply_qr_code=supply_data.qr_code,
-        supply_type=supply_data.supply_type,
+        supply_type=resolved_type,
         source_pallet_count=supply_data.pallet_count,
         products=products,
         boxes=_boxes_for_job(boxes),

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from app.adapters.base import is_value_configured
 from app.config import Settings
@@ -33,6 +33,31 @@ _CANCELLED_DOC = re.compile(r"cancel|reject|delet", re.I)
 class CargoUnitPage:
     page_index: int
     cargo_code: str
+
+
+def normalize_yandex_fbo_cargo_label_pdf(
+    pdf_bytes: bytes,
+    *,
+    rotate_degrees: int = 90,
+) -> bytes:
+    """CARGO_UNITS YM приходит книжной ориентации; 90° — лента термопринтера."""
+    if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+        return pdf_bytes
+    if not rotate_degrees or rotate_degrees % 360 == 0:
+        return pdf_bytes
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        for page in writer.pages:
+            page.rotate(int(rotate_degrees))
+            page.transfer_rotation_to_content()
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception:
+        return pdf_bytes
 
 
 def parse_cargo_units_pdf(pdf_bytes: bytes) -> list[CargoUnitPage]:

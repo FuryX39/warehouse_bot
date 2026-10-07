@@ -855,3 +855,132 @@ def test_productivity_manual_rework_rows(db_url, tmp_path):
         assert "больше нуля" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_productivity_share_splits_only_source_work(db_url, tmp_path):
+    users, _ = _init(db_url, tmp_path)
+    anna = users.create_user(login="anna", password="secret", display_name="Анна")
+    boris = users.create_user(login="boris", password="secret", display_name="Борис")
+    dmitry = users.create_user(login="dmitry", password="secret", display_name="Дмитрий")
+    event_ts = int(
+        datetime(2026, 10, 1, 12, 0, tzinfo=ZoneInfo("Asia/Novosibirsk")).timestamp()
+    )
+    with Session(users.engine) as session:
+        job = FbsPackingJob(
+            marketplace="wildberries",
+            order_substatus="STARTED",
+            build_list=True,
+            require_cis=False,
+            supply_id="SUP-SHARE",
+            transfer_number="",
+            status="done",
+            created_by_user_id=None,
+            sheet_url="",
+            sheet_title="",
+            merged_label_stored_name="",
+            warnings_json="[]",
+            created_at_ts=event_ts,
+            updated_at_ts=event_ts,
+        )
+        session.add(job)
+        session.flush()
+        job_id = int(job.id)
+        for seq in range(1, 5):
+            session.add(
+                FbsPackingLine(
+                    job_id=job.id,
+                    seq=seq,
+                    sku=f"SKU-{seq}",
+                    product_id=None,
+                    product_name="Товар",
+                    order_id=f"O-{seq}",
+                    box_id=None,
+                    place_index=1,
+                    place_total=1,
+                    scan_keys_json="[]",
+                    label_stored_name="",
+                    status="done",
+                    printed_at_ts=event_ts,
+                    done_at_ts=event_ts,
+                    done_by_user_id=anna.id,
+                    cis_raw="",
+                    cis_key="",
+                    cis_gtin="",
+                )
+            )
+        for seq in (5, 6):
+            session.add(
+                FbsPackingLine(
+                    job_id=job.id,
+                    seq=seq,
+                    sku=f"SKU-{seq}",
+                    product_id=None,
+                    product_name="Товар",
+                    order_id=f"O-{seq}",
+                    box_id=None,
+                    place_index=1,
+                    place_total=1,
+                    scan_keys_json="[]",
+                    label_stored_name="",
+                    status="done",
+                    printed_at_ts=event_ts,
+                    done_at_ts=event_ts,
+                    done_by_user_id=dmitry.id,
+                    cis_raw="",
+                    cis_key="",
+                    cis_gtin="",
+                )
+            )
+        session.commit()
+
+    repo = WarehouseProductivityRepository(db_url)
+    repo.init_schema()
+    saved = repo.set_shared_packers(
+        event_date="2026-10-01",
+        task_type="fbs",
+        task_id=job_id,
+        source_user_id=anna.id,
+        user_ids=[boris.id],
+        created_by_user_id=anna.id,
+    )
+    assert saved["packer_user_ids"] == [boris.id]
+
+    anna_rows = repo.list_rows({"user_id": str(anna.id), "date_from": "2026-10-01", "date_to": "2026-10-01"})
+    boris_rows = repo.list_rows({"user_id": str(boris.id), "date_from": "2026-10-01", "date_to": "2026-10-01"})
+    dmitry_rows = repo.list_rows({"user_id": str(dmitry.id), "date_from": "2026-10-01", "date_to": "2026-10-01"})
+    assert anna_rows["rows"][0]["quantity"] == 2
+    assert anna_rows["rows"][0]["packer_user_ids"] == [boris.id]
+    assert boris_rows["rows"][0]["quantity"] == 2
+    assert boris_rows["rows"][0]["has_own_work"] is False
+    assert dmitry_rows["rows"][0]["quantity"] == 2
+    assert dmitry_rows["total_quantity"] == 2
+
+    month = repo.list_user_month(user_id=anna.id, year=2026, month=10)
+    assert month["total_quantity"] == 2
+    assert month["days"][0]["tasks"][0]["packer_user_ids"] == [boris.id]
+
+    try:
+        repo.set_shared_packers(
+            event_date="2026-10-01",
+            task_type="fbs",
+            task_id=job_id,
+            source_user_id=boris.id,
+            user_ids=[anna.id],
+            created_by_user_id=boris.id,
+        )
+    except ValueError as exc:
+        assert "собственной выработки" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    repo.set_shared_packers(
+        event_date="2026-10-01",
+        task_type="fbs",
+        task_id=job_id,
+        source_user_id=anna.id,
+        user_ids=[],
+        created_by_user_id=anna.id,
+    )
+    restored = repo.list_rows({"user_id": str(anna.id), "date_from": "2026-10-01", "date_to": "2026-10-01"})
+    assert restored["rows"][0]["quantity"] == 4
+    assert repo.list_rows({"user_id": str(boris.id), "date_from": "2026-10-01", "date_to": "2026-10-01"})["rows"] == []

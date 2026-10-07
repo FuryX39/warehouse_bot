@@ -90,6 +90,29 @@ class WarehouseProductivityManualRow(_Base):
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class WarehouseProductivityShare(_Base):
+    __tablename__ = "warehouse_productivity_shares"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_date",
+            "task_type",
+            "task_id",
+            "source_user_id",
+            "user_id",
+            name="uq_productivity_share_row",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_date: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    task_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    created_by_user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 def _timezone() -> ZoneInfo:
     name = (os.getenv("WAREHOUSE_TIMEZONE") or "Asia/Novosibirsk").strip()
     try:
@@ -154,6 +177,13 @@ def _pay_amount(
     if rate is None:
         return None
     return rate * Decimal(quantity)
+
+
+def _split_quantities(total: int, parts: int) -> list[int]:
+    count = max(1, int(parts))
+    qty = max(0, int(total))
+    base, remainder = divmod(qty, count)
+    return [base + remainder] + [base] * (count - 1)
 
 
 def _sum_pay(amounts: list[Decimal | None]) -> str:
@@ -353,6 +383,257 @@ class WarehouseProductivityRepository:
             )
         return rates, exclusions
 
+    def _load_shares(
+        self,
+        conn,
+        *,
+        date_from: str = "",
+        date_to: str = "",
+    ) -> list[dict[str, Any]]:
+        clauses = ["TRUE"]
+        params: dict[str, Any] = {}
+        if date_from:
+            clauses.append("event_date >= :date_from")
+            params["date_from"] = date_from
+        if date_to:
+            clauses.append("event_date <= :date_to")
+            params["date_to"] = date_to
+        rows = conn.execute(
+            text(
+                "SELECT event_date, task_type, task_id, source_user_id, user_id "
+                "FROM warehouse_productivity_shares WHERE "
+                + " AND ".join(clauses)
+            ),
+            params,
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    def _inbound_share(
+        self,
+        *,
+        event_date: str,
+        task_type: str,
+        task_id: int,
+        user_id: int,
+    ) -> dict[str, Any] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT s.source_user_id, s.user_id,
+                           COALESCE(u.display_name, u.login, '') AS source_name
+                    FROM warehouse_productivity_shares s
+                    LEFT JOIN warehouse_users u ON u.id = s.source_user_id
+                    WHERE s.event_date = :event_date AND s.task_type = :task_type
+                      AND s.task_id = :task_id AND s.user_id = :user_id
+                    ORDER BY s.id
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "event_date": str(event_date).strip(),
+                    "task_type": task_type,
+                    "task_id": int(task_id),
+                    "user_id": int(user_id),
+                },
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def _apply_shares(
+        self,
+        grouped: dict[tuple[str, int, str, int], dict[str, Any]],
+        shares: list[dict[str, Any]],
+        users: dict[int, dict[str, str]],
+    ) -> None:
+        extras_by_source: dict[tuple[str, int, str, int], list[int]] = {}
+        for share in shares:
+            source_key = (
+                str(share["event_date"]),
+                int(share["source_user_id"]),
+                str(share["task_type"]),
+                int(share["task_id"]),
+            )
+            extra_id = int(share["user_id"])
+            extras_by_source.setdefault(source_key, [])
+            if extra_id not in extras_by_source[source_key]:
+                extras_by_source[source_key].append(extra_id)
+
+        originals = {
+            key: int(row["quantity"])
+            for key, row in grouped.items()
+            if row.get("has_own_work")
+        }
+        for source_key, extra_ids in extras_by_source.items():
+            source_row = grouped.get(source_key)
+            if source_row is None or not source_row.get("has_own_work"):
+                continue
+            extra_ids = [uid for uid in extra_ids if uid != source_key[1]]
+            if not extra_ids:
+                continue
+            parts = _split_quantities(originals.get(source_key, 0), 1 + len(extra_ids))
+            source_row["quantity"] = parts[0]
+            source_names = []
+            for extra_id, extra_qty in zip(extra_ids, parts[1:]):
+                extra_key = (source_key[0], extra_id, source_key[2], source_key[3])
+                extra_user = users.get(extra_id, {})
+                extra_name = extra_user.get("display_name") or f"Сотрудник #{extra_id}"
+                source_names.append({"user_id": extra_id, "display_name": extra_name})
+                if extra_key in grouped:
+                    grouped[extra_key]["quantity"] += extra_qty
+                    continue
+                source_name = source_row.get("employee") or f"Сотрудник #{source_key[1]}"
+                grouped[extra_key] = {
+                    "date": source_row["date"],
+                    "event_ts": source_row["event_ts"],
+                    "user_id": extra_id,
+                    "employee": extra_name,
+                    "login": extra_user.get("login") or "",
+                    "quantity": extra_qty,
+                    "task_type": source_row["task_type"],
+                    "task_type_name": source_row["task_type_name"],
+                    "task_id": source_row["task_id"],
+                    "task_data": f"{source_row['task_data']} · доля от {source_name}",
+                    "has_own_work": False,
+                    "packer_user_ids": [],
+                    "packers": [],
+                    "shared_from_user_id": source_key[1],
+                    "shared_from": source_name,
+                }
+            source_row["packer_user_ids"] = extra_ids
+            source_row["packers"] = source_names
+
+    def list_shared_packers(
+        self,
+        *,
+        event_date: str,
+        task_type: str,
+        task_id: int,
+        source_user_id: int,
+    ) -> dict[str, Any]:
+        day = date.fromisoformat(str(event_date).strip()).isoformat()
+        task_type = str(task_type or "").strip()
+        task_id = int(task_id)
+        source_user_id = int(source_user_id)
+        if task_type not in _TYPE_NAMES:
+            raise ValueError("Неизвестный тип задачи")
+        if task_id <= 0 or source_user_id <= 0:
+            raise ValueError("Задание и сотрудник должны быть указаны")
+        with Session(self.engine) as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT s.user_id, u.display_name, u.login
+                    FROM warehouse_productivity_shares s
+                    JOIN warehouse_users u ON u.id = s.user_id
+                    WHERE s.event_date = :event_date AND s.task_type = :task_type
+                      AND s.task_id = :task_id AND s.source_user_id = :source_user_id
+                    ORDER BY u.display_name, u.login
+                    """
+                ),
+                {
+                    "event_date": day,
+                    "task_type": task_type,
+                    "task_id": task_id,
+                    "source_user_id": source_user_id,
+                },
+            ).mappings()
+            packers = [
+                {
+                    "user_id": int(row["user_id"]),
+                    "display_name": str(row["display_name"] or row["login"] or row["user_id"]),
+                }
+                for row in rows
+            ]
+        return {"packers": packers, "packer_user_ids": [item["user_id"] for item in packers]}
+
+    def set_shared_packers(
+        self,
+        *,
+        event_date: str,
+        task_type: str,
+        task_id: int,
+        source_user_id: int,
+        user_ids: list[int],
+        created_by_user_id: int | None = None,
+    ) -> dict[str, Any]:
+        day = date.fromisoformat(str(event_date).strip()).isoformat()
+        task_type = str(task_type or "").strip()
+        task_id = int(task_id)
+        source_user_id = int(source_user_id)
+        created_by = int(created_by_user_id or source_user_id)
+        if task_type not in _TYPE_NAMES:
+            raise ValueError("Неизвестный тип задачи")
+        if task_id <= 0 or source_user_id <= 0:
+            raise ValueError("Задание и сотрудник должны быть указаны")
+        extras: list[int] = []
+        seen: set[int] = set()
+        for raw in user_ids or []:
+            uid = int(raw)
+            if uid <= 0 or uid == source_user_id or uid in seen:
+                continue
+            extras.append(uid)
+            seen.add(uid)
+        own = self.list_details(
+            event_date=day,
+            task_type=task_type,
+            task_id=task_id,
+            user_id=source_user_id,
+            include_shares=False,
+        )
+        if int(own.get("quantity") or 0) <= 0:
+            raise ValueError("Нет собственной выработки по этому заданию")
+        now_ts = int(datetime.now(_timezone()).timestamp())
+        with Session(self.engine) as session:
+            if extras:
+                found = {
+                    int(row["id"])
+                    for row in session.execute(
+                        text(
+                            "SELECT id FROM warehouse_users WHERE id IN ("
+                            + ", ".join(f":p{i}" for i in range(len(extras)))
+                            + ")"
+                        ),
+                        {f"p{i}": uid for i, uid in enumerate(extras)},
+                    ).mappings()
+                }
+                missing = [uid for uid in extras if uid not in found]
+                if missing:
+                    raise ValueError("Выбранный сотрудник не найден")
+            session.execute(
+                text(
+                    """
+                    DELETE FROM warehouse_productivity_shares
+                    WHERE event_date = :event_date AND task_type = :task_type
+                      AND task_id = :task_id AND source_user_id = :source_user_id
+                    """
+                ),
+                {
+                    "event_date": day,
+                    "task_type": task_type,
+                    "task_id": task_id,
+                    "source_user_id": source_user_id,
+                },
+            )
+            for uid in extras:
+                session.add(
+                    WarehouseProductivityShare(
+                        event_date=day,
+                        task_type=task_type,
+                        task_id=task_id,
+                        source_user_id=source_user_id,
+                        user_id=uid,
+                        created_by_user_id=created_by,
+                        created_at_ts=now_ts,
+                    )
+                )
+            session.commit()
+        return self.list_shared_packers(
+            event_date=day,
+            task_type=task_type,
+            task_id=task_id,
+            source_user_id=source_user_id,
+        )
+
     def _move_exclusion(
         self,
         conn,
@@ -419,13 +700,31 @@ class WarehouseProductivityRepository:
         if max_qty is not None and max_qty < 0:
             raise ValueError("Максимальное количество не может быть отрицательным")
 
+        date_from = str(f.get("date_from") or "").strip()
+        date_to = str(f.get("date_to") or "").strip()
         params: dict[str, Any] = {}
         if date_from_ts is not None:
             params["date_from_ts"] = date_from_ts
         if date_to_ts is not None:
             params["date_to_ts"] = date_to_ts
+
+        sql_user_ids: list[int] | None = None
+        shares: list[dict[str, Any]] = []
+        with self.engine.connect() as share_conn:
+            shares = self._load_shares(
+                share_conn,
+                date_from=date_from,
+                date_to=date_to,
+            )
         if user_id is not None:
-            params["user_id"] = user_id
+            related = {user_id}
+            for share in shares:
+                if int(share["user_id"]) == user_id or int(share["source_user_id"]) == user_id:
+                    related.add(int(share["user_id"]))
+                    related.add(int(share["source_user_id"]))
+            sql_user_ids = sorted(related)
+            for index, uid in enumerate(sql_user_ids):
+                params[f"uid{index}"] = uid
 
         def common(ts: str, uid: str) -> str:
             clauses = ["TRUE"]
@@ -433,8 +732,9 @@ class WarehouseProductivityRepository:
                 clauses.append(f"{ts} >= :date_from_ts")
             if date_to_ts is not None:
                 clauses.append(f"{ts} <= :date_to_ts")
-            if user_id is not None:
-                clauses.append(f"{uid} = :user_id")
+            if sql_user_ids is not None:
+                placeholders = ", ".join(f":uid{index}" for index in range(len(sql_user_ids)))
+                clauses.append(f"{uid} IN ({placeholders})")
             return " AND ".join(clauses)
         queries = [
             (
@@ -579,9 +879,21 @@ class WarehouseProductivityRepository:
                     "task_type_name": _TYPE_NAMES[task_type],
                     "task_id": task_id,
                     "task_data": self._task_data(task_type, task_id, item),
+                    "has_own_work": True,
+                    "packer_user_ids": [],
+                    "packers": [],
+                    "shared_from_user_id": None,
+                    "shared_from": "",
                 }
             grouped[key]["quantity"] += max(0, int(item.get("quantity") or 0))
             grouped[key]["event_ts"] = max(grouped[key]["event_ts"], event_ts)
+            grouped[key]["has_own_work"] = True
+            grouped[key]["packer_user_ids"] = []
+            grouped[key]["packers"] = []
+            grouped[key]["shared_from_user_id"] = None
+            grouped[key]["shared_from"] = ""
+
+        self._apply_shares(grouped, shares, users)
 
         for key, row in grouped.items():
             day, uid, task_type, task_id = key
@@ -595,6 +907,8 @@ class WarehouseProductivityRepository:
         q = str(f.get("q") or "").strip().casefold()
         rows = []
         for row in grouped.values():
+            if user_id is not None and int(row["user_id"]) != user_id:
+                continue
             if task_type_filter and row["task_type"] != task_type_filter:
                 continue
             if min_qty is not None and row["quantity"] < min_qty:
@@ -693,6 +1007,11 @@ class WarehouseProductivityRepository:
                     "task_data": row["task_data"],
                     "quantity": quantity,
                     "pay": pay_text,
+                    "has_own_work": bool(row.get("has_own_work", True)),
+                    "packer_user_ids": list(row.get("packer_user_ids") or []),
+                    "packers": list(row.get("packers") or []),
+                    "shared_from_user_id": row.get("shared_from_user_id"),
+                    "shared_from": row.get("shared_from") or "",
                 }
             )
 
@@ -715,6 +1034,7 @@ class WarehouseProductivityRepository:
         task_type: str,
         task_id: int,
         user_id: int,
+        include_shares: bool = True,
     ) -> dict[str, Any]:
         try:
             date_from_ts = _date_start_ts(event_date)
@@ -859,10 +1179,65 @@ class WarehouseProductivityRepository:
                         "quantity": max(0, int(row.get("quantity") or 0)),
                     }
                 )
-        return {
+        payload = {
             "details": details,
             "quantity": sum(item["quantity"] for item in details),
             "row_count": len(details),
+        }
+        if payload["quantity"] > 0 or not include_shares:
+            return payload
+        share = self._inbound_share(
+            event_date=str(event_date).strip(),
+            task_type=task_type,
+            task_id=task_id,
+            user_id=user_id,
+        )
+        if share is None:
+            return payload
+        extras = self.list_shared_packers(
+            event_date=str(event_date).strip(),
+            task_type=task_type,
+            task_id=task_id,
+            source_user_id=int(share["source_user_id"]),
+        )
+        source_qty = int(
+            self.list_details(
+                event_date=str(event_date).strip(),
+                task_type=task_type,
+                task_id=task_id,
+                user_id=int(share["source_user_id"]),
+                include_shares=False,
+            )["quantity"]
+        )
+        extra_ids = list(extras.get("packer_user_ids") or [])
+        parts = _split_quantities(source_qty, 1 + len(extra_ids))
+        try:
+            extra_index = extra_ids.index(int(user_id))
+        except ValueError:
+            return payload
+        share_qty = parts[extra_index + 1]
+        source_name = str(share.get("source_name") or share["source_user_id"])
+        return {
+            "details": [
+                {
+                    "line_id": 0,
+                    "event_ts": date_from_ts or 0,
+                    "completed_at": datetime.fromtimestamp(
+                        date_from_ts or 0, tz
+                    ).strftime("%d.%m.%Y %H:%M:%S")
+                    if date_from_ts
+                    else "",
+                    "reference": f"Доля выработки от {source_name}",
+                    "sku": "",
+                    "product_name": f"Доля выработки от {source_name}",
+                    "quantity": share_qty,
+                }
+            ],
+            "quantity": share_qty,
+            "row_count": 1,
+            "shared": True,
+            "shared_from_user_id": int(share["source_user_id"]),
+            "shared_from": source_name,
         }
 
     def reassign_row(
@@ -1000,6 +1375,60 @@ class WarehouseProductivityRepository:
                 from_user_id=from_user_id,
                 to_user_id=to_user_id,
             )
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM warehouse_productivity_shares
+                    WHERE event_date = :event_date AND task_type = :task_type
+                      AND task_id = :task_id
+                      AND (
+                          (source_user_id = :from_user_id AND user_id = :to_user_id)
+                          OR (source_user_id = :to_user_id AND user_id = :from_user_id)
+                      )
+                    """
+                ),
+                {
+                    "event_date": str(event_date).strip(),
+                    "task_type": task_type,
+                    "task_id": task_id,
+                    "from_user_id": from_user_id,
+                    "to_user_id": to_user_id,
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE warehouse_productivity_shares
+                    SET source_user_id = :to_user_id
+                    WHERE event_date = :event_date AND task_type = :task_type
+                      AND task_id = :task_id AND source_user_id = :from_user_id
+                    """
+                ),
+                {
+                    "event_date": str(event_date).strip(),
+                    "task_type": task_type,
+                    "task_id": task_id,
+                    "from_user_id": from_user_id,
+                    "to_user_id": to_user_id,
+                },
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE warehouse_productivity_shares
+                    SET user_id = :to_user_id
+                    WHERE event_date = :event_date AND task_type = :task_type
+                      AND task_id = :task_id AND user_id = :from_user_id
+                    """
+                ),
+                {
+                    "event_date": str(event_date).strip(),
+                    "task_type": task_type,
+                    "task_id": task_id,
+                    "from_user_id": from_user_id,
+                    "to_user_id": to_user_id,
+                },
+            )
         employee = str(target["display_name"] or target["login"] or to_user_id)
         return {
             "ok": True,
@@ -1131,6 +1560,24 @@ class WarehouseProductivityRepository:
                 task_id=task_id,
                 from_user_id=user_id,
                 to_date=str(to_date).strip(),
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE warehouse_productivity_shares
+                    SET event_date = :to_date
+                    WHERE event_date = :event_date AND task_type = :task_type
+                      AND task_id = :task_id
+                      AND (source_user_id = :user_id OR user_id = :user_id)
+                    """
+                ),
+                {
+                    "event_date": str(event_date).strip(),
+                    "to_date": str(to_date).strip(),
+                    "task_type": task_type,
+                    "task_id": task_id,
+                    "user_id": user_id,
+                },
             )
         return {
             "ok": True,

@@ -14,7 +14,11 @@ from app.config import Settings
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
 from app.web.warehouse_assignment_helpers import requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
-from app.yandex_fbo_api import YandexFboApi, get_configured_yandex_fbo_api
+from app.yandex_fbo_api import (
+    YandexFboApi,
+    get_configured_yandex_fbo_api,
+    normalize_yandex_fbo_cargo_label_pdf,
+)
 from app.yandex_fbo_repository import YandexFboRepository
 from app.yandex_fbo_service import create_yandex_fbo_job
 
@@ -95,6 +99,11 @@ def register_warehouse_yandex_fbo_routes(
             )
         if not packing_repo.user_can_pack(int(job_id), int(actor.user.id)):
             raise HTTPException(status_code=403, detail="Задание назначено другому упаковщику")
+
+    def _job_labels_pdf(job_id: int) -> bytes:
+        pdf = packing_repo.read_job_labels_pdf(int(job_id))
+        degrees = 90 if settings is None else int(settings.yandex_fbo_label_rotate_degrees)
+        return normalize_yandex_fbo_cargo_label_pdf(pdf, rotate_degrees=degrees)
 
     def _resolve_barcode(job_id: int, barcode: str) -> dict[str, Any]:
         try:
@@ -223,7 +232,7 @@ def register_warehouse_yandex_fbo_routes(
             _: WarehouseUserRow = Depends(require_warehouse_user),
         ) -> Response:
             try:
-                pdf = packing_repo.read_job_labels_pdf(int(job_id))
+                pdf = _job_labels_pdf(int(job_id))
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return Response(
@@ -249,6 +258,7 @@ def register_warehouse_yandex_fbo_routes(
             require_packer=_require_packer,
             packer_job_payload=_packer_job_payload,
             resolve_barcode=_resolve_barcode,
+            job_labels_pdf=_job_labels_pdf,
         )
 
 
@@ -263,6 +273,7 @@ def _register_packer_prefix(
     require_packer,
     packer_job_payload,
     resolve_barcode,
+    job_labels_pdf,
 ) -> None:
     tag = "v1" if v1 else "wh"
     if v1:
@@ -348,7 +359,7 @@ def _register_packer_prefix(
     ) -> Response:
         require_packer(actor, job_id)
         try:
-            pdf = packing_repo.read_job_labels_pdf(int(job_id))
+            pdf = job_labels_pdf(int(job_id))
         except ValueError as exc:
             raise _http_value_error(exc) from exc
         return Response(

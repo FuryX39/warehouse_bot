@@ -226,6 +226,43 @@ def register_warehouse_staff_routes(
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/warehouse/employees/productivity/packers")
+    async def api_warehouse_employee_productivity_packers(
+        request: Request,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        try:
+            return productivity_repo.list_shared_packers(
+                event_date=str(request.query_params.get("date") or "").strip(),
+                task_type=str(request.query_params.get("task_type") or "").strip(),
+                task_id=int(request.query_params.get("task_id") or 0),
+                source_user_id=int(request.query_params.get("user_id") or 0),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/warehouse/employees/productivity/packers")
+    async def api_warehouse_employee_productivity_packers_save(
+        body: dict,
+        user: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        raw_ids = body.get("user_ids")
+        if raw_ids is None:
+            raw_ids = []
+        if not isinstance(raw_ids, list):
+            raise HTTPException(status_code=400, detail="user_ids должен быть массивом")
+        try:
+            return productivity_repo.set_shared_packers(
+                event_date=str(body.get("date") or "").strip(),
+                task_type=str(body.get("task_type") or "").strip(),
+                task_id=int(body.get("task_id")),
+                source_user_id=int(body.get("user_id") or body.get("from_user_id") or 0),
+                user_ids=[int(item) for item in raw_ids],
+                created_by_user_id=int(user.id),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.put("/api/warehouse/employees/productivity/employee")
     async def api_warehouse_employee_productivity_employee(
         body: dict,

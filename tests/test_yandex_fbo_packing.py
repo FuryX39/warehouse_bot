@@ -14,7 +14,12 @@ from app.crm_repository import CrmRepository
 from app.warehouse_users_repository import WarehouseUsersRepository
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.web.warehouse_yandex_fbo_routes import register_warehouse_yandex_fbo_routes
-from app.yandex_fbo_api import normalize_supply_item, normalize_supply_request, parse_cargo_units_pdf
+from app.yandex_fbo_api import (
+    normalize_supply_item,
+    normalize_supply_request,
+    normalize_yandex_fbo_cargo_label_pdf,
+    parse_cargo_units_pdf,
+)
 from app.yandex_fbo_repository import YandexFboRepository
 from app.yandex_fbo_service import create_yandex_fbo_job
 
@@ -26,7 +31,7 @@ CARGO_B = "B02540C0DF00035BC1CF"
 
 def _pdf(*codes: str) -> bytes:
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=(220, 90))
+    c = canvas.Canvas(buf, pagesize=(90, 220))
     for index, code in enumerate(codes):
         if index:
             c.showPage()
@@ -159,6 +164,15 @@ def test_parse_cargo_units_pdf_pages() -> None:
     pages = parse_cargo_units_pdf(_pdf(CARGO_A, CARGO_B))
     assert [page.cargo_code for page in pages] == [CARGO_A, CARGO_B]
     assert [page.page_index for page in pages] == [0, 1]
+
+
+def test_normalize_yandex_fbo_cargo_label_pdf_landscape() -> None:
+    source = PdfReader(io.BytesIO(_pdf(CARGO_A)))
+    assert float(source.pages[0].mediabox.height) > float(source.pages[0].mediabox.width)
+    rotated = normalize_yandex_fbo_cargo_label_pdf(_pdf(CARGO_A))
+    page = PdfReader(io.BytesIO(rotated)).pages[0]
+    assert float(page.mediabox.width) > float(page.mediabox.height)
+    assert parse_cargo_units_pdf(rotated)[0].cargo_code == CARGO_A
 
 
 def test_parse_cargo_units_pdf_missing_code() -> None:
@@ -375,8 +389,10 @@ def test_create_assign_resolve_and_labels(db_url: str, tmp_path) -> None:
     labels = client.get(f"/api/v1/yandex-fbo-packing/jobs/{job_id}/labels.pdf")
     assert labels.status_code == 200
     assert labels.content.startswith(b"%PDF")
-    assert labels.content == api.pdf
-    assert len(PdfReader(io.BytesIO(labels.content)).pages) == 2
+    assert labels.content == normalize_yandex_fbo_cargo_label_pdf(api.pdf)
+    served = PdfReader(io.BytesIO(labels.content))
+    assert len(served.pages) == 2
+    assert float(served.pages[0].mediabox.width) > float(served.pages[0].mediabox.height)
     assert api.downloads == 1
 
     collide_api = FakeYandexFboApi(

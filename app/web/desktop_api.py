@@ -62,6 +62,14 @@ class ProductivityBody(BaseModel):
     month: int | None = None
 
 
+class ProductivityPackersBody(BaseModel):
+    password: str = Field(default="")
+    date: str = Field(default="")
+    task_type: str = Field(default="")
+    task_id: int = 0
+    user_ids: list[int] = Field(default_factory=list)
+
+
 def _session_signing_key(secret: str) -> str:
     return hashlib.sha256((_SESSION_KEY_PREFIX + secret).encode("utf-8")).hexdigest()
 
@@ -288,6 +296,33 @@ def create_desktop_api_app(settings: Settings) -> FastAPI:
                 user_id=user.id,
                 year=body.year,
                 month=body.month,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/v1/productivity/employees")
+    async def api_productivity_employees(
+        user: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        _ = user
+        return {"employees": warehouse_users_repo.list_assignee_picker()}
+
+    @app.put("/api/v1/productivity/packers")
+    async def api_productivity_packers(
+        body: ProductivityPackersBody,
+        user: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        confirmed = warehouse_users_repo.authenticate(user.login, body.password)
+        if confirmed is None or confirmed.id != user.id:
+            raise HTTPException(status_code=401, detail="Неверный пароль")
+        try:
+            return productivity_repo.set_shared_packers(
+                event_date=body.date,
+                task_type=body.task_type,
+                task_id=int(body.task_id),
+                source_user_id=int(user.id),
+                user_ids=list(body.user_ids or []),
+                created_by_user_id=int(user.id),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -1255,6 +1255,7 @@
       ".wh-prod-reassign-info{margin:0 0 14px;color:#526071;line-height:1.5}.wh-prod-reassign-field{margin-bottom:12px}.wh-prod-reassign-field label{display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#526071}.wh-prod-reassign-field select,.wh-prod-reassign-field input[type=date],.wh-prod-reassign-field input[type=number],.wh-prod-reassign-field textarea{box-sizing:border-box;width:100%;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}.wh-prod-reassign-field select,.wh-prod-reassign-field input[type=date],.wh-prod-reassign-field input[type=number]{height:38px}.wh-prod-reassign-field textarea{min-height:88px;padding:8px 10px;resize:vertical}" +
       ".wh-prod-rate-list{display:grid;gap:12px}.wh-prod-rate-row{display:grid;grid-template-columns:minmax(140px,1fr) 140px;gap:10px;align-items:center}.wh-prod-rate-row label{margin:0;color:#334155;font-size:14px;font-weight:600}.wh-prod-rate-row input{box-sizing:border-box;width:100%;height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;font:inherit}" +
       ".wh-prod-rate-hint{margin:0 0 14px;color:#64748b;font-size:13px;line-height:1.45}" +
+      ".wh-prod-drop{position:relative}.wh-prod-drop-toggle{box-sizing:border-box;width:100%;height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;text-align:left;font:inherit;cursor:pointer}.wh-prod-drop-toggle:after{content:'▾';float:right;color:#64748b}.wh-prod-drop-menu{position:absolute;z-index:5;left:0;right:0;top:40px;max-height:240px;overflow:auto;padding:6px 0;border:1px solid #cbd5e1;border-radius:7px;background:#fff;box-shadow:0 8px 20px rgba(15,23,42,.12)}.wh-prod-drop-option{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:14px;cursor:pointer}.wh-prod-drop-option:hover{background:#f8fbff}.wh-prod-packers{margin-top:4px;color:#64748b;font-size:12px;line-height:1.35}" +
       "@media(max-width:900px){.wh-prod-filter-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.wh-prod-field--wide{grid-column:span 2}}" +
       "@media(max-width:620px){.wh-prod-search-row{grid-template-columns:1fr 1fr}.wh-prod-search{grid-column:1/-1}.wh-prod-filter-grid{grid-template-columns:1fr}.wh-prod-field--wide{grid-column:auto}.wh-productivity-summary{grid-template-columns:1fr 1fr}.wh-prod-detail-panel{padding-left:10px}.wh-prod-rate-row{grid-template-columns:1fr}}";
     document.head.appendChild(style);
@@ -1358,6 +1359,118 @@
         return '<option value="' + esc(employee.id) + '"' + selected + ">" + esc(name) + "</option>";
       })
       .join("");
+  }
+
+  function packersToggleLabel(selectedIds) {
+    var names = employees
+      .filter(function (employee) {
+        return selectedIds.indexOf(Number(employee.id)) >= 0;
+      })
+      .map(function (employee) {
+        return employee.display_name || employee.login || "Сотрудник #" + employee.id;
+      });
+    if (!names.length) return "Не выбрано";
+    if (names.length === 1) return names[0];
+    return names[0] + " и ещё " + (names.length - 1);
+  }
+
+  function openPackersEditor(row, root) {
+    var selected = (row.packer_user_ids || []).map(Number);
+    var others = employees.filter(function (employee) {
+      return Number(employee.id) !== Number(row.user_id) && employee.is_active !== false;
+    });
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal" role="dialog" aria-modal="true">' +
+      '<div class="wh-modal-header"><h3>Упаковщики задания</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-prod-reassign-info"><strong>' +
+      esc(row.employee) +
+      "</strong><br>" +
+      esc(row.task_type_name) +
+      " · " +
+      esc(row.task_data) +
+      "<br>Выработка делится поровну между этим сотрудником и выбранными. Чужие операции по этому заданию не делятся.</p>" +
+      '<div class="wh-prod-reassign-field"><label>Дополнительные упаковщики</label>' +
+      '<div class="wh-prod-drop"><button type="button" class="wh-prod-drop-toggle" id="whProdPackersToggle">' +
+      esc(packersToggleLabel(selected)) +
+      '</button><div class="wh-prod-drop-menu" id="whProdPackersMenu" hidden>' +
+      others
+        .map(function (employee) {
+          var checked = selected.indexOf(Number(employee.id)) >= 0 ? " checked" : "";
+          return (
+            '<label class="wh-prod-drop-option"><input type="checkbox" value="' +
+            esc(employee.id) +
+            '"' +
+            checked +
+            " /> " +
+            esc(employee.display_name || employee.login || "Сотрудник #" + employee.id) +
+            "</label>"
+          );
+        })
+        .join("") +
+      (others.length ? "" : '<div class="wh-prod-drop-option">Нет других сотрудников</div>') +
+      "</div></div></div>" +
+      '<p class="wh-msg" id="whProdPackersMsg"></p></div>' +
+      '<div class="wh-modal-footer"><button type="button" class="wh-btn wh-btn-primary wh-modal-save">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+    function currentIds() {
+      return Array.prototype.slice
+        .call(backdrop.querySelectorAll("#whProdPackersMenu input[type=checkbox]:checked"))
+        .map(function (input) {
+          return parseInt(input.value, 10);
+        })
+        .filter(function (id) {
+          return id > 0;
+        });
+    }
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) close();
+    });
+    var toggle = backdrop.querySelector("#whProdPackersToggle");
+    var menu = backdrop.querySelector("#whProdPackersMenu");
+    toggle.addEventListener("click", function () {
+      menu.hidden = !menu.hidden;
+    });
+    menu.addEventListener("change", function () {
+      toggle.textContent = packersToggleLabel(currentIds());
+    });
+    backdrop.querySelector(".wh-modal-save").addEventListener("click", function () {
+      var save = backdrop.querySelector(".wh-modal-save");
+      var msg = backdrop.querySelector("#whProdPackersMsg");
+      save.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сохранение…";
+      shell()
+        .fetchJson("/api/warehouse/employees/productivity/packers", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: row.date,
+            task_type: row.task_type,
+            task_id: row.task_id,
+            user_id: row.user_id,
+            user_ids: currentIds(),
+          }),
+        })
+        .then(function () {
+          close();
+          return refresh(root);
+        })
+        .catch(function (error) {
+          save.disabled = false;
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = error.message || "Не удалось сохранить упаковщиков";
+        });
+    });
   }
 
   function openEmployeeEditor(row, root) {
@@ -1809,9 +1922,23 @@
           esc(index) +
           '">Изменить</button></td><td><span class="wh-prod-employee">' +
           esc(row.employee) +
-          '</span><button type="button" class="wh-prod-edit" data-edit="employee" data-row-index="' +
+          "</span>" +
+          (row.packers && row.packers.length
+            ? '<div class="wh-prod-packers">ещё: ' +
+              esc(row.packers.map(function (item) { return item.display_name; }).join(", ")) +
+              "</div>"
+            : "") +
+          (row.shared_from
+            ? '<div class="wh-prod-packers">' + esc(row.shared_from ? "доля от " + row.shared_from : "") + "</div>"
+            : "") +
+          '<button type="button" class="wh-prod-edit" data-edit="employee" data-row-index="' +
           esc(index) +
           '">Изменить</button>' +
+          (row.has_own_work === false
+            ? ""
+            : '<button type="button" class="wh-prod-edit" data-edit="packers" data-row-index="' +
+              esc(index) +
+              '">Упаковщики</button>') +
           '</td><td class="wh-productivity-qty">' +
           '<span class="wh-prod-qty-number">' +
           esc(row.quantity) +
@@ -1866,6 +1993,7 @@
         if (!row) return;
         if (button.getAttribute("data-edit") === "date") openDateEditor(row, root);
         else if (button.getAttribute("data-edit") === "employee") openEmployeeEditor(row, root);
+        else if (button.getAttribute("data-edit") === "packers") openPackersEditor(row, root);
         else if (button.getAttribute("data-edit") === "counted") {
           button.disabled = true;
           setRowCounted(row, root, row.counted === false).catch(function (error) {
