@@ -12,6 +12,12 @@ from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.repositories import InventoryRepository
 from app.sales_analysis import MARKETPLACES, MARKETPLACE_IDS, build_sales_analysis
+from app.sales_report import build_sales_report
+from app.stock_by_warehouse_report import (
+    build_stock_by_warehouse_report,
+    source_meta,
+)
+from app.warehouse_orders_repository import WarehouseOrdersRepository
 from app.warehouse_users_repository import WarehouseUserRow
 from app.wb_acquiring_report import AcquiringExportJobs, parse_year_month
 from app.web.warehouse_catalog_routes import _attachment_disposition
@@ -28,6 +34,7 @@ def register_warehouse_reports_routes(
     crm_repo: CrmRepository,
     require_warehouse_user,
     wb_api_token: str = "",
+    orders_repo: WarehouseOrdersRepository | None = None,
 ) -> None:
     acquiring_jobs = AcquiringExportJobs(wb_api_token)
     @app.get("/api/warehouse/reports/sales-analysis/meta")
@@ -104,6 +111,60 @@ def register_warehouse_reports_routes(
             },
         )
 
+    @app.get("/api/warehouse/reports/sales-report/meta")
+    async def api_sales_report_meta(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        return {"marketplaces": list(MARKETPLACES)}
+
+    @app.get("/api/warehouse/reports/sales-report/export")
+    async def api_sales_report_export(
+        marketplace: str = Query(..., description="ozon | yandex_market | wildberries"),
+        date_from: str = Query(..., description="YYYY-MM-DD"),
+        date_to: str = Query(..., description="YYYY-MM-DD"),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        if orders_repo is None:
+            raise HTTPException(status_code=500, detail="Репозиторий заказов не подключён")
+
+        def _run() -> tuple[bytes, dict, str]:
+            result = build_sales_report(
+                orders_repo,
+                catalog_repo,
+                marketplace_id=marketplace,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            stats = {
+                "marketplace": result.marketplace_title,
+                "date_from": result.date_from,
+                "date_to": result.date_to,
+                "rows": len(result.rows),
+                "quantity": result.total_quantity,
+                "sum": str(result.total_amount) if result.total_amount is not None else "",
+                "missing_amount_count": result.missing_amount_count,
+            }
+            return result.workbook_bytes, stats, result.filename
+
+        try:
+            content, stats, filename = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": _attachment_disposition(filename),
+                "X-Sales-Report-Stats": _header_json(stats),
+            },
+        )
+
     @app.get("/api/warehouse/reports/wb-acquiring/meta")
     async def api_wb_acquiring_meta(
         _: WarehouseUserRow = Depends(require_warehouse_user),
@@ -149,4 +210,60 @@ def register_warehouse_reports_routes(
             content=content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": _attachment_disposition(filename)},
+        )
+
+    @app.get("/api/warehouse/reports/stock-by-warehouse/meta")
+    async def api_stock_by_warehouse_meta(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        return {
+            "sources": source_meta(),
+            "wb_configured": bool((wb_api_token or "").strip()),
+        }
+
+    @app.get("/api/warehouse/reports/stock-by-warehouse/export")
+    async def api_stock_by_warehouse_export(
+        source: str = Query(..., description="own | wb | yandex | ozon"),
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        def _run() -> tuple[bytes, dict, str]:
+            result = build_stock_by_warehouse_report(
+                catalog_repo,
+                source=source,
+                wb_api_token=wb_api_token,
+            )
+            stats = {
+                "source": result.source_id,
+                "source_title": result.source_title,
+                "warehouse": result.warehouse_title,
+                "rows": len(result.rows),
+                "quantity": result.total_quantity,
+                "missing_name_count": result.missing_name_count,
+            }
+            return result.workbook_bytes, stats, result.filename
+
+        try:
+            content, stats, filename = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=str(exc) or "Не удалось получить остатки WB",
+            ) from exc
+
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": _attachment_disposition(filename),
+                "X-Stock-By-Warehouse-Stats": _header_json(stats),
+            },
         )

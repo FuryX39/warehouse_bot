@@ -346,13 +346,270 @@
       });
   }
 
+  function sourceOptionsHtml(sources, selectedId) {
+    return (sources || [])
+      .map(function (item) {
+        var id = item.id;
+        var sel = String(selectedId || "wb") === String(id) ? " selected" : "";
+        var dis = item.implemented ? "" : " disabled";
+        var label = item.title + (item.implemented ? "" : " (скоро)");
+        return '<option value="' + esc(id) + '"' + sel + dis + ">" + esc(label) + "</option>";
+      })
+      .join("");
+  }
+
+  function bindStockByWarehouse(root) {
+    var form = root.querySelector("#whStockWhForm");
+    var msg = root.querySelector("#whStockWhMsg");
+    if (!form) return;
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      msg.className = "wh-msg";
+      msg.textContent = "";
+      var source = root.querySelector("#whStockWhSource").value;
+      if (!source) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите источник остатков.";
+        return;
+      }
+      var submitBtn = root.querySelector("#whStockWhSubmit");
+      submitBtn.disabled = true;
+      msg.textContent = "Запрашиваем остатки WB. Обычно это занимает до минуты.";
+      var url =
+        "/api/warehouse/reports/stock-by-warehouse/export?source=" + encodeURIComponent(source);
+      fetch(url, { credentials: "include" })
+        .then(function (r) {
+          var stats = parseHeaderJson("X-Stock-By-Warehouse-Stats", r.headers);
+          if (!r.ok) {
+            return r.text().then(function (text) {
+              var detail = text || "HTTP " + r.status;
+              try {
+                var json = JSON.parse(text);
+                if (json && json.detail) detail = json.detail;
+              } catch (e2) {}
+              throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать отчёт");
+            });
+          }
+          return r.blob().then(function (blob) {
+            return { blob: blob, stats: stats };
+          });
+        })
+        .then(function (result) {
+          var stats = result.stats || {};
+          downloadBlob(result.blob, "ostatki_sklady_wb.xlsx");
+          var extra = "";
+          if (stats.missing_name_count) {
+            extra =
+              " Без названия в каталоге: " + stats.missing_name_count + " арт.";
+          }
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent =
+            "Готово. Позиций: " +
+            (stats.rows || 0) +
+            ", количество: " +
+            (stats.quantity || 0) +
+            "." +
+            extra +
+            " Файл скачан.";
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
+  }
+
+  function renderStockByWarehouse(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML = '<p class="wh-placeholder">Загрузка...</p>';
+    shell()
+      .fetchJson("/api/warehouse/reports/stock-by-warehouse/meta")
+      .then(function (data) {
+        var sources = (data && data.sources) || [];
+        if (data && data.wb_configured === false) {
+          root.innerHTML =
+            '<div class="wh-route-card">' +
+            '<p class="wh-msg wh-msg-error">Не задан WB_API_TOKEN. Для складов WB нужен токен с категорией «Аналитика».</p>' +
+            "</div>";
+          return;
+        }
+        root.innerHTML =
+          '<div class="wh-route-card">' +
+          '<p class="wh-muted">Выгрузка остатков выбранного источника в Excel: артикул, название из каталога, количество. ' +
+          "Сейчас работает только «Склады WB»: берётся колонка «Склад WB РФ». " +
+          "Остальные источники появятся позже.</p>" +
+          '<form id="whStockWhForm" class="wh-reports-form">' +
+          '<label><span>Источник остатков</span><select id="whStockWhSource" required>' +
+          sourceOptionsHtml(sources, "wb") +
+          "</select></label>" +
+          '<div class="wh-tools-actions">' +
+          '<button type="submit" class="wh-btn wh-btn-primary" id="whStockWhSubmit">Сформировать Excel</button>' +
+          "</div>" +
+          "</form>" +
+          '<p class="wh-msg" id="whStockWhMsg"></p>' +
+          "</div>";
+        bindStockByWarehouse(root);
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
+  function monthStartValue() {
+    var now = new Date();
+    var m = String(now.getMonth() + 1);
+    if (m.length < 2) m = "0" + m;
+    return now.getFullYear() + "-" + m + "-01";
+  }
+
+  function todayValue() {
+    var now = new Date();
+    var m = String(now.getMonth() + 1);
+    var d = String(now.getDate());
+    if (m.length < 2) m = "0" + m;
+    if (d.length < 2) d = "0" + d;
+    return now.getFullYear() + "-" + m + "-" + d;
+  }
+
+  function bindSalesReport(root) {
+    var form = root.querySelector("#whSalesReportForm");
+    var msg = root.querySelector("#whSalesReportMsg");
+    if (!form) return;
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      msg.className = "wh-msg";
+      msg.textContent = "";
+      var marketplace = root.querySelector("#whSalesReportMp").value;
+      var dateFrom = root.querySelector("#whSalesReportFrom").value;
+      var dateTo = root.querySelector("#whSalesReportTo").value;
+      if (!marketplace) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите маркетплейс.";
+        return;
+      }
+      if (!dateFrom || !dateTo) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Укажите период.";
+        return;
+      }
+      var submitBtn = root.querySelector("#whSalesReportSubmit");
+      submitBtn.disabled = true;
+      msg.textContent = "Формируем отчёт…";
+      var url =
+        "/api/warehouse/reports/sales-report/export?marketplace=" +
+        encodeURIComponent(marketplace) +
+        "&date_from=" +
+        encodeURIComponent(dateFrom) +
+        "&date_to=" +
+        encodeURIComponent(dateTo);
+      fetch(url, { credentials: "include" })
+        .then(function (r) {
+          var stats = parseHeaderJson("X-Sales-Report-Stats", r.headers);
+          if (!r.ok) {
+            return r.text().then(function (text) {
+              var detail = text || "HTTP " + r.status;
+              try {
+                var json = JSON.parse(text);
+                if (json && json.detail) detail = json.detail;
+              } catch (e2) {}
+              throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать отчёт");
+            });
+          }
+          return r.blob().then(function (blob) {
+            return { blob: blob, stats: stats };
+          });
+        })
+        .then(function (result) {
+          var stats = result.stats || {};
+          var mp = String(stats.marketplace || marketplace).replace(/\s+/g, "_");
+          downloadBlob(
+            result.blob,
+            "otchet_prodazhi_" + mp + "_" + dateFrom + "_" + dateTo + ".xlsx"
+          );
+          var extra = "";
+          if (stats.missing_amount_count) {
+            extra =
+              " Без суммы (нет цены с НДС): " + stats.missing_amount_count + " арт.";
+          }
+          var sumText = stats.sum === "" || stats.sum == null ? "—" : formatMoney(stats.sum);
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent =
+            "Готово. Позиций: " +
+            (stats.rows || 0) +
+            ", количество: " +
+            (stats.quantity || 0) +
+            ", сумма: " +
+            sumText +
+            "." +
+            extra +
+            " Файл скачан.";
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
+  }
+
+  function renderSalesReport(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML = '<p class="wh-placeholder">Загрузка...</p>';
+    shell()
+      .fetchJson("/api/warehouse/reports/sales-report/meta")
+      .then(function (data) {
+        var marketplaces = (data && data.marketplaces) || [];
+        root.innerHTML =
+          '<div class="wh-route-card">' +
+          '<p class="wh-muted">Заказы выбранного маркетплейса за период, свёрнутые по артикулу. ' +
+          "Сумма считается по полю «Цена с НДС» в заказе. На Wildberries это поле пока не заполняется — сумма будет пустой. " +
+          "На Яндекс Маркете сумма выводится из цены заказа.</p>" +
+          '<form id="whSalesReportForm" class="wh-reports-form">' +
+          '<label><span>Маркетплейс</span><select id="whSalesReportMp" required>' +
+          '<option value="">— выберите —</option>' +
+          optionsHtml(marketplaces, "id", "title", "") +
+          "</select></label>" +
+          '<label><span>С</span><input type="date" id="whSalesReportFrom" required value="' +
+          esc(monthStartValue()) +
+          '" /></label>' +
+          '<label><span>По</span><input type="date" id="whSalesReportTo" required value="' +
+          esc(todayValue()) +
+          '" /></label>' +
+          '<div class="wh-tools-actions">' +
+          '<button type="submit" class="wh-btn wh-btn-primary" id="whSalesReportSubmit">Сформировать Excel</button>' +
+          "</div>" +
+          "</form>" +
+          '<p class="wh-msg" id="whSalesReportMsg"></p>' +
+          "</div>";
+        bindSalesReport(root);
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
   function render(tab, item) {
     if (item.id === "sales-analysis") {
       renderSalesAnalysis(tab, item);
       return;
     }
+    if (item.id === "sales-report") {
+      renderSalesReport(tab, item);
+      return;
+    }
     if (item.id === "wb-acquiring") {
       renderWbAcquiring(tab, item);
+      return;
+    }
+    if (item.id === "stock-by-warehouse") {
+      renderStockByWarehouse(tab, item);
       return;
     }
     shell().contentTitleEl.textContent = item.title;

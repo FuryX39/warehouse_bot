@@ -648,6 +648,7 @@ def create_dashboard_app(
         crm_repo,
         require_warehouse_user,
         wb_api_token=settings.wb_api_token,
+        orders_repo=orders_repo,
     )
     register_warehouse_tools_routes(
         app,

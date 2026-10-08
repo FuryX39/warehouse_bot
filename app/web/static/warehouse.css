@@ -891,7 +891,8 @@ body.wh-body {
 
 .wh-repricer-form select,
 .wh-reports-form select,
-.wh-reports-form input[type="month"] {
+.wh-reports-form input[type="month"],
+.wh-reports-form input[type="date"] {
   width: 100%;
   border: 1px solid var(--wh-border);
   border-radius: 6px;
