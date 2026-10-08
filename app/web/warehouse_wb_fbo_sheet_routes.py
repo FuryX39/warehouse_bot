@@ -285,13 +285,15 @@ def _register_sheet_packer_prefix(
             if job is None:
                 raise ValueError("Задание не найдено")
             occupied = int(job.occupied_pallet_count or 0)
+            source = int(job.source_pallet_count or 0)
+            default_total = occupied if occupied > 0 else source
             try:
-                pallet_total = int(payload.get("pallet_total") or occupied)
+                pallet_total = int(payload.get("pallet_total") or default_total)
                 print_count = int(payload.get("print_count") or pallet_total)
             except (TypeError, ValueError) as exc:
                 raise ValueError("Количество паллет должно быть числом") from exc
-            if occupied <= 0 and not payload.get("pallet_total") and not payload.get("print_count"):
-                raise ValueError("Нет паллет с назначенными грузоместами")
+            if pallet_total < 1 or print_count < 1:
+                raise ValueError("Укажите количество упаковочных листов")
             return generate_wb_fbo_packing_sheets_pdf(
                 WbFboPackingSheetData(
                     supply_id=job.supply_id,

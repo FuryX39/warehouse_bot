@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
 from app.catalog_repository import CatalogRepository
@@ -225,6 +226,27 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     qr = client.get(f"/api/v1/fbo-sheet-packing/jobs/{job_id}/supply-qr.pdf")
     assert qr.status_code == 200
     assert qr.content.startswith(b"%PDF")
+
+    default_sheets = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/pallet-sheets.pdf",
+        json={},
+    )
+    assert default_sheets.status_code == 200, default_sheets.text
+    default_reader = PdfReader(BytesIO(default_sheets.content))
+    assert len(default_reader.pages) == 9
+    default_text = default_reader.pages[0].extract_text() or ""
+    assert "Упаковочный лист" in default_text
+    assert "Количество паллет в поставке –" in default_text
+
+    selected_sheets = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/pallet-sheets.pdf",
+        json={"print_count": 2, "pallet_total": 9},
+    )
+    assert selected_sheets.status_code == 200, selected_sheets.text
+    selected_reader = PdfReader(BytesIO(selected_sheets.content))
+    assert len(selected_reader.pages) == 2
+    selected_text = selected_reader.pages[1].extract_text() or ""
+    assert "Количество паллет в поставке –" in selected_text and "9" in selected_text
 
     printed = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
