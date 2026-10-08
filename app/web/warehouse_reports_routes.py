@@ -238,6 +238,8 @@ def register_warehouse_reports_routes(
                 "warehouse": result.warehouse_title,
                 "rows": len(result.rows),
                 "quantity": result.total_quantity,
+                "in_transit": result.total_in_transit,
+                "total": result.total_all,
                 "missing_name_count": result.missing_name_count,
             }
             return result.workbook_bytes, stats, result.filename

@@ -16,8 +16,14 @@ from app.adapters.base import is_value_configured
 from app.catalog_repository import CatalogRepository
 
 ANALYTICS_BASE = "https://seller-analytics-api.wildberries.ru"
+SUPPLIES_BASE = "https://supplies-api.wildberries.ru"
 WB_RF_WAREHOUSE = "Склад WB РФ"
 MISSING_NAME = "Товар не найден в каталоге"
+# 2 запланирована, 3 отгрузка разрешена, 6 отгружено на воротах.
+IN_TRANSIT_STATUS_IDS = (2, 3, 6)
+_SUPPLIES_PAGE = 1000
+_GOODS_PAGE = 1000
+_SUPPLIES_MIN_INTERVAL_SEC = 0.2
 
 SOURCES: tuple[dict[str, Any], ...] = (
     {"id": "own", "title": "Среди своих складов", "implemented": False},
@@ -26,9 +32,10 @@ SOURCES: tuple[dict[str, Any], ...] = (
     {"id": "ozon", "title": "Склады Ozon", "implemented": False},
 )
 SOURCE_IDS = frozenset(item["id"] for item in SOURCES)
-_HEADERS = ("Артикул", "Название", "Количество")
+_HEADERS = ("Артикул", "Название", "Количество", "В пути", "Всего")
 
 FetchRawFn = Callable[[str], list[dict[str, Any]]]
+FetchInTransitFn = Callable[[str], dict[str, int]]
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,8 @@ class StockByWarehouseRow:
     sku: str
     name: str
     quantity: int
+    in_transit: int
+    total: int
 
 
 @dataclass(frozen=True)
@@ -45,9 +54,23 @@ class StockByWarehouseResult:
     warehouse_title: str
     rows: list[StockByWarehouseRow]
     total_quantity: int
+    total_in_transit: int
+    total_all: int
     missing_name_count: int
     workbook_bytes: bytes
     filename: str
+
+
+class _RequestPace:
+    def __init__(self, interval_sec: float) -> None:
+        self.interval_sec = interval_sec
+        self._last = 0.0
+
+    def wait(self) -> None:
+        delay = self._last + self.interval_sec - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self._last = time.monotonic()
 
 
 def source_meta() -> list[dict[str, Any]]:
@@ -74,7 +97,7 @@ def _as_list(raw: Any) -> list[Any]:
     if isinstance(raw, list):
         return raw
     if isinstance(raw, dict):
-        for key in ("data", "report", "reports", "stocks", "items"):
+        for key in ("data", "report", "reports", "stocks", "items", "supplies", "goods"):
             inner = raw.get(key)
             if isinstance(inner, list):
                 return inner
@@ -122,6 +145,58 @@ def _task_status(payload: Any) -> str:
         if value:
             return value
     return ""
+
+
+def _positive_int(raw: object) -> int | None:
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _supply_fetch_key(item: dict[str, Any]) -> tuple[int, bool] | None:
+    supply_id = _positive_int(item.get("supplyID"))
+    if supply_id:
+        return supply_id, False
+    preorder_id = _positive_int(item.get("preorderID"))
+    if preorder_id:
+        return preorder_id, True
+    return None
+
+
+def _supplies_json(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json: Any = None,
+    params: dict[str, Any] | None = None,
+    pace: _RequestPace | None = None,
+    retry_429: int = 4,
+) -> Any:
+    for attempt in range(retry_429 + 1):
+        if pace is not None:
+            pace.wait()
+        response = requests.request(
+            method,
+            url,
+            headers=headers,
+            json=json,
+            params=params,
+            timeout=90,
+        )
+        if response.status_code == 429:
+            time.sleep(2 * (attempt + 1))
+            continue
+        if not response.ok:
+            raise _http_error(response)
+        if response.status_code == 204 or not (response.content or b"").strip():
+            return None
+        return response.json()
+    raise ValueError("WB ограничивает частоту запросов к поставкам. Повторите через минуту.")
 
 
 def fetch_wb_warehouse_remains(token: str, *, timeout_sec: int = 180) -> list[dict[str, Any]]:
@@ -180,6 +255,112 @@ def fetch_wb_warehouse_remains(token: str, *, timeout_sec: int = 180) -> list[di
     return [item for item in _as_list(payload) if isinstance(item, dict)]
 
 
+def _list_in_transit_supplies(token: str, pace: _RequestPace) -> list[dict[str, Any]]:
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    offset = 0
+    out: list[dict[str, Any]] = []
+    while True:
+        payload = _supplies_json(
+            "POST",
+            f"{SUPPLIES_BASE}/api/v1/supplies",
+            headers=headers,
+            params={"limit": _SUPPLIES_PAGE, "offset": offset},
+            json={"statusIDs": list(IN_TRANSIT_STATUS_IDS)},
+            pace=pace,
+        )
+        items = [item for item in _as_list(payload) if isinstance(item, dict)]
+        if not items:
+            break
+        out.extend(items)
+        if len(items) < _SUPPLIES_PAGE:
+            break
+        offset += len(items)
+    return out
+
+
+def _fetch_supply_goods(
+    token: str,
+    supply_id: int,
+    *,
+    is_preorder: bool,
+    pace: _RequestPace,
+) -> list[dict[str, Any]]:
+    headers = {"Authorization": token}
+    offset = 0
+    out: list[dict[str, Any]] = []
+    while True:
+        params: dict[str, Any] = {"limit": _GOODS_PAGE, "offset": offset}
+        if is_preorder:
+            params["isPreorderID"] = "true"
+        payload = _supplies_json(
+            "GET",
+            f"{SUPPLIES_BASE}/api/v1/supplies/{supply_id}/goods",
+            headers=headers,
+            params=params,
+            pace=pace,
+        )
+        items = [item for item in _as_list(payload) if isinstance(item, dict)]
+        if not items:
+            break
+        out.extend(items)
+        if len(items) < _GOODS_PAGE:
+            break
+        offset += len(items)
+    return out
+
+
+def aggregate_in_transit_quantities(goods_rows: list[dict[str, Any]]) -> dict[str, int]:
+    by_key: dict[str, tuple[str, int]] = {}
+    for row in goods_rows:
+        sku = str(row.get("vendorCode") or "").strip()
+        if not sku:
+            continue
+        qty = _qty(row.get("quantity"))
+        if qty <= 0:
+            continue
+        key = sku.casefold()
+        prev_sku, prev_qty = by_key.get(key, (sku, 0))
+        by_key[key] = (prev_sku, prev_qty + qty)
+    return {sku: qty for sku, qty in by_key.values()}
+
+
+def fetch_wb_in_transit_quantities(token: str) -> dict[str, int]:
+    if not is_value_configured(token):
+        raise ValueError("Не задан WB_API_TOKEN")
+    pace = _RequestPace(_SUPPLIES_MIN_INTERVAL_SEC)
+    try:
+        supplies = _list_in_transit_supplies(token, pace)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        if status in (401, 403):
+            raise ValueError(
+                "Нет доступа к поставкам WB. Нужен токен с категорией «Поставки»."
+            ) from exc
+        raise RuntimeError(str(exc)) from exc
+    by_key: dict[str, tuple[str, int]] = {}
+    for item in supplies:
+        fetch_key = _supply_fetch_key(item)
+        if fetch_key is None:
+            continue
+        supply_id, is_preorder = fetch_key
+        try:
+            goods = _fetch_supply_goods(token, supply_id, is_preorder=is_preorder, pace=pace)
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if status == 404:
+                continue
+            if status in (401, 403):
+                raise ValueError(
+                    "Нет доступа к поставкам WB. Нужен токен с категорией «Поставки»."
+                ) from exc
+            raise RuntimeError(str(exc)) from exc
+        for sku, qty in aggregate_in_transit_quantities(goods).items():
+            key = sku.casefold()
+            prev_sku, prev_qty = by_key.get(key, (sku, 0))
+            by_key[key] = (prev_sku, prev_qty + qty)
+    return {sku: qty for sku, qty in by_key.values()}
+
+
 def aggregate_wb_rf_quantities(raw_rows: list[dict[str, Any]]) -> dict[str, int]:
     wanted = WB_RF_WAREHOUSE.casefold()
     by_key: dict[str, tuple[str, int]] = {}
@@ -213,18 +394,35 @@ def aggregate_wb_rf_quantities(raw_rows: list[dict[str, Any]]) -> dict[str, int]
 def build_wb_stock_rows(
     raw_rows: list[dict[str, Any]],
     catalog_by_sku: dict[str, dict[str, Any]],
+    in_transit: dict[str, int] | None = None,
 ) -> list[StockByWarehouseRow]:
     quantities = aggregate_wb_rf_quantities(raw_rows)
+    transit = dict(in_transit or {})
+    stock_by_key = {sku.casefold(): (sku, qty) for sku, qty in quantities.items()}
+    transit_by_key = {sku.casefold(): (sku, qty) for sku, qty in transit.items()}
     rows: list[StockByWarehouseRow] = []
-    for sku, qty in sorted(quantities.items(), key=lambda item: item[0].casefold()):
-        catalog = catalog_by_sku.get(sku.casefold())
+    for key in sorted(set(stock_by_key) | set(transit_by_key)):
+        sku = stock_by_key.get(key, transit_by_key.get(key, (key, 0)))[0]
+        stock_qty = stock_by_key.get(key, (sku, 0))[1]
+        transit_qty = transit_by_key.get(key, (sku, 0))[1]
+        if stock_qty <= 0 and transit_qty <= 0:
+            continue
+        catalog = catalog_by_sku.get(key)
         if catalog:
             display_sku = str(catalog.get("sku") or sku).strip() or sku
             name = str(catalog.get("name") or "").strip() or MISSING_NAME
         else:
             display_sku = sku
             name = MISSING_NAME
-        rows.append(StockByWarehouseRow(sku=display_sku, name=name, quantity=int(qty)))
+        rows.append(
+            StockByWarehouseRow(
+                sku=display_sku,
+                name=name,
+                quantity=int(stock_qty),
+                in_transit=int(transit_qty),
+                total=int(stock_qty) + int(transit_qty),
+            )
+        )
     return rows
 
 
@@ -245,34 +443,50 @@ def build_stock_workbook(
         top=Side(style="thin", color="D8DEE9"),
         bottom=Side(style="thin", color="D8DEE9"),
     )
+    ncols = len(_HEADERS)
     ws.append(["Источник", _excel_safe_text(source_title)])
     ws.append(["Склад", _excel_safe_text(warehouse_title)])
     ws.append([])
     ws.append(list(_HEADERS))
-    for col in range(1, len(_HEADERS) + 1):
+    for col in range(1, ncols + 1):
         cell = ws.cell(row=4, column=col)
         cell.font = header_font
         cell.fill = header_fill
         cell.border = thin
-    total = 0
+    total_quantity = 0
+    total_in_transit = 0
+    total_all = 0
     for row in rows:
-        ws.append([_excel_safe_text(row.sku), _excel_safe_text(row.name), int(row.quantity)])
+        ws.append(
+            [
+                _excel_safe_text(row.sku),
+                _excel_safe_text(row.name),
+                int(row.quantity),
+                int(row.in_transit),
+                int(row.total),
+            ]
+        )
         excel_row = ws.max_row
-        for col in range(1, 4):
+        for col in range(1, ncols + 1):
             ws.cell(row=excel_row, column=col).border = thin
-        total += int(row.quantity)
+        total_quantity += int(row.quantity)
+        total_in_transit += int(row.in_transit)
+        total_all += int(row.total)
     if rows:
-        ws.append(["Итого", "", total])
+        ws.append(["Итого", "", total_quantity, total_in_transit, total_all])
         total_row = ws.max_row
-        for col in range(1, 4):
+        for col in range(1, ncols + 1):
             cell = ws.cell(row=total_row, column=col)
             cell.font = header_font
             cell.border = thin
-        ws.cell(row=total_row, column=3).alignment = Alignment(horizontal="right")
+        for col in range(3, ncols + 1):
+            ws.cell(row=total_row, column=col).alignment = Alignment(horizontal="right")
     ws.column_dimensions[get_column_letter(1)].width = 22
     ws.column_dimensions[get_column_letter(2)].width = 56
-    ws.column_dimensions[get_column_letter(3)].width = 16
-    ws.auto_filter.ref = f"A4:C{max(4, len(rows) + 4)}"
+    for col in range(3, ncols + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 14
+    last_data_row = max(4, len(rows) + 4)
+    ws.auto_filter.ref = f"A4:{get_column_letter(ncols)}{last_data_row}"
     ws.freeze_panes = "A5"
     buf = io.BytesIO()
     wb.save(buf)
@@ -285,6 +499,7 @@ def build_stock_by_warehouse_report(
     source: str,
     wb_api_token: str = "",
     fetch_wb_raw: FetchRawFn | None = None,
+    fetch_wb_in_transit: FetchInTransitFn | None = None,
 ) -> StockByWarehouseResult:
     source_id = str(source or "").strip().lower()
     if source_id not in SOURCE_IDS:
@@ -298,9 +513,16 @@ def build_stock_by_warehouse_report(
         raise ValueError(f"Выгрузка «{item['title']}» пока не реализована")
     fetcher = fetch_wb_raw or fetch_wb_warehouse_remains
     raw_rows = fetcher(wb_api_token)
+    if fetch_wb_in_transit is not None:
+        in_transit = fetch_wb_in_transit(wb_api_token)
+    elif fetch_wb_raw is not None:
+        in_transit = {}
+    else:
+        in_transit = fetch_wb_in_transit_quantities(wb_api_token)
     quantities = aggregate_wb_rf_quantities(raw_rows)
-    catalog_by_sku = catalog_repo.lookup_products_by_skus(list(quantities))
-    rows = build_wb_stock_rows(raw_rows, catalog_by_sku)
+    catalog_keys = list({*quantities, *in_transit})
+    catalog_by_sku = catalog_repo.lookup_products_by_skus(catalog_keys)
+    rows = build_wb_stock_rows(raw_rows, catalog_by_sku, in_transit)
     missing = sum(1 for row in rows if row.name == MISSING_NAME)
     title = str(item["title"])
     workbook = build_stock_workbook(rows, source_title=title, warehouse_title=WB_RF_WAREHOUSE)
@@ -310,6 +532,8 @@ def build_stock_by_warehouse_report(
         warehouse_title=WB_RF_WAREHOUSE,
         rows=rows,
         total_quantity=sum(row.quantity for row in rows),
+        total_in_transit=sum(row.in_transit for row in rows),
+        total_all=sum(row.total for row in rows),
         missing_name_count=missing,
         workbook_bytes=workbook,
         filename="ostatki_sklady_wb.xlsx",

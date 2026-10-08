@@ -374,7 +374,7 @@
       }
       var submitBtn = root.querySelector("#whStockWhSubmit");
       submitBtn.disabled = true;
-      msg.textContent = "Запрашиваем остатки WB. Обычно это занимает до минуты.";
+      msg.textContent = "Запрашиваем остатки и поставки WB. Обычно это занимает до минуты.";
       var url =
         "/api/warehouse/reports/stock-by-warehouse/export?source=" + encodeURIComponent(source);
       fetch(url, { credentials: "include" })
@@ -408,6 +408,10 @@
             (stats.rows || 0) +
             ", количество: " +
             (stats.quantity || 0) +
+            ", в пути: " +
+            (stats.in_transit || 0) +
+            ", всего: " +
+            (stats.total || 0) +
             "." +
             extra +
             " Файл скачан.";
@@ -439,9 +443,10 @@
         }
         root.innerHTML =
           '<div class="wh-route-card">' +
-          '<p class="wh-muted">Выгрузка остатков выбранного источника в Excel: артикул, название из каталога, количество. ' +
-          "Сейчас работает только «Склады WB»: берётся колонка «Склад WB РФ». " +
-          "Остальные источники появятся позже.</p>" +
+          '<p class="wh-muted">Выгрузка остатков выбранного источника в Excel: артикул, название из каталога, количество на складе, в пути и всего. ' +
+          "Сейчас работает только «Склады WB»: остаток берётся из колонки «Склад WB РФ». " +
+          "В пути — поставки FBO в статусах «запланирована», «отгрузка разрешена», «отгружено на воротах». " +
+          "Всего — сумма остатка и в пути. Остальные источники появятся позже.</p>" +
           '<form id="whStockWhForm" class="wh-reports-form">' +
           '<label><span>Источник остатков</span><select id="whStockWhSource" required>' +
           sourceOptionsHtml(sources, "wb") +
