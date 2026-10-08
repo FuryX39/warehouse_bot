@@ -1135,18 +1135,6 @@ class WbFboSheetRepository:
                     break
             if product is None:
                 raise ValueError("Товара с этим баркодом нет в задании")
-            open_pallet = session.scalars(
-                select(WbFboSheetPallet).where(
-                    WbFboSheetPallet.job_id == int(job_id),
-                    WbFboSheetPallet.status == PALLET_OPEN,
-                )
-            ).first()
-            if open_pallet is None:
-                raise ValueError("Сначала пикните паллет")
-            current_pallet = int(box.pallet_id) if box.pallet_id else 0
-            if current_pallet and current_pallet != int(open_pallet.id):
-                raise ValueError("Это грузоместо уже на другом паллете")
-            box.pallet_id = int(open_pallet.id)
             assigned = self._assigned_qty_by_barcode(session, job_id).get(barcode.casefold(), 0)
             left = int(product.qty_plan or 0) - assigned
             if qty > left:
