@@ -198,8 +198,8 @@ def _in_transit_list_body() -> dict[str, Any]:
         "dates": [
             {
                 "type": "createDate",
-                "from": f"{IN_TRANSIT_FROM_DATE.isoformat()}T00:00:00+03:00",
-                "till": f"{till.isoformat()}T23:59:59+03:00",
+                "from": IN_TRANSIT_FROM_DATE.isoformat(),
+                "till": till.isoformat(),
             }
         ],
     }

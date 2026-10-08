@@ -203,7 +203,10 @@ def test_fetch_wb_in_transit_quantities_lists_statuses_and_goods() -> None:
     assert calls[0][0] == "POST"
     assert calls[0][2]["statusIDs"] == [2, 3, 6]
     assert calls[0][2]["dates"][0]["type"] == "createDate"
-    assert calls[0][2]["dates"][0]["from"].startswith("2026-09-01")
+    assert calls[0][2]["dates"][0]["from"] == "2026-09-01"
+    till = str(calls[0][2]["dates"][0]["till"])
+    assert len(till) == 10 and till[4] == "-" and till[7] == "-"
+    assert "T" not in till
     goods_urls = [url for method, url, _body, _params in calls if method == "GET"]
     assert goods_urls == [
         "https://supplies-api.wildberries.ru/api/v1/supplies/11/goods",
