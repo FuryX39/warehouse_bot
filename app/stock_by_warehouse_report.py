@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import time
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import requests
 from openpyxl import Workbook
@@ -21,6 +23,8 @@ WB_RF_WAREHOUSE = "Склад WB РФ"
 MISSING_NAME = "Товар не найден в каталоге"
 # 2 запланирована, 3 отгрузка разрешена, 6 отгружено на воротах.
 IN_TRANSIT_STATUS_IDS = (2, 3, 6)
+IN_TRANSIT_FROM_DATE = date(2026, 9, 1)
+_TZ = ZoneInfo("Europe/Moscow")
 _SUPPLIES_PAGE = 1000
 _GOODS_PAGE = 1000
 _SUPPLIES_MIN_INTERVAL_SEC = 0.2
@@ -157,6 +161,50 @@ def _positive_int(raw: object) -> int | None:
     return value if value > 0 else None
 
 
+def _parse_wb_date(raw: object) -> date | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_TZ)
+    return parsed.astimezone(_TZ).date()
+
+
+def supply_matches_in_transit_cutoff(item: dict[str, Any]) -> bool:
+    created = _parse_wb_date(item.get("createDate"))
+    if created is not None:
+        return created >= IN_TRANSIT_FROM_DATE
+    planned = _parse_wb_date(item.get("supplyDate"))
+    if planned is not None:
+        return planned >= IN_TRANSIT_FROM_DATE
+    return False
+
+
+def _in_transit_list_body() -> dict[str, Any]:
+    till = datetime.now(_TZ).date()
+    if till < IN_TRANSIT_FROM_DATE:
+        till = IN_TRANSIT_FROM_DATE
+    return {
+        "statusIDs": list(IN_TRANSIT_STATUS_IDS),
+        "dates": [
+            {
+                "type": "createDate",
+                "from": f"{IN_TRANSIT_FROM_DATE.isoformat()}T00:00:00+03:00",
+                "till": f"{till.isoformat()}T23:59:59+03:00",
+            }
+        ],
+    }
+
+
 def _supply_fetch_key(item: dict[str, Any]) -> tuple[int, bool] | None:
     supply_id = _positive_int(item.get("supplyID"))
     if supply_id:
@@ -265,13 +313,13 @@ def _list_in_transit_supplies(token: str, pace: _RequestPace) -> list[dict[str, 
             f"{SUPPLIES_BASE}/api/v1/supplies",
             headers=headers,
             params={"limit": _SUPPLIES_PAGE, "offset": offset},
-            json={"statusIDs": list(IN_TRANSIT_STATUS_IDS)},
+            json=_in_transit_list_body(),
             pace=pace,
         )
         items = [item for item in _as_list(payload) if isinstance(item, dict)]
         if not items:
             break
-        out.extend(items)
+        out.extend(item for item in items if supply_matches_in_transit_cutoff(item))
         if len(items) < _SUPPLIES_PAGE:
             break
         offset += len(items)

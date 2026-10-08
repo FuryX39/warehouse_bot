@@ -11,11 +11,13 @@ from openpyxl import load_workbook
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.stock_by_warehouse_report import (
+    IN_TRANSIT_FROM_DATE,
     MISSING_NAME,
     WB_RF_WAREHOUSE,
     aggregate_in_transit_quantities,
     build_stock_by_warehouse_report,
     fetch_wb_in_transit_quantities,
+    supply_matches_in_transit_cutoff,
 )
 
 
@@ -125,6 +127,16 @@ def test_aggregate_in_transit_quantities_sums_vendor_codes() -> None:
     ) == {"SS100": 7, "SS400": 2}
 
 
+def test_supply_cutoff_keeps_from_september_2026() -> None:
+    assert IN_TRANSIT_FROM_DATE.isoformat() == "2026-09-01"
+    assert supply_matches_in_transit_cutoff({"createDate": "2026-09-01T00:00:00+03:00"})
+    assert supply_matches_in_transit_cutoff({"createDate": "2026-10-08T12:00:00+03:00"})
+    assert not supply_matches_in_transit_cutoff({"createDate": "2026-08-31T23:59:59+03:00"})
+    assert not supply_matches_in_transit_cutoff({"createDate": "2025-12-01T00:00:00+03:00"})
+    assert supply_matches_in_transit_cutoff({"supplyDate": "2026-09-15T00:00:00+03:00"})
+    assert not supply_matches_in_transit_cutoff({})
+
+
 def test_fetch_wb_in_transit_quantities_lists_statuses_and_goods() -> None:
     calls: list[tuple[str, str, dict | None, dict | None]] = []
 
@@ -146,9 +158,33 @@ def test_fetch_wb_in_transit_quantities_lists_statuses_and_goods() -> None:
         if method == "POST":
             return _Resp(
                 [
-                    {"supplyID": 11, "preorderID": 1, "statusID": 2},
-                    {"supplyID": None, "preorderID": 22, "statusID": 6},
-                    {"supplyID": 33, "statusID": 3},
+                    {
+                        "supplyID": 11,
+                        "preorderID": 1,
+                        "statusID": 2,
+                        "createDate": "2026-09-01T00:00:00+03:00",
+                    },
+                    {
+                        "supplyID": None,
+                        "preorderID": 22,
+                        "statusID": 6,
+                        "createDate": "2026-10-01T12:00:00+03:00",
+                    },
+                    {
+                        "supplyID": 33,
+                        "statusID": 3,
+                        "createDate": "2026-09-15T00:00:00+03:00",
+                    },
+                    {
+                        "supplyID": 44,
+                        "statusID": 2,
+                        "createDate": "2026-08-31T23:00:00+03:00",
+                    },
+                    {
+                        "supplyID": 55,
+                        "statusID": 2,
+                        "createDate": "2025-01-10T00:00:00+03:00",
+                    },
                 ]
             )
         if url.endswith("/11/goods"):
@@ -165,7 +201,15 @@ def test_fetch_wb_in_transit_quantities_lists_statuses_and_goods() -> None:
 
     assert result == {"SS100": 5, "SS400": 2}
     assert calls[0][0] == "POST"
-    assert calls[0][2] == {"statusIDs": [2, 3, 6]}
+    assert calls[0][2]["statusIDs"] == [2, 3, 6]
+    assert calls[0][2]["dates"][0]["type"] == "createDate"
+    assert calls[0][2]["dates"][0]["from"].startswith("2026-09-01")
+    goods_urls = [url for method, url, _body, _params in calls if method == "GET"]
+    assert goods_urls == [
+        "https://supplies-api.wildberries.ru/api/v1/supplies/11/goods",
+        "https://supplies-api.wildberries.ru/api/v1/supplies/22/goods",
+        "https://supplies-api.wildberries.ru/api/v1/supplies/33/goods",
+    ]
     assert calls[2][3]["isPreorderID"] == "true"
 
 
