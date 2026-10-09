@@ -240,6 +240,8 @@ class WbFboSheetJobRow:
     packer_user_ids: list[int]
     packer_names: list[str]
     product_total: int
+    sku_done: int
+    sku_pending: int
     pcs_plan: int
     pcs_assigned: int
     box_total: int
@@ -253,6 +255,25 @@ class WbFboSheetJobRow:
     boxes: list[WbFboSheetBoxRow] = field(default_factory=list)
     pallets: list[WbFboSheetPalletRow] = field(default_factory=list)
     open_pallet: WbFboSheetPalletRow | None = None
+
+
+def _sku_progress(products: list[WbFboSheetProductRow]) -> tuple[int, int]:
+    by_sku: dict[str, list[int]] = {}
+    for item in products:
+        key = str(item.sku or item.barcode or "").strip() or f"#{item.id}"
+        rec = by_sku.setdefault(key, [0, 0])
+        rec[0] += int(item.qty_plan or 0)
+        rec[1] += int(item.qty_assigned or 0)
+    done = 0
+    pending = 0
+    for plan, assigned in by_sku.values():
+        if plan <= 0:
+            continue
+        if assigned >= plan:
+            done += 1
+        else:
+            pending += 1
+    return done, pending
 
 
 class WbFboSheetRepository:
@@ -590,6 +611,7 @@ class WbFboSheetRepository:
             for row in boxes
         ]
         open_pallet = next((item for item in pallet_rows if item.status == PALLET_OPEN), None)
+        sku_done, sku_pending = _sku_progress(product_rows)
         return WbFboSheetJobRow(
             id=int(job.id),
             supply_id=str(job.supply_id or ""),
@@ -611,6 +633,8 @@ class WbFboSheetRepository:
             packer_user_ids=packer_ids,
             packer_names=names,
             product_total=len(product_rows),
+            sku_done=sku_done,
+            sku_pending=sku_pending,
             pcs_plan=sum(item.qty_plan for item in product_rows),
             pcs_assigned=sum(item.qty_assigned for item in product_rows),
             box_total=len(box_rows),
@@ -1399,6 +1423,8 @@ class WbFboSheetRepository:
             "packer_user_ids": job.packer_user_ids,
             "packer_names": job.packer_names,
             "product_total": job.product_total,
+            "sku_done": job.sku_done,
+            "sku_pending": job.sku_pending,
             "pcs_plan": job.pcs_plan,
             "pcs_assigned": job.pcs_assigned,
             "box_total": job.box_total,

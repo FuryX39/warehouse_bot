@@ -103,7 +103,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Поставка</th><th>Штук</th><th>Грузоместа</th><th>Упаковщики</th><th></th>" +
+      "<th>№</th><th>Поставка</th><th>Штук</th><th>Артикулы</th><th>Упаковщики</th><th></th>" +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -137,9 +137,9 @@
             " / " +
             esc(job.pcs_plan) +
             "</td><td>" +
-            esc(job.box_assigned) +
+            esc(job.sku_done) +
             " / " +
-            esc(job.box_total) +
+            esc(job.sku_pending) +
             "</td><td>" +
             esc((job.packer_names || []).join(", ") || "—") +
             '<br><button type="button" class="wh-btn wh-btn-sm wh-wb-fbo-new-packers-edit" data-id="' +
@@ -297,7 +297,7 @@
         assignees = data.assignees || [];
         root.innerHTML =
           '<div class="wh-route-card">' +
-          "<h3>FBO WB new</h3>" +
+          "<h3>WB FBO</h3>" +
           '<p class="wh-muted">Прикрепите таблицы из кабинета WB и PDF с QR поставки. ' +
           "Упаковщики раскладывают товар по грузоместам. Готовый файл грузомест скачивается в том же формате кабинета — загружаете его в WB сами.</p>" +
           '<div class="wh-route-form">' +

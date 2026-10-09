@@ -15,7 +15,13 @@ from reportlab.pdfgen import canvas
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.warehouse_users_repository import WarehouseUserRow
-from app.wb_fbo_sheet_repository import BOX_ASSIGNED, BOX_PRINTED, WbFboSheetRepository
+from app.wb_fbo_sheet_repository import (
+    BOX_ASSIGNED,
+    BOX_PRINTED,
+    WbFboSheetProductRow,
+    WbFboSheetRepository,
+    _sku_progress,
+)
 from app.wb_fbo_sheet_xlsx import fill_boxes_xlsx, parse_boxes_xlsx, parse_goods_xlsx
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.web.warehouse_wb_fbo_sheet_routes import register_warehouse_wb_fbo_sheet_routes
@@ -81,6 +87,78 @@ def _qr_pdf() -> bytes:
         pdf.drawString(20, 650 - index * 30, line)
     pdf.save()
     return buf.getvalue()
+
+
+def test_sku_progress_done_over_pending() -> None:
+    def row(sku: str, plan: int, assigned: int, pid: int = 1) -> WbFboSheetProductRow:
+        return WbFboSheetProductRow(
+            id=pid,
+            job_id=1,
+            seq=pid,
+            barcode=f"b{pid}",
+            sku=sku,
+            name="",
+            product_id=None,
+            qty_plan=plan,
+            qty_assigned=assigned,
+        )
+
+    assert _sku_progress([row("A", 10, 0), row("B", 5, 0, 2)]) == (0, 2)
+    assert _sku_progress([row("A", 10, 10), row("B", 5, 1, 2)]) == (1, 1)
+    assert _sku_progress([row("A", 10, 4), row("A", 5, 11, 2)]) == (1, 0)
+    assert _sku_progress([row("A", 10, 4), row("A", 5, 5, 2)]) == (0, 1)
+
+
+def test_sku_progress_marks_sku_done_when_plan_filled(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    goods = _workbook_bytes(
+        [
+            ["Баркод", "Количество, шт", "Артикул поставщика"],
+            ["4673746970607", 10, "SS958"],
+            ["4673746971086", 20, "SS959"],
+        ]
+    )
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", goods, xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job = created.json()["job"]
+    assert job["sku_done"] == 0
+    assert job["sku_pending"] == 2
+    job_id = job["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    assert printed.status_code == 200, printed.text
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    stored = packing.get_job(job_id)
+    assert stored is not None
+    assert stored.sku_done == 1
+    assert stored.sku_pending == 1
+    mine = client.get("/api/v1/fbo-sheet-packing/my")
+    assert mine.status_code == 200, mine.text
+    row = mine.json()["jobs"][0]
+    assert row["supply_id"] == "41505518"
+    assert row["sku_done"] == 1
+    assert row["sku_pending"] == 1
 
 
 def test_parse_example_wb_tables() -> None:
@@ -217,6 +295,8 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert job["pcs_plan"] == 2850
     assert job["box_total"] == 50
     assert job["box_assigned"] == 0
+    assert job["sku_done"] == 0
+    assert job["sku_pending"] == 4
     assert job["supply_id"] == "41505518"
     assert job["warehouse_name"] == "СЦ Коледино 2"
     assert job["source_pallet_count"] == 9
@@ -303,7 +383,11 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert by_id[second_box].qty == 37
     empty = [item for item in parsed if not item.product_barcode]
     assert len(empty) == 48
-    assert packing.get_job(job_id).pcs_assigned == 137
+    stored = packing.get_job(job_id)
+    assert stored is not None
+    assert stored.pcs_assigned == 137
+    assert stored.sku_done == 0
+    assert stored.sku_pending == 4
 
 
 def test_print_boxes_all_free_includes_already_printed(db_url: str, tmp_path) -> None:
@@ -735,6 +819,8 @@ def test_create_job_groups_prefilled_mixed_cargo(db_url: str, tmp_path) -> None:
     assert job["box_total"] == 2
     assert job["box_assigned"] == 1
     assert job["pcs_assigned"] == 30
+    assert job["sku_done"] == 0
+    assert job["sku_pending"] == 4
     stored = packing.get_job(job["id"], include_lines=True)
     assert stored is not None
     assigned = next(box for box in stored.boxes if box.status == BOX_ASSIGNED)
