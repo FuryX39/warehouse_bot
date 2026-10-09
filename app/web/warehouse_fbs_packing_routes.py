@@ -487,6 +487,41 @@ def register_warehouse_fbs_packing_routes(
             mark_packed_if_done(orders_repo, job)
             return {"job": packing_repo.job_to_dict(job, include_lines=True)}
 
+        @app.get("/api/warehouse/fbs-packing/jobs/{job_id}/orders")
+        async def api_fbs_packing_job_orders(
+            job_id: int,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Задание не найдено")
+            return {
+                "job": packing_repo.job_to_dict(job),
+                "orders": packing_repo.orders_from_lines(job.lines, job_status=job.status),
+            }
+
+        @app.post("/api/warehouse/fbs-packing/jobs/{job_id}/orders/cancel")
+        async def api_fbs_packing_job_order_cancel(
+            job_id: int,
+            body: dict,
+            user: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            payload = body if isinstance(body, dict) else {}
+            order_id = str(payload.get("order_id") or "").strip()
+            try:
+                job = packing_repo.cancel_order(
+                    job_id,
+                    order_id,
+                    int(user.id) if user else 0,
+                )
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            mark_packed_if_done(orders_repo, job)
+            return {
+                "job": packing_repo.job_to_dict(job),
+                "orders": packing_repo.orders_from_lines(job.lines, job_status=job.status),
+            }
+
         @app.post("/api/warehouse/fbs-packing/jobs/{job_id}/cancel")
         async def api_fbs_packing_job_cancel(
             job_id: int,

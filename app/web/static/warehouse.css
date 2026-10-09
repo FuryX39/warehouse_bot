@@ -527,6 +527,10 @@ body.wh-body {
   font-size: 0.9rem;
 }
 
+.wh-fbs-orders-table .wh-fbs-order-open td {
+  font-weight: 600;
+}
+
 @media (max-width: 760px) {
   .wh-route-form {
     grid-template-columns: 1fr;

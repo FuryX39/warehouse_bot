@@ -234,6 +234,10 @@
             '<button type="button" class="wh-btn wh-btn-sm wh-fbs-job-marking" data-id="' +
             esc(job.id) +
             '">Скачать ЧЗ</button>';
+          var details =
+            '<button type="button" class="wh-btn wh-btn-sm wh-fbs-job-orders" data-id="' +
+            esc(job.id) +
+            '">Детализация по заказам</button>';
           return (
             "<tr><td>#" +
             esc(job.id) +
@@ -268,6 +272,8 @@
             "</td><td>" +
             sheet +
             "</td><td>" +
+            details +
+            " " +
             marking +
             " " +
             cancel +
@@ -291,6 +297,11 @@
     wrap.querySelectorAll(".wh-fbs-job-marking").forEach(function (btn) {
       btn.addEventListener("click", function () {
         downloadMarking(root, parseInt(btn.getAttribute("data-id"), 10));
+      });
+    });
+    wrap.querySelectorAll(".wh-fbs-job-orders").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openJobOrders(root, parseInt(btn.getAttribute("data-id"), 10));
       });
     });
     wrap.querySelectorAll(".wh-fbs-packers-edit").forEach(function (btn) {
@@ -321,6 +332,120 @@
         if (input) saveTransfer(root, input);
       });
     });
+  }
+
+  function orderStatusLabel(status) {
+    if (status === "ready") return "Готов";
+    if (status === "cancelled") return "Отменён";
+    return "Не готов";
+  }
+
+  function renderJobOrdersTable(orders) {
+    if (!orders.length) {
+      return '<p class="wh-muted">В задании нет заказов.</p>';
+    }
+    return (
+      '<div class="wh-order-table-wrap"><table class="wh-employees-table wh-crm-table wh-fbs-orders-table"><thead><tr>' +
+      "<th>Заказ</th><th>Артикул</th><th>Название</th><th>Штук</th><th>Статус</th><th></th>" +
+      "</tr></thead><tbody>" +
+      orders
+        .map(function (order) {
+          var cancel =
+            order.can_cancel
+              ? '<button type="button" class="wh-btn wh-btn-sm wh-btn-danger wh-fbs-order-cancel" data-order="' +
+                esc(order.order_id) +
+                '">Отменить</button>'
+              : "";
+          return (
+            '<tr class="' +
+            (order.ready ? "" : "wh-fbs-order-open") +
+            '"><td>' +
+            esc(order.order_id) +
+            "</td><td>" +
+            esc(order.sku) +
+            "</td><td>" +
+            esc(order.product_name) +
+            "</td><td>" +
+            esc(order.line_total) +
+            "</td><td>" +
+            esc(orderStatusLabel(order.status)) +
+            "</td><td>" +
+            cancel +
+            "</td></tr>"
+          );
+        })
+        .join("") +
+      "</tbody></table></div>"
+    );
+  }
+
+  function bindJobOrdersModal(root, jobId, backdrop) {
+    backdrop.querySelectorAll(".wh-fbs-order-cancel").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var orderId = btn.getAttribute("data-order") || "";
+        if (!orderId) return;
+        if (
+          !window.confirm(
+            "Отменить заказ " +
+              orderId +
+              "? Несобранные строки станут готовыми у упаковщиков."
+          )
+        ) {
+          return;
+        }
+        btn.disabled = true;
+        shell()
+          .fetchJson("/api/warehouse/fbs-packing/jobs/" + jobId + "/orders/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ order_id: orderId }),
+          })
+          .then(function (data) {
+            var body = backdrop.querySelector(".wh-modal-body");
+            if (body) body.innerHTML = renderJobOrdersTable(data.orders || []);
+            bindJobOrdersModal(root, jobId, backdrop);
+            setMessage(root, "Заказ " + orderId + " отменён.", false);
+            loadJobs(root);
+          })
+          .catch(function (error) {
+            btn.disabled = false;
+            setMessage(root, error.message || "Не удалось отменить заказ", true);
+          });
+      });
+    });
+  }
+
+  function openJobOrders(root, jobId) {
+    if (!jobId) return;
+    shell()
+      .fetchJson("/api/warehouse/fbs-packing/jobs/" + jobId + "/orders")
+      .then(function (data) {
+        var backdrop = document.createElement("div");
+        backdrop.className = "wh-modal-backdrop";
+        backdrop.innerHTML =
+          '<div class="wh-modal wh-modal-order" role="dialog">' +
+          '<div class="wh-modal-header"><h3>Заказы задания #' +
+          esc(jobId) +
+          '</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+          '<div class="wh-modal-body">' +
+          renderJobOrdersTable(data.orders || []) +
+          "</div>" +
+          '<div class="wh-modal-footer">' +
+          '<button type="button" class="wh-btn wh-modal-cancel">Закрыть</button></div></div>';
+        function close() {
+          backdrop.remove();
+        }
+        backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+        backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+        backdrop.addEventListener("click", function (event) {
+          if (event.target === backdrop) close();
+        });
+        document.body.appendChild(backdrop);
+        bindJobOrdersModal(root, jobId, backdrop);
+      })
+      .catch(function (error) {
+        setMessage(root, error.message || "Не удалось открыть заказы", true);
+      });
   }
 
   function editJobPackers(root, jobId) {

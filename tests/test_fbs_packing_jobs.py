@@ -20,6 +20,7 @@ from app.fbs_packing_repository import (
     FbsPackingRepository,
     JOB_STATUS_DONE,
     JOB_STATUS_IN_PROGRESS,
+    LINE_CANCELLED,
     LINE_DONE,
     LINE_PENDING,
     LINE_PRINTED,
@@ -988,3 +989,49 @@ def test_transfer_number_is_optional_and_can_be_set_later(db_url: str, tmp_path)
 
     cleared = packing.set_transfer_number(job.id, "")
     assert cleared.transfer_number == ""
+
+
+def test_manager_order_details_cancel_marks_lines_ready(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(
+        db_url, tmp_path
+    )
+    job_id = job.id
+    listed = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/orders")
+    assert listed.status_code == 200, listed.text
+    orders = listed.json()["orders"]
+    assert [item["order_id"] for item in orders] == ["100001", "100002"]
+    assert [item["sku"] for item in orders] == ["SKU-A", "SKU-B"]
+    assert all(item["status"] == "open" and item["can_cancel"] for item in orders)
+
+    packing.set_line_status(job_id, job.lines[0].id, packer.id, LINE_DONE)
+    packing.set_line_status(job_id, job.lines[1].id, packer.id, LINE_DONE)
+    ready_first = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/orders")
+    assert ready_first.status_code == 200, ready_first.text
+    ordered = ready_first.json()["orders"]
+    assert [item["order_id"] for item in ordered] == ["100002", "100001"]
+    assert ordered[0]["ready"] is False
+    assert ordered[0]["sku"] == "SKU-B"
+    assert ordered[1]["ready"] is True
+    assert ordered[1]["status"] == "ready"
+
+    packed = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/pack")
+    remaining = packed.json()["job"]["remaining_groups"]
+    assert [(item["sku"], item["quantity"]) for item in remaining] == [("SKU-B", 1)]
+
+    cancelled = client.post(
+        f"/api/warehouse/fbs-packing/jobs/{job_id}/orders/cancel",
+        json={"order_id": "100002"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    orders = cancelled.json()["orders"]
+    assert orders[0]["order_id"] == "100001"
+    assert orders[0]["status"] == "ready"
+    assert orders[1]["order_id"] == "100002"
+    assert orders[1]["status"] == "cancelled"
+    assert orders[1]["can_cancel"] is False
+    assert packing.get_line(job_id, job.lines[2].id).status == LINE_CANCELLED
+    assert cancelled.json()["job"]["status"] == JOB_STATUS_DONE
+
+    leftover = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/pack")
+    assert leftover.json()["job"]["remaining_groups"] == []
+    assert leftover.json()["job"]["line_pending"] == 0

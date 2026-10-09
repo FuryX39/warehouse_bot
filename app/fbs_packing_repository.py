@@ -23,6 +23,8 @@ JOB_ACTIVE_STATUSES = (JOB_STATUS_OPEN, JOB_STATUS_IN_PROGRESS)
 LINE_PENDING = "pending"
 LINE_PRINTED = "printed"
 LINE_DONE = "done"
+LINE_CANCELLED = "cancelled"
+LINE_COMPLETE_STATUSES = (LINE_DONE, LINE_CANCELLED)
 
 MARKETPLACE_YANDEX = "yandex"
 MARKETPLACE_WB = "wildberries"
@@ -253,7 +255,7 @@ class FbsPackingRepository:
     def _counts(self, session: Session, job_id: int) -> tuple[int, int, int, int]:
         rows = session.scalars(select(FbsPackingLine).where(FbsPackingLine.job_id == int(job_id))).all()
         total = len(rows)
-        done = sum(1 for r in rows if r.status == LINE_DONE)
+        done = sum(1 for r in rows if r.status in LINE_COMPLETE_STATUSES)
         printed = sum(1 for r in rows if r.status == LINE_PRINTED)
         pending = sum(1 for r in rows if r.status == LINE_PENDING)
         return total, done, pending, printed
@@ -496,6 +498,107 @@ class FbsPackingRepository:
             session.refresh(job)
             return self._job_row(session, job)
 
+    def list_job_orders(self, job_id: int) -> list[dict[str, Any]]:
+        job = self.get_job(job_id, include_lines=True)
+        if job is None:
+            raise ValueError("Задание не найдено")
+        return self.orders_from_lines(job.lines, job_status=job.status)
+
+    def cancel_order(self, job_id: int, order_id: str, user_id: int) -> FbsPackingJobRow:
+        wanted = str(order_id or "").strip()
+        if not wanted:
+            raise ValueError("Не указан заказ")
+        with Session(self.engine) as session:
+            job = self._require_active_job(session, job_id)
+            rows = list(
+                session.scalars(
+                    select(FbsPackingLine)
+                    .where(
+                        FbsPackingLine.job_id == int(job_id),
+                        FbsPackingLine.order_id == wanted,
+                    )
+                    .order_by(FbsPackingLine.seq, FbsPackingLine.id)
+                )
+            )
+            if not rows:
+                raise ValueError("Заказ не найден в задании")
+            open_rows = [row for row in rows if str(row.status or "") not in LINE_COMPLETE_STATUSES]
+            if not open_rows:
+                raise ValueError("Заказ уже собран или отменён")
+            now = int(time.time())
+            for row in open_rows:
+                row.status = LINE_CANCELLED
+                row.printed_at_ts = None
+                row.done_at_ts = now
+                row.done_by_user_id = int(user_id)
+            if job.status == JOB_STATUS_OPEN:
+                job.status = JOB_STATUS_IN_PROGRESS
+            job.updated_at_ts = now
+            self._finish_if_complete(session, job)
+            session.commit()
+            session.refresh(job)
+            return self._job_row(session, job, include_lines=True)
+
+    def orders_from_lines(
+        self,
+        lines: list[FbsPackingLineRow],
+        *,
+        job_status: str = "",
+    ) -> list[dict[str, Any]]:
+        grouped: dict[str, list[FbsPackingLineRow]] = {}
+        for line in lines:
+            key = str(line.order_id or "").strip() or f"#{line.id}"
+            grouped.setdefault(key, []).append(line)
+        orders: list[dict[str, Any]] = []
+        job_active = str(job_status or "") in JOB_ACTIVE_STATUSES
+        for order_id, order_lines in grouped.items():
+            skus = sorted(
+                {str(line.sku or "").strip() for line in order_lines if str(line.sku or "").strip()},
+                key=str.casefold,
+            )
+            names: list[str] = []
+            seen_names: set[str] = set()
+            for line in order_lines:
+                name = str(line.product_name or "").strip()
+                folded = name.casefold()
+                if name and folded not in seen_names:
+                    seen_names.add(folded)
+                    names.append(name)
+            total = len(order_lines)
+            done = sum(1 for line in order_lines if line.status == LINE_DONE)
+            cancelled = sum(1 for line in order_lines if line.status == LINE_CANCELLED)
+            open_count = total - done - cancelled
+            ready = open_count <= 0
+            if open_count:
+                status = "open"
+            elif cancelled and done == 0:
+                status = "cancelled"
+            else:
+                status = "ready"
+            orders.append(
+                {
+                    "order_id": order_id,
+                    "skus": skus,
+                    "sku": ", ".join(skus),
+                    "product_name": ", ".join(names),
+                    "line_total": total,
+                    "line_done": done,
+                    "line_cancelled": cancelled,
+                    "line_open": open_count,
+                    "ready": ready,
+                    "status": status,
+                    "can_cancel": job_active and open_count > 0,
+                }
+            )
+        orders.sort(
+            key=lambda item: (
+                bool(item["ready"]),
+                str(item.get("sku") or "").casefold(),
+                str(item.get("order_id") or ""),
+            )
+        )
+        return orders
+
     def remaining_groups(self, job_id: int) -> list[dict[str, Any]]:
         job = self.get_job(job_id, include_lines=True)
         if job is None:
@@ -725,7 +828,7 @@ class FbsPackingRepository:
             .select_from(FbsPackingLine)
             .where(
                 FbsPackingLine.job_id == int(job.id),
-                FbsPackingLine.status != LINE_DONE,
+                FbsPackingLine.status.notin_(LINE_COMPLETE_STATUSES),
             )
         )
         if int(remaining or 0) == 0:
@@ -789,8 +892,8 @@ class FbsPackingRepository:
             current = str(row.status or LINE_PENDING)
             now = int(time.time())
             if want == LINE_PENDING:
-                if current not in {LINE_PRINTED, LINE_DONE}:
-                    raise ValueError("В сборку можно вернуть только напечатанную или готовую строку")
+                if current not in {LINE_PRINTED, LINE_DONE, LINE_CANCELLED}:
+                    raise ValueError("В сборку можно вернуть только напечатанную, готовую или отменённую строку")
                 row.status = LINE_PENDING
                 row.printed_at_ts = None
                 row.done_at_ts = None
