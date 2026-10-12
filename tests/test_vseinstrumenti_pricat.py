@@ -229,9 +229,9 @@ def test_russian_quantity_formats_are_accepted() -> None:
 
 def test_quantity_template_contains_catalog_names() -> None:
     names = quantity_template_names(_products(), template_bytes=_pricat())
-    assert names == ["Второй товар", "Первый товар", "Только PRICAT"]
+    assert names == ["Второй товар, A-2", "Первый товар, A-1", "Только PRICAT, ONLY-PRICAT"]
     sheet = load_workbook(BytesIO(build_vseinstrumenti_quantity_template(names))).active
-    assert sheet["A2"].value == "Второй товар"
+    assert sheet["A2"].value == "Второй товар, A-2"
     assert sheet["B2"].value is None
     assert sheet.max_row == 4
 
@@ -246,8 +246,8 @@ def test_kit_uses_components_that_are_not_separate_pricat_rows() -> None:
     template = template_output.getvalue()
 
     names = quantity_template_names(_products(), template_bytes=template)
-    assert "Первый товар" in names
-    assert "Второй товар" in names
+    assert "Первый товар, A-1" in names
+    assert "Второй товар, A-2" in names
 
     result, stats = build_vseinstrumenti_pricat(
         _quantities([
@@ -293,8 +293,21 @@ def test_bundled_pricat_template_is_available() -> None:
     sheet = book["Лист 1"]
 
     assert sheet["C6"].value == "Актуальные остатки 24.09"
-    assert stats["rows_written"] == 445
-    assert book.sheetnames == ["Лист 1", "Сертификаты и декларации", "Страны", "Единицы измерения"]
+    assert stats["rows_written"] == 478
+    empty_stock = [
+        row
+        for row in range(13, sheet.max_row + 1)
+        if sheet.cell(row, 5).value not in (None, "")
+        and sheet.cell(row, 28).value in (None, "")
+    ]
+    assert empty_stock == []
+    assert book.sheetnames == [
+        "Лист 1",
+        "Сертификаты и декларации",
+        "Страны",
+        "Единицы измерения",
+        "nomen",
+    ]
     with ZipFile(BytesIO(result)) as archive:
         sheet_xml = archive.read("xl/worksheets/sheet1.xml")
     assert sheet_xml.startswith(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
@@ -308,6 +321,76 @@ def _c3_cell(sheet_xml: bytes) -> bytes:
     match = re.search(rb'<c\b[^>]*\br="C3"[^>]*>.*?</c>', sheet_xml)
     assert match is not None
     return match.group(0)
+
+
+def test_quantity_file_matches_trailing_article() -> None:
+    result, stats = build_vseinstrumenti_pricat(
+        _quantities([
+            ["Совсем другое имя, A-1", 8],
+            ["Второй товар", 5],
+        ]),
+        catalog_products=_products(),
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+        template_bytes=_pricat(),
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["AB13"].value == 8
+    assert sheet["AB14"].value == 5
+    assert stats["matched_names"] == 2
+
+
+def test_bundled_pricat_sshl999_has_gross_weight() -> None:
+    result, _ = build_vseinstrumenti_pricat(
+        _quantities(),
+        catalog_products=[],
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["E505"].value == "SSHL999"
+    assert sheet["AG505"].value == 2
+
+
+def test_missing_stock_cells_are_zero_even_after_later_columns() -> None:
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Лист 1"
+    for coordinate in (
+        "C1", "D1", "C2", "D2", "C3", "C4", "D4", "C5", "C6",
+        "C9", "D9", "E9", "F9", "C10", "D10", "E10", "F10",
+    ):
+        sheet[coordinate] = "old"
+    sheet["E12"] = "Артикул"
+    sheet["AB12"] = "Остаток на складе"
+    sheet["E13"] = "A-1"
+    sheet["AF13"] = "хвост"
+    sheet["E14"] = "A-1"
+    sheet["AU14"] = "хвост"
+    output = BytesIO()
+    book.save(output)
+    template = output.getvalue()
+
+    result, stats = build_vseinstrumenti_pricat(
+        _quantities([["Первый товар", 4]]),
+        catalog_products=_products(),
+        buyer=_party("Покупатель"),
+        supplier=_party("Поставщик"),
+        header=_header(),
+        template_bytes=template,
+    )
+    sheet = load_workbook(BytesIO(result), data_only=True)["Лист 1"]
+    assert sheet["AB13"].value == 4
+    assert sheet["AB14"].value == 4
+    assert stats["rows_written"] == 1
+    with ZipFile(BytesIO(result)) as archive:
+        xml = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    row13 = re.search(r'<row r="13"[^>]*>.*?</row>', xml)
+    assert row13 is not None
+    cells = re.findall(r'r="([A-Z]+13)"', row13.group(0))
+    assert cells.index("AB13") < cells.index("AF13")
 
 
 def test_price_list_type_uses_template_list_shared_string() -> None:

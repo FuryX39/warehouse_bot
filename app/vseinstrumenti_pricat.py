@@ -19,6 +19,7 @@ _TEMPLATE_PATH = Path(__file__).resolve().parent / "assets" / "vseinstrumenti_pr
 _SHEET_XML = "xl/worksheets/sheet1.xml"
 _SHARED_STRINGS_XML = "xl/sharedStrings.xml"
 _CELL_OPEN_RE = re.compile(rb'<c\b(?=[^>]*\br="(?P<r>[^"]+)")[^>]*/?>')
+_CELL_COORD_RE = re.compile(r"^([A-Z]+)(\d+)$")
 _SI_RE = re.compile(rb"<si>.*?</si>", re.DOTALL)
 _T_RE = re.compile(rb"<t(?:\s[^>]*)?>(.*?)</t>", re.DOTALL)
 _SST_COUNTS_RE = re.compile(rb'count="(\d+)" uniqueCount="(\d+)"')
@@ -42,6 +43,14 @@ def _article(value: Any) -> str:
 
 def _normalize_name(value: Any) -> str:
     return " ".join(str(value or "").strip().casefold().split())
+
+
+def _sku_hint_from_label(value: Any) -> str:
+    """Артикул в конце названия после запятой: «Товар, SS708»."""
+    text = str(value or "").strip()
+    if "," not in text:
+        return ""
+    return _article(text.rsplit(",", 1)[1])
 
 
 _THOUSAND_SEPARATORS = (" ", "\u00a0", "\u202f", "\u2009", "\u2007", "'", "\u2019")
@@ -122,11 +131,12 @@ def quantity_template_names(
         if sku not in accepted_skus:
             continue
         name = str(product.get("name") or "").strip()
-        key = _normalize_name(name)
+        sku_label = _article(product.get("sku"))
+        key = sku or _normalize_name(name)
         if not key or key in seen:
             continue
         seen.add(key)
-        names.append(name)
+        names.append(f"{name}, {sku_label}" if sku_label else name)
     return names
 
 
@@ -201,7 +211,88 @@ def _ensure_shared_string(sst: bytes, value: str) -> tuple[bytes, int]:
     return patched, len(items)
 
 
+def _column_number(coordinate: str) -> int:
+    parsed = _CELL_COORD_RE.fullmatch(coordinate)
+    if parsed is None:
+        raise ValueError(f"В шаблоне PRICAT отсутствует ячейка {coordinate}")
+    number = 0
+    for char in parsed.group(1):
+        number = number * 26 + (ord(char) - 64)
+    return number
+
+
+def _row_cells(inner: bytes) -> list[tuple[int, bytes]]:
+    cells: list[tuple[int, bytes]] = []
+    for match in _CELL_OPEN_RE.finditer(inner):
+        coordinate = match.group("r").decode("ascii")
+        open_tag = match.group(0)
+        if open_tag.endswith(b"/>"):
+            end = match.end()
+        else:
+            close_at = inner.find(b"</c>", match.end())
+            if close_at < 0:
+                raise ValueError(f"В шаблоне PRICAT повреждена ячейка {coordinate}")
+            end = close_at + 4
+        cells.append((_column_number(coordinate), inner[match.start() : end]))
+    return cells
+
+
+def _stock_style_attr(xml: bytes) -> bytes:
+    for match in re.finditer(rb'<c r="AB(\d+)"[^>]*\bs="(\d+)"', xml):
+        if int(match.group(1)) >= 13:
+            return b' s="' + match.group(2) + b'"'
+    match = re.search(rb'<c r="AB\d+"[^>]*\bs="(\d+)"', xml)
+    if match:
+        return b' s="' + match.group(1) + b'"'
+    return b""
+
+
+def _ensure_sheet_cells(xml: bytes, coordinates: list[str]) -> bytes:
+    """Добавляет отсутствующие ячейки в существующие строки листа в порядке колонок."""
+    existing: set[str] = set()
+    for match in _CELL_OPEN_RE.finditer(xml):
+        existing.add(match.group("r").decode("ascii"))
+    missing_by_row: dict[int, list[str]] = {}
+    for coordinate in coordinates:
+        if coordinate in existing:
+            continue
+        parsed = _CELL_COORD_RE.fullmatch(coordinate)
+        if parsed is None:
+            raise ValueError(f"В шаблоне PRICAT отсутствует ячейка {coordinate}")
+        missing_by_row.setdefault(int(parsed.group(2)), []).append(coordinate)
+    if not missing_by_row:
+        return xml
+    style_attr = _stock_style_attr(xml)
+    patched = xml
+    for row_number in sorted(missing_by_row, reverse=True):
+        marker = f'<row r="{row_number}"'.encode("ascii")
+        start = patched.find(marker)
+        if start < 0:
+            raise ValueError(f"В шаблоне PRICAT отсутствует ячейка {missing_by_row[row_number][0]}")
+        inner_start = patched.find(b">", start)
+        end = patched.find(b"</row>", start)
+        if inner_start < 0 or end < 0:
+            raise ValueError(f"В шаблоне PRICAT отсутствует ячейка {missing_by_row[row_number][0]}")
+        inner_start += 1
+        cells = _row_cells(patched[inner_start:end])
+        for coordinate in missing_by_row[row_number]:
+            cells.append(
+                (
+                    _column_number(coordinate),
+                    b'<c r="'
+                    + coordinate.encode("ascii")
+                    + b'"'
+                    + style_attr
+                    + b"><v>0</v></c>",
+                )
+            )
+        cells.sort(key=lambda item: item[0])
+        patched = patched[:inner_start] + b"".join(item[1] for item in cells) + patched[end:]
+    return patched
+
+
 def _replace_sheet_cells(xml: bytes, values: dict[str, int | str | _SharedString]) -> bytes:
+    xml = _ensure_sheet_cells(xml, list(values))
     cells: dict[str, tuple[int, int, bytes]] = {}
     for match in _CELL_OPEN_RE.finditer(xml):
         coordinate = match.group("r").decode("ascii")
@@ -403,14 +494,12 @@ def build_vseinstrumenti_pricat(
     if _article(sheet["AB12"].value).casefold() != "остаток на складе":
         raise ValueError("В PRICAT не найден столбец «Остаток на складе» в AB12")
 
-    pricat_rows: dict[str, int] = {}
+    pricat_rows: dict[str, list[int]] = {}
     for row in range(13, sheet.max_row + 1):
         sku = _article(sheet.cell(row, 5).value).casefold()
         if not sku:
             continue
-        if sku in pricat_rows:
-            raise ValueError(f"В PRICAT повторяется артикул «{sheet.cell(row, 5).value}»")
-        pricat_rows[sku] = row
+        pricat_rows.setdefault(sku, []).append(row)
 
     pricat_skus = set(pricat_rows)
     required_leaf_skus = _pricat_kit_leaf_skus(pricat_skus, by_sku)
@@ -420,26 +509,41 @@ def build_vseinstrumenti_pricat(
     ambiguous_names: list[str] = []
     outside_pricat: list[str] = []
     ignored_kit_inputs = 0
-    for normalized_name, quantity in named_quantities.items():
-        candidates = by_name.get(normalized_name) or []
-        if not candidates:
-            unknown_names.append(display_names.get(normalized_name, normalized_name))
-            continue
-        if len(candidates) > 1:
-            ambiguous_names.append(str(candidates[0].get("name") or normalized_name))
-            continue
-        product = candidates[0]
-        sku = _article(product.get("sku")).casefold()
-        if bool(product.get("is_kit")):
+
+    def _put_quantity(sku: str, quantity: int, label: str) -> None:
+        nonlocal ignored_kit_inputs
+        product = by_sku.get(sku)
+        if product and bool(product.get("is_kit")):
             if sku in pricat_rows:
                 ignored_kit_inputs += 1
             else:
-                outside_pricat.append(str(product.get("name") or normalized_name))
-            continue
+                outside_pricat.append(label)
+            return
         if sku not in accepted_quantity_skus:
-            outside_pricat.append(str(product.get("name") or normalized_name))
+            outside_pricat.append(label)
+            return
+        if sku in ordinary_quantities:
+            ordinary_quantities[sku] = min(ordinary_quantities[sku], quantity)
+        else:
+            ordinary_quantities[sku] = quantity
+
+    for normalized_name, quantity in named_quantities.items():
+        label = display_names.get(normalized_name, normalized_name)
+        hint = _sku_hint_from_label(label).casefold()
+        if hint and (hint in accepted_quantity_skus or hint in by_sku):
+            _put_quantity(hint, quantity, label)
             continue
-        ordinary_quantities[sku] = quantity
+        candidates = by_name.get(normalized_name) or []
+        if not candidates and "," in label:
+            candidates = by_name.get(_normalize_name(label.rsplit(",", 1)[0])) or []
+        if not candidates:
+            unknown_names.append(label)
+            continue
+        if len(candidates) > 1:
+            ambiguous_names.append(str(candidates[0].get("name") or label))
+            continue
+        product = candidates[0]
+        _put_quantity(_article(product.get("sku")).casefold(), quantity, str(product.get("name") or label))
 
     final_quantities: dict[str, int] = {}
     kits_calculated = 0
@@ -483,8 +587,12 @@ def build_vseinstrumenti_pricat(
             "F10": supplier_fields["gln"],
         }
     )
-    for sku, row in pricat_rows.items():
-        updates[f"AB{row}"] = final_quantities.get(sku, 0)
+    for sku, rows in pricat_rows.items():
+        quantity = final_quantities.get(sku, 0)
+        for row in rows:
+            updates[f"AB{row}"] = quantity
+            if sku == "sshl999":
+                updates[f"AG{row}"] = 2
 
     template_book.close()
     return _patch_pricat_xml(template, updates), {
