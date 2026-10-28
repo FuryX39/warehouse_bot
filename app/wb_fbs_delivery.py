@@ -21,16 +21,20 @@ SHIPPING_TYPES = (
 
 DEFAULT_WB_FBS_SHIPPING_POINTS = (
     {
-        "key": "oby_3307",
-        "city": "Обь",
-        "title": "Обь, 3307 км, д. 30, к. 2",
-        "needles": ("3307", "30"),
+        "key": "nsk4_tolmachevo",
+        "city": "Новосибирск",
+        "title": "СЦ «Новосибирск-4», с. Толмачёво, ул. 3307-й км, 30кВ2",
+        "needles": ("новосибирск 4", "новосибирск4", "толмачево", "3307", "30кв2"),
+        "require_any": ("новосибирск 4", "новосибирск4", "толмачево"),
+        "exclude": ("бадуйково",),
+        "search_cities": ("Новосибирск", "Толмачёво", "Обь"),
     },
     {
         "key": "nsk_dokuchaeva",
         "city": "Новосибирск",
         "title": "Новосибирск, улица Докучаева, 1/2",
         "needles": ("докучаева", "1 2"),
+        "search_cities": ("Новосибирск",),
     },
 )
 
@@ -140,12 +144,24 @@ def match_default_shipping_points(points: list[dict[str, Any]]) -> list[dict[str
     for preset in DEFAULT_WB_FBS_SHIPPING_POINTS:
         best: dict[str, Any] | None = None
         best_score = 0
+        exclude = tuple(preset.get("exclude") or ())
+        require = tuple(preset.get("require") or ())
+        require_any = tuple(preset.get("require_any") or ())
         for point in points:
             try:
                 point_id = int(point.get("id") or point.get("shipping_point_id") or 0)
             except (TypeError, ValueError):
                 point_id = 0
             if point_id <= 0 or point_id in used_ids:
+                continue
+            blob = _point_blob(point)
+            if any(_fold_addr(token) and _fold_addr(token) in blob for token in exclude):
+                continue
+            if any(_fold_addr(token) and _fold_addr(token) not in blob for token in require):
+                continue
+            if require_any and not any(
+                _fold_addr(token) and _fold_addr(token) in blob for token in require_any
+            ):
                 continue
             score = _point_score(point, tuple(preset["needles"]))
             if score <= 0:
@@ -243,18 +259,24 @@ def _load_city_points(
     return collected
 
 
-def load_job_delivery_meta(adapter: WildberriesAdapter, job: FbsPackingJobRow) -> dict[str, Any]:
+def load_job_delivery_meta(
+    adapter: WildberriesAdapter,
+    job: FbsPackingJobRow,
+    *,
+    blank_form: bool = False,
+) -> dict[str, Any]:
     job = _require_wb_job(job)
     supply_ids = job_wb_supply_ids(job)
     if not supply_ids:
         raise ValueError("В задании нет поставки Wildberries")
     shipping_dt = default_shipping_date()
     cargo_types = _cargo_types(adapter, supply_ids[0])
-    cities = []
+    cities: list[str] = []
     for preset in DEFAULT_WB_FBS_SHIPPING_POINTS:
-        city = str(preset["city"])
-        if city not in cities:
-            cities.append(city)
+        for city in preset.get("search_cities") or (preset["city"],):
+            text = str(city or "").strip()
+            if text and text not in cities:
+                cities.append(text)
     all_points: list[dict[str, Any]] = []
     seen: set[int] = set()
     for city in cities:
@@ -274,13 +296,43 @@ def load_job_delivery_meta(adapter: WildberriesAdapter, job: FbsPackingJobRow) -
             seen.add(point_id)
             all_points.append(point)
     points = match_default_shipping_points(all_points)
+    delivered = int(getattr(job, "supplies_delivered_at_ts", 0) or 0) > 0
     return {
         "job_id": int(job.id),
         "supply_ids": supply_ids,
-        "shipping_date": shipping_dt,
+        "shipping_date": "" if blank_form else shipping_dt,
+        "default_point_key": str(DEFAULT_WB_FBS_SHIPPING_POINTS[0]["key"]),
+        "supplies_delivered": delivered,
         "points": points,
         "shipping_types": [dict(item) for item in SHIPPING_TYPES],
     }
+
+
+def _qr_pdf_for_supplies(adapter: WildberriesAdapter, supply_ids: list[str]) -> bytes:
+    pdf_parts: list[bytes] = []
+    warnings: list[str] = []
+    for sid in supply_ids:
+        try:
+            sticker = adapter.fetch_supply_barcode(sid)
+            png = base64.b64decode(sticker["png_b64"])
+            pdf_parts.append(png_bytes_to_label_pdf(png))
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"{sid}: {exc}")
+    if not pdf_parts:
+        detail = "; ".join(warnings) if warnings else "WB не вернул QR поставок"
+        raise ValueError("Не удалось скачать QR поставок: " + detail)
+    pdf = merge_label_pdfs(pdf_parts)
+    if not pdf:
+        raise ValueError("Не удалось собрать PDF с QR поставок")
+    return pdf
+
+
+def fetch_job_supply_qr_pdf(adapter: WildberriesAdapter, job: FbsPackingJobRow) -> bytes:
+    job = _require_wb_job(job)
+    supply_ids = job_wb_supply_ids(job)
+    if not supply_ids:
+        raise ValueError("В задании нет поставки Wildberries")
+    return _qr_pdf_for_supplies(adapter, supply_ids)
 
 
 def _raise_batch_errors(payload: dict[str, Any], *, action: str) -> None:
@@ -363,7 +415,6 @@ def deliver_job_supplies(
         _raise_batch_errors(waybill_result, action="УИД ТРН")
 
     delivered: list[str] = []
-    warnings: list[str] = []
     for sid in supply_ids:
         try:
             adapter.deliver_supply(sid)
@@ -374,20 +425,8 @@ def deliver_job_supplies(
                 continue
             raise ValueError(f"Не удалось передать {sid} в доставку: {exc}") from exc
 
-    pdf_parts: list[bytes] = []
-    for sid in delivered:
-        try:
-            sticker = adapter.fetch_supply_barcode(sid)
-            png = base64.b64decode(sticker["png_b64"])
-            pdf_parts.append(png_bytes_to_label_pdf(png))
-        except Exception as exc:  # noqa: BLE001
-            warnings.append(f"{sid}: {exc}")
-    if not pdf_parts:
-        detail = "; ".join(warnings) if warnings else "WB не вернул QR поставок"
-        raise ValueError(
-            "Поставки переданы в доставку, но QR скачать не удалось: " + detail
-        )
-    pdf = merge_label_pdfs(pdf_parts)
-    if not pdf:
-        raise ValueError("Не удалось собрать PDF с QR поставок")
+    try:
+        pdf = _qr_pdf_for_supplies(adapter, delivered)
+    except ValueError as exc:
+        raise ValueError(f"Поставки переданы в доставку, но QR скачать не удалось: {exc}") from exc
     return pdf, delivered

@@ -10,7 +10,13 @@ from fastapi.testclient import TestClient
 
 from app.adapters.wildberries import _parse_shipping_points
 from app.config import Settings
-from app.fbs_packing_repository import FbsPackingRepository
+from app.fbs_packing_repository import (
+    FbsPackingRepository,
+    JOB_STATUS_DONE,
+    JOB_STATUS_IN_PROGRESS,
+    LINE_PENDING,
+)
+from app.fbs_packing_service import create_wb_packing_job
 from app.warehouse_users_repository import WarehouseUserRow
 from app.wb_fbs_delivery import (
     SHIPPING_SELF,
@@ -35,9 +41,9 @@ class FakeDeliverAdapter(FakeWbAdapter):
         self.points = [
             {
                 "id": 33070,
-                "city": "Обь",
-                "address": "3307 км, д. 30, к. 2",
-                "name": "СЦ Обь",
+                "city": "Новосибирск",
+                "address": "Россия, Новосибирская обл., Новосибирский р-н, с. Толмачёво, ул. 3307-й км, 30кВ2",
+                "name": "СЦ Новосибирск-4",
                 "office_type": "sc",
             },
             {
@@ -140,15 +146,63 @@ def test_job_wb_supply_ids_from_merged_title() -> None:
 def test_match_default_novosibirsk_points() -> None:
     points = match_default_shipping_points(
         [
-            {"id": 1, "city": "Обь", "address": "3307 км, д. 30, к. 2", "name": "СЦ"},
+            {
+                "id": 1,
+                "city": "Новосибирск",
+                "address": "с. Толмачёво, ул. 3307-й км, 30кВ2",
+                "name": "СЦ Новосибирск-4",
+            },
             {"id": 2, "city": "Новосибирск", "address": "ул. Докучаева, 1/2", "name": "СЦ"},
         ]
     )
-    assert points[0]["key"] == "oby_3307"
+    assert points[0]["key"] == "nsk4_tolmachevo"
     assert points[0]["shipping_point_id"] == 1
     assert points[0]["available"] is True
     assert points[1]["key"] == "nsk_dokuchaeva"
     assert points[1]["shipping_point_id"] == 2
+
+
+def test_match_by_novosibirsk_4_name() -> None:
+    points = match_default_shipping_points(
+        [
+            {
+                "id": 99,
+                "city": "Обь",
+                "address": "с. Бадуйково",
+                "name": "СЦ Бадуйково",
+            },
+            {
+                "id": 7,
+                "city": "Новосибирск",
+                "address": "",
+                "name": 'СЦ "Новосибирск-4"',
+            },
+            {"id": 2, "city": "Новосибирск", "address": "ул. Докучаева, 1/2", "name": "СЦ"},
+        ]
+    )
+    assert points[0]["shipping_point_id"] == 7
+
+
+def test_match_skips_baduykovo() -> None:
+    points = match_default_shipping_points(
+        [
+            {
+                "id": 99,
+                "city": "Обь",
+                "address": "с. Бадуйково, 3307 км, д. 30, к. 2",
+                "name": "СЦ Бадуйково",
+            },
+            {
+                "id": 1,
+                "city": "Новосибирск",
+                "address": "с. Толмачёво, ул. 3307-й км, 30кВ2",
+                "name": "СЦ Новосибирск-4",
+            },
+            {"id": 2, "city": "Новосибирск", "address": "ул. Докучаева, 1/2", "name": "СЦ"},
+        ]
+    )
+    assert points[0]["shipping_point_id"] == 1
+    assert "бадуйково" not in points[0]["address"].casefold()
 
 
 def test_parse_shipping_points_payload() -> None:
@@ -267,7 +321,9 @@ def test_wb_delivery_routes(db_url: str, tmp_path) -> None:
     assert meta.status_code == 200, meta.text
     payload = meta.json()
     assert payload["supply_ids"] == ["WB-GI-A", "WB-GI-B"]
-    assert payload["points"][0]["title"] == "Обь, 3307 км, д. 30, к. 2"
+    assert payload["points"][0]["title"] == (
+        "СЦ «Новосибирск-4», с. Толмачёво, ул. 3307-й км, 30кВ2"
+    )
     assert payload["points"][0]["shipping_point_id"] == 33070
     assert payload["points"][1]["title"] == "Новосибирск, улица Докучаева, 1/2"
     assert payload["points"][1]["shipping_point_id"] == 12
@@ -287,7 +343,7 @@ def test_wb_delivery_routes(db_url: str, tmp_path) -> None:
         f"/api/warehouse/fbs-packing/jobs/{job_id}/wb-delivery",
         json={
             "shipping_point_id": 33070,
-            "point_key": "oby_3307",
+            "point_key": "nsk4_tolmachevo",
             "shipping_dt": "2026-10-28",
             "shipping_type": "transportCompany",
             "waybill_uuid": "550e8400-e29b-41d4-a716-446655440000",
@@ -299,6 +355,15 @@ def test_wb_delivery_routes(db_url: str, tmp_path) -> None:
     assert adapter.delivered == ["WB-GI-A", "WB-GI-B"]
     assert adapter.waybill_calls[0]["waybillUuid"] == "550e8400-e29b-41d4-a716-446655440000"
     assert {item["shippingPointId"] for item in adapter.shipping_calls} == {33070}
+    job_after = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}")
+    assert job_after.status_code == 200
+    assert job_after.json()["job"]["supplies_delivered"] is True
+    assert job_after.json()["job"]["can_wb_print_qr"] is True
+    assert job_after.json()["job"]["can_wb_deliver"] is False
+
+    qr = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/wb-delivery/qr.pdf")
+    assert qr.status_code == 200, qr.text
+    assert qr.content.startswith(b"%PDF")
 
 
 def test_load_delivery_meta_without_points() -> None:
@@ -315,3 +380,96 @@ def test_load_delivery_meta_without_points() -> None:
     assert meta["supply_ids"] == ["WB-GI-TEST"]
     assert meta["points"][0]["available"] is False
     assert meta["points"][1]["available"] is False
+
+
+def test_wb_job_stays_open_until_delivered(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
+    catalog.create_product(
+        {
+            "name": "WB товар",
+            "sku": "SKU-WB",
+            "code": "00011",
+            "is_kit": False,
+            "barcodes": [{"barcode": "WB-SKU", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+    packing = FbsPackingRepository(db_url, files_data_dir=tmp_path / "wb_stay")
+    packing.init_schema()
+    adapter = FakeDeliverAdapter()
+    job = create_wb_packing_job(
+        adapter=adapter,
+        catalog=catalog,
+        packing_repo=packing,
+        order_substatus="READY_TO_SHIP",
+        item_limit=None,
+        packer_user_ids=[7],
+        created_by_user_id=1,
+        supply_ids=["WB-GI-TEST"],
+    )
+    for line in packing.get_job(job.id, include_lines=True).lines:
+        if line.status == LINE_PENDING:
+            packing.set_line_status(job.id, line.id, 7, "done")
+    packed = packing.get_job(job.id)
+    assert packed is not None
+    assert packed.line_pending == 0
+    assert packed.status == JOB_STATUS_IN_PROGRESS
+    mine = packing.list_my_jobs(7)
+    assert any(item.id == job.id for item in mine)
+
+    packing.mark_supplies_delivered(job.id)
+    done = packing.get_job(job.id)
+    assert done is not None
+    assert done.status == JOB_STATUS_DONE
+    assert done.supplies_delivered_at_ts > 0
+    mine_after = packing.list_my_jobs(7)
+    assert any(item.id == job.id for item in mine_after)
+
+
+def test_packer_wb_delivery_blank_form_and_qr(db_url: str, tmp_path) -> None:
+    adapter = FakeDeliverAdapter()
+    client = _client(db_url, tmp_path, adapter)
+    created = client.post(
+        "/api/warehouse/fbs-packing/jobs",
+        json={
+            "marketplace": "wildberries",
+            "order_substatus": "READY_TO_SHIP",
+            "supply_id": "WB-GI-TEST",
+            "packer_user_ids": [7],
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    prefix = f"/api/v1/fbs-packing/jobs/{job_id}"
+
+    meta = client.get(f"{prefix}/wb-delivery")
+    assert meta.status_code == 200, meta.text
+    payload = meta.json()
+    assert payload["shipping_date"] == ""
+    assert payload["default_point_key"] == "nsk4_tolmachevo"
+
+    missing = client.post(
+        f"{prefix}/wb-delivery",
+        json={"shipping_point_id": 33070, "point_key": "nsk4_tolmachevo"},
+    )
+    assert missing.status_code == 400
+
+    delivered = client.post(
+        f"{prefix}/wb-delivery",
+        json={
+            "shipping_point_id": 33070,
+            "point_key": "nsk4_tolmachevo",
+            "shipping_dt": "2026-10-28",
+            "shipping_type": "selfShipping",
+        },
+    )
+    assert delivered.status_code == 200, delivered.text
+    assert delivered.content.startswith(b"%PDF")
+    opened = client.get(f"{prefix}/pack")
+    assert opened.status_code == 200, opened.text
+    job = opened.json()["job"]
+    assert job["can_wb_print_qr"] is True
+    assert job["can_wb_deliver"] is False
+    qr = client.get(f"{prefix}/wb-delivery/qr.pdf")
+    assert qr.status_code == 200, qr.text
+    assert qr.content.startswith(b"%PDF")

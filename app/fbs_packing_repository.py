@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, func, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, and_, delete, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.warehouse_task_files import WarehouseTaskFileStorage
@@ -53,6 +53,7 @@ class FbsPackingJob(_Base):
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    supplies_delivered_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class FbsPackingJobAssignee(_Base):
@@ -142,6 +143,7 @@ class FbsPackingJobRow:
     require_cis: bool = False
     supply_id: str = ""
     transfer_number: str = ""
+    supplies_delivered_at_ts: int = 0
     lines: list[FbsPackingLineRow] = field(default_factory=list)
 
 
@@ -214,6 +216,13 @@ class FbsPackingRepository:
                         text(
                             "ALTER TABLE fbs_packing_jobs "
                             "ADD COLUMN transfer_number VARCHAR(128) NOT NULL DEFAULT ''"
+                        )
+                    )
+                if "supplies_delivered_at_ts" not in job_cols:
+                    session.execute(
+                        text(
+                            "ALTER TABLE fbs_packing_jobs "
+                            "ADD COLUMN supplies_delivered_at_ts INTEGER NOT NULL DEFAULT 0"
                         )
                     )
             if "fbs_packing_lines" in tables:
@@ -292,6 +301,7 @@ class FbsPackingRepository:
             require_cis=bool(getattr(job, "require_cis", False)),
             supply_id=str(getattr(job, "supply_id", None) or ""),
             transfer_number=str(getattr(job, "transfer_number", None) or ""),
+            supplies_delivered_at_ts=int(getattr(job, "supplies_delivered_at_ts", 0) or 0),
             status=str(job.status or JOB_STATUS_OPEN),
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
             sheet_url=str(job.sheet_url or ""),
@@ -430,7 +440,14 @@ class FbsPackingRepository:
                 select(FbsPackingJob)
                 .where(
                     FbsPackingJob.id.in_([int(x) for x in job_ids]),
-                    FbsPackingJob.status.in_(JOB_ACTIVE_STATUSES),
+                    or_(
+                        FbsPackingJob.status.in_(JOB_ACTIVE_STATUSES),
+                        and_(
+                            FbsPackingJob.marketplace == MARKETPLACE_WB,
+                            FbsPackingJob.status == JOB_STATUS_DONE,
+                            FbsPackingJob.supplies_delivered_at_ts > 0,
+                        ),
+                    ),
                 )
                 .order_by(FbsPackingJob.id.desc())
             ).all()
@@ -831,8 +848,29 @@ class FbsPackingRepository:
                 FbsPackingLine.status.notin_(LINE_COMPLETE_STATUSES),
             )
         )
-        if int(remaining or 0) == 0:
-            job.status = JOB_STATUS_DONE
+        if int(remaining or 0) != 0:
+            return
+        if str(job.marketplace or "") == MARKETPLACE_WB and int(
+            getattr(job, "supplies_delivered_at_ts", 0) or 0
+        ) <= 0:
+            return
+        job.status = JOB_STATUS_DONE
+
+    def mark_supplies_delivered(self, job_id: int) -> FbsPackingJobRow:
+        with Session(self.engine) as session:
+            job = session.get(FbsPackingJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            if str(job.status or "") == JOB_STATUS_CANCELLED:
+                raise ValueError("Отменённое задание нельзя передать в доставку")
+            now = int(time.time())
+            if int(getattr(job, "supplies_delivered_at_ts", 0) or 0) <= 0:
+                job.supplies_delivered_at_ts = now
+            job.updated_at_ts = now
+            self._finish_if_complete(session, job)
+            session.commit()
+            session.refresh(job)
+            return self._job_row(session, job, include_lines=True)
 
     def scan_label(self, job_id: int, user_id: int, raw: str) -> FbsPackingLineRow:
         with Session(self.engine) as session:
@@ -990,6 +1028,12 @@ class FbsPackingRepository:
             "line_pending": job.line_pending,
             "line_printed": job.line_printed,
             "remaining": job.line_pending,
+            "supplies_delivered": int(getattr(job, "supplies_delivered_at_ts", 0) or 0) > 0,
+            "can_wb_deliver": str(job.marketplace or "") == MARKETPLACE_WB
+            and str(job.status or "") != JOB_STATUS_CANCELLED
+            and int(getattr(job, "supplies_delivered_at_ts", 0) or 0) <= 0,
+            "can_wb_print_qr": str(job.marketplace or "") == MARKETPLACE_WB
+            and int(getattr(job, "supplies_delivered_at_ts", 0) or 0) > 0,
         }
         if include_lines:
             payload["lines"] = [self.line_to_dict(line) for line in job.lines]
