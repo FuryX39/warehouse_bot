@@ -37,6 +37,7 @@ from app.yandex_fbs_labels import (
     load_yandex_fbs_list_rows,
     normalize_yandex_fbs_substatus,
 )
+from app.wb_fbs_delivery import deliver_job_supplies, load_job_delivery_meta
 from app.wb_fbs_labels import (
     get_configured_wb_adapter,
     list_rows_payload as wb_list_rows_payload,
@@ -578,6 +579,66 @@ def register_warehouse_fbs_packing_routes(
                 headers={
                     "Content-Disposition": _attachment_disposition(f"fbs_marking_{job_id}.xlsx")
                 },
+            )
+
+        def _wb_job_or_404(job_id: int):
+            job = packing_repo.get_job(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Задание не найдено")
+            adapter = get_configured_wb_adapter(coordinator)
+            if adapter is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Wildberries API не настроен (WB_API_TOKEN)",
+                )
+            return job, adapter
+
+        @app.get("/api/warehouse/fbs-packing/jobs/{job_id}/wb-delivery")
+        async def api_fbs_packing_job_wb_delivery_meta(
+            job_id: int,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            job, adapter = _wb_job_or_404(job_id)
+            try:
+                return await asyncio.to_thread(load_job_delivery_meta, adapter, job)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail=f"Wildberries API: {exc}") from exc
+
+        @app.post("/api/warehouse/fbs-packing/jobs/{job_id}/wb-delivery")
+        async def api_fbs_packing_job_wb_delivery(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> Response:
+            job, adapter = _wb_job_or_404(job_id)
+            payload = body if isinstance(body, dict) else {}
+
+            def _run():
+                return deliver_job_supplies(
+                    adapter,
+                    job,
+                    shipping_point_id=payload.get("shipping_point_id"),
+                    shipping_dt=payload.get("shipping_dt") or payload.get("shipping_date"),
+                    shipping_type=payload.get("shipping_type"),
+                    waybill_uuid=payload.get("waybill_uuid") or payload.get("trn_uuid"),
+                    point_key=payload.get("point_key"),
+                )
+
+            try:
+                pdf, delivered = await asyncio.to_thread(_run)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail=f"Wildberries API: {exc}") from exc
+            filename = f"wb_fbs_qr_{job_id}.pdf"
+            if len(delivered) == 1:
+                filename = f"{delivered[0]}_qr.pdf"
+            return Response(
+                content=pdf,
+                media_type="application/pdf",
+                headers={"Content-Disposition": _attachment_disposition(filename)},
             )
 
     def _require_packer(actor: TasksApiActor, job_id: int) -> int:

@@ -531,6 +531,61 @@ body.wh-body {
   font-weight: 600;
 }
 
+.wh-fbs-deliver-supplies {
+  margin: 0 0 0.85rem;
+  color: var(--wh-muted);
+  font-size: 0.88rem;
+}
+
+.wh-fbs-deliver-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
+}
+
+.wh-fbs-deliver-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 0.9rem;
+}
+
+.wh-fbs-deliver-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+}
+
+.wh-fbs-deliver-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.wh-fbs-deliver-option small {
+  color: var(--wh-muted);
+  font-size: 0.82rem;
+}
+
+.wh-fbs-deliver-option--off {
+  color: var(--wh-muted);
+}
+
+.wh-fbs-deliver-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0 0 0.9rem;
+  font-size: 0.92rem;
+}
+
+.wh-fbs-deliver-field input {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  font: inherit;
+}
+
 @media (max-width: 760px) {
   .wh-route-form {
     grid-template-columns: 1fr;

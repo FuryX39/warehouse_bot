@@ -238,6 +238,17 @@
             '<button type="button" class="wh-btn wh-btn-sm wh-fbs-job-orders" data-id="' +
             esc(job.id) +
             '">Детализация по заказам</button>';
+          var deliver = "";
+          var mp = String(job.marketplace || "").toLowerCase();
+          var hasSupply =
+            String(job.supply_id || "") ||
+            String(job.sheet_title || "").toUpperCase().indexOf("WB-GI-") >= 0;
+          if (mp === "wildberries" && job.status !== "cancelled" && hasSupply) {
+            deliver =
+              '<button type="button" class="wh-btn wh-btn-sm wh-btn-primary wh-fbs-job-deliver" data-id="' +
+              esc(job.id) +
+              '">Передать в доставку</button>';
+          }
           return (
             "<tr><td>#" +
             esc(job.id) +
@@ -276,6 +287,8 @@
             " " +
             marking +
             " " +
+            deliver +
+            (deliver ? " " : "") +
             cancel +
             "</td></tr>"
           );
@@ -302,6 +315,11 @@
     wrap.querySelectorAll(".wh-fbs-job-orders").forEach(function (btn) {
       btn.addEventListener("click", function () {
         openJobOrders(root, parseInt(btn.getAttribute("data-id"), 10));
+      });
+    });
+    wrap.querySelectorAll(".wh-fbs-job-deliver").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openWbDeliverModal(root, parseInt(btn.getAttribute("data-id"), 10));
       });
     });
     wrap.querySelectorAll(".wh-fbs-packers-edit").forEach(function (btn) {
@@ -445,6 +463,247 @@
       })
       .catch(function (error) {
         setMessage(root, error.message || "Не удалось открыть заказы", true);
+      });
+  }
+
+  function apiErrorText(text, fallback) {
+    try {
+      var data = text ? JSON.parse(text) : null;
+      if (data && data.detail) {
+        if (typeof data.detail === "string") return data.detail;
+        if (Array.isArray(data.detail)) {
+          return data.detail
+            .map(function (item) {
+              if (!item) return "";
+              if (typeof item === "string") return item;
+              return item.msg || item.message || "";
+            })
+            .filter(Boolean)
+            .join("; ");
+        }
+      }
+    } catch (e) {
+      // keep text
+    }
+    return text || fallback;
+  }
+
+  function downloadBlob(blob, filename) {
+    var objectUrl = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () {
+      URL.revokeObjectURL(objectUrl);
+    }, 1000);
+  }
+
+  function selectedDeliverPoint(backdrop) {
+    var checked = backdrop.querySelector('input[name="whFbsDeliverPoint"]:checked');
+    if (!checked) return { id: 0, key: "" };
+    return {
+      id: parseInt(checked.getAttribute("data-id") || "0", 10) || 0,
+      key: checked.value || "",
+    };
+  }
+
+  function syncDeliverTrn(backdrop) {
+    var tk = backdrop.querySelector('input[name="whFbsDeliverType"][value="transportCompany"]');
+    var wrap = backdrop.querySelector("#whFbsDeliverTrnWrap");
+    var input = backdrop.querySelector("#whFbsDeliverTrn");
+    var show = !!(tk && tk.checked);
+    if (wrap) wrap.hidden = !show;
+    if (input) input.required = show;
+  }
+
+  function renderDeliverModal(jobId, meta) {
+    var points = meta.points || [];
+    var types = meta.shipping_types || [];
+    var supplies = meta.supply_ids || [];
+    var dateValue = meta.shipping_date || "";
+    var firstAvailable = -1;
+    points.forEach(function (point, index) {
+      if (firstAvailable < 0 && point.available && point.shipping_point_id) {
+        firstAvailable = index;
+      }
+    });
+    var pointHtml = points
+      .map(function (point, index) {
+        var available = !!point.available && point.shipping_point_id;
+        var checked = index === firstAvailable ? " checked" : "";
+        return (
+          '<label class="wh-fbs-deliver-option' +
+          (available ? "" : " wh-fbs-deliver-option--off") +
+          '">' +
+          '<input type="radio" name="whFbsDeliverPoint" value="' +
+          esc(point.key || "") +
+          '" data-id="' +
+          esc(point.shipping_point_id || "") +
+          '"' +
+          (available ? checked : " disabled") +
+          " />" +
+          "<span><strong>" +
+          esc(point.title || "") +
+          "</strong>" +
+          (available
+            ? point.address && point.address !== point.title
+              ? "<small>" + esc(point.address) + "</small>"
+              : ""
+            : "<small>Пункт не найден в списке WB</small>") +
+          "</span></label>"
+        );
+      })
+      .join("");
+    if (!pointHtml) {
+      pointHtml = '<p class="wh-muted">Не удалось загрузить пункты сдачи.</p>';
+    }
+    var typeHtml = types
+      .map(function (item, index) {
+        var id = item.id || "selfShipping";
+        return (
+          '<label class="wh-fbs-deliver-option">' +
+          '<input type="radio" name="whFbsDeliverType" value="' +
+          esc(id) +
+          '"' +
+          (index === 0 ? " checked" : "") +
+          " /> " +
+          esc(item.title || id) +
+          "</label>"
+        );
+      })
+      .join("");
+    return (
+      '<div class="wh-modal" role="dialog">' +
+      '<div class="wh-modal-header"><h3>Передать в доставку #' +
+      esc(jobId) +
+      '</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-fbs-deliver-supplies">Поставки: ' +
+      esc(supplies.join(", ") || "—") +
+      "</p>" +
+      '<p class="wh-fbs-deliver-label">Место сдачи</p>' +
+      '<div class="wh-fbs-deliver-options">' +
+      pointHtml +
+      "</div>" +
+      '<label class="wh-fbs-deliver-field">Дата сдачи' +
+      '<input type="date" id="whFbsDeliverDate" value="' +
+      esc(dateValue) +
+      '" /></label>' +
+      '<p class="wh-fbs-deliver-label">Способ передачи</p>' +
+      '<div class="wh-fbs-deliver-options">' +
+      typeHtml +
+      "</div>" +
+      '<label class="wh-fbs-deliver-field" id="whFbsDeliverTrnWrap" hidden>УИД ТРН' +
+      '<input type="text" id="whFbsDeliverTrn" maxlength="64" autocomplete="off" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />' +
+      "</label>" +
+      '<p class="wh-msg wh-msg-error" id="whFbsDeliverError" hidden></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer">' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button>' +
+      '<button type="button" class="wh-btn wh-btn-primary" id="whFbsDeliverSubmit">Передать в доставку</button>' +
+      "</div></div>"
+    );
+  }
+
+  function openWbDeliverModal(root, jobId) {
+    if (!jobId || busy) return;
+    setBusy(root, true);
+    shell()
+      .fetchJson("/api/warehouse/fbs-packing/jobs/" + jobId + "/wb-delivery")
+      .then(function (meta) {
+        setBusy(root, false);
+        var backdrop = document.createElement("div");
+        backdrop.className = "wh-modal-backdrop";
+        backdrop.innerHTML = renderDeliverModal(jobId, meta || {});
+        function close() {
+          backdrop.remove();
+        }
+        function setModalError(text) {
+          var el = backdrop.querySelector("#whFbsDeliverError");
+          if (!el) return;
+          el.hidden = !text;
+          el.textContent = text || "";
+        }
+        backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+        backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+        backdrop.addEventListener("click", function (event) {
+          if (event.target === backdrop) close();
+        });
+        backdrop.querySelectorAll('input[name="whFbsDeliverType"]').forEach(function (input) {
+          input.addEventListener("change", function () {
+            syncDeliverTrn(backdrop);
+          });
+        });
+        syncDeliverTrn(backdrop);
+        backdrop.querySelector("#whFbsDeliverSubmit").addEventListener("click", function () {
+          var submit = backdrop.querySelector("#whFbsDeliverSubmit");
+          var point = selectedDeliverPoint(backdrop);
+          var dateEl = backdrop.querySelector("#whFbsDeliverDate");
+          var typeEl = backdrop.querySelector('input[name="whFbsDeliverType"]:checked');
+          var trnEl = backdrop.querySelector("#whFbsDeliverTrn");
+          var shippingType = typeEl ? typeEl.value : "selfShipping";
+          var waybill = trnEl ? String(trnEl.value || "").trim() : "";
+          if (!point.id && !point.key) {
+            setModalError("Выберите пункт сдачи");
+            return;
+          }
+          if (!dateEl || !dateEl.value) {
+            setModalError("Укажите дату сдачи");
+            return;
+          }
+          if (shippingType === "transportCompany" && !waybill) {
+            setModalError("Для транспортной компании укажите УИД ТРН");
+            return;
+          }
+          setModalError("");
+          if (submit) submit.disabled = true;
+          fetch("/api/warehouse/fbs-packing/jobs/" + jobId + "/wb-delivery", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shipping_point_id: point.id || null,
+              point_key: point.key,
+              shipping_dt: dateEl.value,
+              shipping_type: shippingType,
+              waybill_uuid: waybill,
+            }),
+          })
+            .then(function (response) {
+              if (!response.ok) {
+                return response.text().then(function (text) {
+                  throw new Error(apiErrorText(text, "Не удалось передать в доставку"));
+                });
+              }
+              var filename = "wb_fbs_qr_" + jobId + ".pdf";
+              var disp = response.headers.get("Content-Disposition") || "";
+              var match = /filename\*=UTF-8''([^;]+)|filename="([^"]+)"/i.exec(disp);
+              if (match) {
+                filename = decodeURIComponent(match[1] || match[2] || filename);
+              }
+              return response.blob().then(function (blob) {
+                return { blob: blob, filename: filename };
+              });
+            })
+            .then(function (file) {
+              downloadBlob(file.blob, file.filename);
+              close();
+              setMessage(root, "Поставки переданы в доставку, QR скачан.", false);
+              loadJobs(root);
+            })
+            .catch(function (error) {
+              if (submit) submit.disabled = false;
+              setModalError(error.message || "Не удалось передать в доставку");
+            });
+        });
+        document.body.appendChild(backdrop);
+      })
+      .catch(function (error) {
+        setBusy(root, false);
+        setMessage(root, error.message || "Не удалось открыть передачу в доставку", true);
       });
   }
 

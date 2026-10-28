@@ -61,6 +61,74 @@ def _wb_http_error(response: requests.Response) -> requests.HTTPError:
     return requests.HTTPError(detail, response=response)
 
 
+def _wb_mp_http_error(response: requests.Response) -> requests.HTTPError:
+    """Ошибки Marketplace FBS без подсказки про склады остатков."""
+    body = (response.text or "").strip()
+    if len(body) > 800:
+        body = body[:800] + "…"
+    detail = f"{response.status_code} Client Error: {response.reason} for url: {response.url}"
+    if body:
+        detail += f" — {body}"
+    return requests.HTTPError(detail, response=response)
+
+
+def _parse_shipping_points(payload: object) -> list[dict]:
+    items: list[dict] = []
+    if isinstance(payload, list):
+        items = [item for item in payload if isinstance(item, dict)]
+    elif isinstance(payload, dict):
+        for key in ("shippingPoints", "offices", "points", "data"):
+            inner = payload.get(key)
+            if isinstance(inner, list):
+                items = [item for item in inner if isinstance(item, dict)]
+                break
+            if isinstance(inner, dict):
+                nested = _parse_shipping_points(inner)
+                if nested:
+                    return nested
+    out: list[dict] = []
+    seen: set[int] = set()
+    for item in items:
+        raw_id = item.get("id") or item.get("shippingPointId") or item.get("officeId")
+        try:
+            point_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if point_id in seen:
+            continue
+        seen.add(point_id)
+        out.append(
+            {
+                "id": point_id,
+                "city": str(item.get("city") or item.get("settlement") or "").strip(),
+                "address": str(
+                    item.get("address") or item.get("fullAddress") or item.get("location") or ""
+                ).strip(),
+                "name": str(item.get("name") or item.get("officeName") or "").strip(),
+                "office_type": str(item.get("officeType") or item.get("office_type") or "").strip(),
+                "fulfillment": bool(item.get("fulfillment")),
+            }
+        )
+    return out
+
+
+def _shipping_batch_results(batches: list[dict]) -> list[dict]:
+    results: list[dict] = []
+    for payload in batches:
+        if not isinstance(payload, dict):
+            continue
+        rows = payload.get("results")
+        if isinstance(rows, list):
+            results.extend(item for item in rows if isinstance(item, dict))
+            continue
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            results.extend(item for item in data["results"] if isinstance(item, dict))
+        elif isinstance(data, list):
+            results.extend(item for item in data if isinstance(item, dict))
+    return results
+
+
 def _fbw_http_error(response: requests.Response) -> requests.HTTPError:
     """Ошибки supplies-api: без подсказки про склады FBS, с категорией «Поставки»."""
     body = (response.text or "").strip()
@@ -967,6 +1035,200 @@ class WildberriesAdapter(MarketplaceAdapter):
                     "png_b64": file_b64,
                 }
         return result
+
+    def fetch_supply(self, supply_id: str) -> dict:
+        sid = str(supply_id or "").strip()
+        if not sid:
+            raise ValueError("Укажите поставку WB")
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/v3/supplies/{sid}",
+            headers=self._auth_headers(),
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_mp_http_error(response)
+        data = response.json() or {}
+        if not isinstance(data, dict):
+            raise ValueError("Некорректный ответ WB по поставке")
+        return data
+
+    def list_fbs_shipping_points(self, *, city: str, cargo_type: int = 1) -> list[dict]:
+        text = str(city or "").strip()
+        if not text:
+            return []
+        try:
+            cargo = int(cargo_type)
+        except (TypeError, ValueError):
+            cargo = 1
+        if cargo not in (1, 2, 3):
+            cargo = 1
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/marketplace/v3/fbs/shipping-points",
+            headers=self._auth_headers(),
+            params={"city": text, "cargoType": cargo},
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_mp_http_error(response)
+        return _parse_shipping_points(response.json())
+
+    def list_supply_shipping_points(
+        self,
+        supply_id: str,
+        *,
+        city: str,
+        office_type: str = "sc,sw,pp,pfc,gpp",
+        shipping_dt: str | None = None,
+    ) -> list[dict]:
+        sid = str(supply_id or "").strip()
+        text = str(city or "").strip()
+        if not sid or not text:
+            return []
+        params: dict[str, str] = {"city": text}
+        office = str(office_type or "").strip()
+        if office:
+            params["officeType"] = office
+        date_text = str(shipping_dt or "").strip()
+        if date_text:
+            params["shippingDt"] = date_text
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/marketplace/v3/fbs/supplies/{sid}/shipping-points",
+            headers=self._auth_headers(),
+            params=params,
+            timeout=90,
+        )
+        if response.status_code == 400 and "officeType" in params:
+            params.pop("officeType", None)
+            response = _wb_request(
+                "GET",
+                f"{self.base_url}/api/marketplace/v3/fbs/supplies/{sid}/shipping-points",
+                headers=self._auth_headers(),
+                params=params,
+                timeout=90,
+            )
+        if not response.ok:
+            raise _wb_mp_http_error(response)
+        return _parse_shipping_points(response.json())
+
+    def set_supplies_shipping_method(self, items: list[dict]) -> dict:
+        payload_items: list[dict] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("supplyId") or item.get("supply_id") or "").strip()
+            shipping_dt = str(item.get("shippingDt") or item.get("shipping_dt") or "").strip()
+            shipping_type = str(
+                item.get("shippingType") or item.get("shipping_type") or ""
+            ).strip()
+            raw_point = item.get("shippingPointId")
+            if raw_point is None:
+                raw_point = item.get("shipping_point_id")
+            try:
+                point_id = int(raw_point)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Укажите пункт сдачи") from exc
+            if not sid or not shipping_dt or not shipping_type:
+                raise ValueError("Неполные параметры отгрузки поставки")
+            payload_items.append(
+                {
+                    "supplyId": sid,
+                    "shippingDt": shipping_dt,
+                    "shippingPointId": point_id,
+                    "shippingType": shipping_type,
+                }
+            )
+        if not payload_items:
+            raise ValueError("Нет поставок для параметров отгрузки")
+        merged: list[dict] = []
+        for i in range(0, len(payload_items), 100):
+            chunk = payload_items[i : i + 100]
+            response = _wb_request(
+                "PATCH",
+                f"{self.base_url}/api/marketplace/v3/fbs/supplies/shipping-method",
+                headers={**self._auth_headers(), "Content-Type": "application/json"},
+                json={"data": chunk},
+                timeout=90,
+            )
+            if not response.ok:
+                raise _wb_mp_http_error(response)
+            if not (response.content or b"").strip():
+                continue
+            data = response.json() or {}
+            if isinstance(data, dict):
+                merged.append(data)
+        return {"results": _shipping_batch_results(merged)}
+
+    def set_supplies_waybill(self, items: list[dict]) -> dict:
+        payload_items: list[dict] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("supplyId") or item.get("supply_id") or "").strip()
+            uuid = str(item.get("waybillUuid") or item.get("waybill_uuid") or "").strip()
+            if not sid or not uuid:
+                raise ValueError("Укажите поставку и УИД ТРН")
+            payload_items.append({"supplyId": sid, "waybillUuid": uuid})
+        if not payload_items:
+            raise ValueError("Нет поставок для УИД ТРН")
+        merged: list[dict] = []
+        for i in range(0, len(payload_items), 100):
+            chunk = payload_items[i : i + 100]
+            response = _wb_request(
+                "PATCH",
+                f"{self.base_url}/api/marketplace/v3/fbs/supplies/waybill",
+                headers={**self._auth_headers(), "Content-Type": "application/json"},
+                json={"data": chunk},
+                timeout=90,
+            )
+            if not response.ok:
+                raise _wb_mp_http_error(response)
+            if not (response.content or b"").strip():
+                continue
+            data = response.json() or {}
+            if isinstance(data, dict):
+                merged.append(data)
+        return {"results": _shipping_batch_results(merged)}
+
+    def deliver_supply(self, supply_id: str) -> None:
+        sid = str(supply_id or "").strip()
+        if not sid:
+            raise ValueError("Укажите поставку WB")
+        response = _wb_request(
+            "PATCH",
+            f"{self.base_url}/api/v3/supplies/{sid}/deliver",
+            headers=self._auth_headers(),
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_mp_http_error(response)
+
+    def fetch_supply_barcode(self, supply_id: str, *, sticker_type: str = "png") -> dict[str, str]:
+        sid = str(supply_id or "").strip()
+        if not sid:
+            raise ValueError("Укажите поставку WB")
+        kind = str(sticker_type or "png").strip().lower() or "png"
+        response = _wb_request(
+            "GET",
+            f"{self.base_url}/api/v3/supplies/{sid}/barcode",
+            headers=self._auth_headers(),
+            params={"type": kind},
+            timeout=90,
+        )
+        if not response.ok:
+            raise _wb_mp_http_error(response)
+        data = response.json() or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"WB не вернул QR поставки {sid}")
+        file_b64 = str(data.get("file") or data.get("barcodeFile") or "").strip()
+        if not file_b64:
+            raise ValueError(f"WB не вернул QR поставки {sid}")
+        return {
+            "barcode": str(data.get("barcode") or "").strip(),
+            "png_b64": file_b64,
+        }
 
     # Публичный FBW API (supplies-api) — только чтение поставки, товаров и уже
     # созданных коробов. Создать короба, записать состав и даты этими методами нельзя.
