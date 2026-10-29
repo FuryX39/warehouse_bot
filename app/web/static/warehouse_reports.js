@@ -464,6 +464,111 @@
       });
   }
 
+  function bindProductDemand(root) {
+    var form = root.querySelector("#whDemandForm");
+    var msg = root.querySelector("#whDemandMsg");
+    if (!form) return;
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      msg.className = "wh-msg";
+      msg.textContent = "";
+      var source = root.querySelector("#whDemandSource").value;
+      if (!source) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите источник остатков.";
+        return;
+      }
+      var submitBtn = root.querySelector("#whDemandSubmit");
+      submitBtn.disabled = true;
+      msg.textContent =
+        "Запрашиваем остатки, поставки и продажи WB за 30 дней. Обычно это занимает до нескольких минут.";
+      var url = "/api/warehouse/reports/demand/export?source=" + encodeURIComponent(source);
+      fetch(url, { credentials: "include" })
+        .then(function (r) {
+          var stats = parseHeaderJson("X-Product-Demand-Stats", r.headers);
+          if (!r.ok) {
+            return r.text().then(function (text) {
+              var detail = text || "HTTP " + r.status;
+              try {
+                var json = JSON.parse(text);
+                if (json && json.detail) detail = json.detail;
+              } catch (e2) {}
+              throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать отчёт");
+            });
+          }
+          return r.blob().then(function (blob) {
+            return { blob: blob, stats: stats };
+          });
+        })
+        .then(function (result) {
+          var stats = result.stats || {};
+          downloadBlob(result.blob, "potrebnost_tovarov_wb.xlsx");
+          var extra = "";
+          if (stats.missing_name_count) {
+            extra = " Без названия в каталоге: " + stats.missing_name_count + " арт.";
+          }
+          msg.className = "wh-msg wh-msg-ok";
+          msg.textContent =
+            "Готово. Позиций: " +
+            (stats.rows || 0) +
+            ", всего: " +
+            (stats.total || 0) +
+            ", продажи за 30 дней: " +
+            (stats.sales_30 || 0) +
+            ", остаток минус 30 дней: " +
+            (stats.remain_30 || 0) +
+            "." +
+            extra +
+            " Файл скачан.";
+        })
+        .catch(function (err) {
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = err.message || String(err);
+        })
+        .finally(function () {
+          submitBtn.disabled = false;
+        });
+    });
+  }
+
+  function renderProductDemand(tab, item) {
+    preparePanel(tab, item);
+    var root = panelEl();
+    root.innerHTML = '<p class="wh-placeholder">Загрузка...</p>';
+    shell()
+      .fetchJson("/api/warehouse/reports/demand/meta")
+      .then(function (data) {
+        var sources = (data && data.sources) || [];
+        if (data && data.wb_configured === false) {
+          root.innerHTML =
+            '<div class="wh-route-card">' +
+            '<p class="wh-msg wh-msg-error">Не задан WB_API_TOKEN. Нужен токен с категориями «Аналитика», «Поставки» и «Статистика».</p>' +
+            "</div>";
+          return;
+        }
+        root.innerHTML =
+          '<div class="wh-route-card">' +
+          '<p class="wh-muted">Тот же отчёт, что «Остатки товаров на складах», плюс продажи WB за последние 30 дней. ' +
+          "Колонки «Продажи за 60 дней» и «Продажи за 90 дней» — это продажи за 30 дней, умноженные на 2 и на 3. " +
+          "«Остатки минус продажи» считаются от колонки «Всего» (остаток на складе плюс в пути). Значения могут быть отрицательными. " +
+          "Сейчас работает только «Склады WB».</p>" +
+          '<form id="whDemandForm" class="wh-reports-form">' +
+          '<label><span>Источник остатков</span><select id="whDemandSource" required>' +
+          sourceOptionsHtml(sources, "wb") +
+          "</select></label>" +
+          '<div class="wh-tools-actions">' +
+          '<button type="submit" class="wh-btn wh-btn-primary" id="whDemandSubmit">Сформировать Excel</button>' +
+          "</div>" +
+          "</form>" +
+          '<p class="wh-msg" id="whDemandMsg"></p>' +
+          "</div>";
+        bindProductDemand(root);
+      })
+      .catch(function (err) {
+        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
+      });
+  }
+
   function monthStartValue() {
     var now = new Date();
     var m = String(now.getMonth() + 1);
@@ -615,6 +720,10 @@
     }
     if (item.id === "stock-by-warehouse") {
       renderStockByWarehouse(tab, item);
+      return;
+    }
+    if (item.id === "demand") {
+      renderProductDemand(tab, item);
       return;
     }
     shell().contentTitleEl.textContent = item.title;
