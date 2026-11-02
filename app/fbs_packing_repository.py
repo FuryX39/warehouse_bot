@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, and_, delete, func, or_, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.warehouse_task_files import WarehouseTaskFileStorage
@@ -440,18 +440,17 @@ class FbsPackingRepository:
                 select(FbsPackingJob)
                 .where(
                     FbsPackingJob.id.in_([int(x) for x in job_ids]),
-                    or_(
-                        FbsPackingJob.status.in_(JOB_ACTIVE_STATUSES),
-                        and_(
-                            FbsPackingJob.marketplace == MARKETPLACE_WB,
-                            FbsPackingJob.status == JOB_STATUS_DONE,
-                            FbsPackingJob.supplies_delivered_at_ts > 0,
-                        ),
-                    ),
+                    FbsPackingJob.status.in_(JOB_ACTIVE_STATUSES),
                 )
                 .order_by(FbsPackingJob.id.desc())
             ).all()
-            return [self._job_row(session, row) for row in rows]
+            visible: list[FbsPackingJob] = []
+            for row in rows:
+                self._finish_if_complete(session, row)
+                if str(row.status or "") in JOB_ACTIVE_STATUSES:
+                    visible.append(row)
+            session.commit()
+            return [self._job_row(session, row) for row in visible]
 
     def get_job(self, job_id: int, *, include_lines: bool = False) -> FbsPackingJobRow | None:
         with Session(self.engine) as session:
@@ -850,10 +849,6 @@ class FbsPackingRepository:
         )
         if int(remaining or 0) != 0:
             return
-        if str(job.marketplace or "") == MARKETPLACE_WB and int(
-            getattr(job, "supplies_delivered_at_ts", 0) or 0
-        ) <= 0:
-            return
         job.status = JOB_STATUS_DONE
 
     def mark_supplies_delivered(self, job_id: int) -> FbsPackingJobRow:
@@ -1029,11 +1024,6 @@ class FbsPackingRepository:
             "line_printed": job.line_printed,
             "remaining": job.line_pending,
             "supplies_delivered": int(getattr(job, "supplies_delivered_at_ts", 0) or 0) > 0,
-            "can_wb_deliver": str(job.marketplace or "") == MARKETPLACE_WB
-            and str(job.status or "") != JOB_STATUS_CANCELLED
-            and int(getattr(job, "supplies_delivered_at_ts", 0) or 0) <= 0,
-            "can_wb_print_qr": str(job.marketplace or "") == MARKETPLACE_WB
-            and int(getattr(job, "supplies_delivered_at_ts", 0) or 0) > 0,
         }
         if include_lines:
             payload["lines"] = [self.line_to_dict(line) for line in job.lines]

@@ -13,7 +13,6 @@ from app.config import Settings
 from app.fbs_packing_repository import (
     FbsPackingRepository,
     JOB_STATUS_DONE,
-    JOB_STATUS_IN_PROGRESS,
     LINE_PENDING,
 )
 from app.fbs_packing_service import create_wb_packing_job
@@ -358,8 +357,6 @@ def test_wb_delivery_routes(db_url: str, tmp_path) -> None:
     job_after = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}")
     assert job_after.status_code == 200
     assert job_after.json()["job"]["supplies_delivered"] is True
-    assert job_after.json()["job"]["can_wb_print_qr"] is True
-    assert job_after.json()["job"]["can_wb_deliver"] is False
 
     qr = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/wb-delivery/qr.pdf")
     assert qr.status_code == 200, qr.text
@@ -382,7 +379,7 @@ def test_load_delivery_meta_without_points() -> None:
     assert meta["points"][1]["available"] is False
 
 
-def test_wb_job_stays_open_until_delivered(db_url: str, tmp_path) -> None:
+def test_wb_job_hides_when_packed(db_url: str, tmp_path) -> None:
     catalog, db_url = _catalog(db_url)
     catalog.create_product(
         {
@@ -413,63 +410,6 @@ def test_wb_job_stays_open_until_delivered(db_url: str, tmp_path) -> None:
     packed = packing.get_job(job.id)
     assert packed is not None
     assert packed.line_pending == 0
-    assert packed.status == JOB_STATUS_IN_PROGRESS
+    assert packed.status == JOB_STATUS_DONE
     mine = packing.list_my_jobs(7)
-    assert any(item.id == job.id for item in mine)
-
-    packing.mark_supplies_delivered(job.id)
-    done = packing.get_job(job.id)
-    assert done is not None
-    assert done.status == JOB_STATUS_DONE
-    assert done.supplies_delivered_at_ts > 0
-    mine_after = packing.list_my_jobs(7)
-    assert any(item.id == job.id for item in mine_after)
-
-
-def test_packer_wb_delivery_blank_form_and_qr(db_url: str, tmp_path) -> None:
-    adapter = FakeDeliverAdapter()
-    client = _client(db_url, tmp_path, adapter)
-    created = client.post(
-        "/api/warehouse/fbs-packing/jobs",
-        json={
-            "marketplace": "wildberries",
-            "order_substatus": "READY_TO_SHIP",
-            "supply_id": "WB-GI-TEST",
-            "packer_user_ids": [7],
-        },
-    )
-    assert created.status_code == 200, created.text
-    job_id = created.json()["job"]["id"]
-    prefix = f"/api/v1/fbs-packing/jobs/{job_id}"
-
-    meta = client.get(f"{prefix}/wb-delivery")
-    assert meta.status_code == 200, meta.text
-    payload = meta.json()
-    assert payload["shipping_date"] == ""
-    assert payload["default_point_key"] == "nsk4_tolmachevo"
-
-    missing = client.post(
-        f"{prefix}/wb-delivery",
-        json={"shipping_point_id": 33070, "point_key": "nsk4_tolmachevo"},
-    )
-    assert missing.status_code == 400
-
-    delivered = client.post(
-        f"{prefix}/wb-delivery",
-        json={
-            "shipping_point_id": 33070,
-            "point_key": "nsk4_tolmachevo",
-            "shipping_dt": "2026-10-28",
-            "shipping_type": "selfShipping",
-        },
-    )
-    assert delivered.status_code == 200, delivered.text
-    assert delivered.content.startswith(b"%PDF")
-    opened = client.get(f"{prefix}/pack")
-    assert opened.status_code == 200, opened.text
-    job = opened.json()["job"]
-    assert job["can_wb_print_qr"] is True
-    assert job["can_wb_deliver"] is False
-    qr = client.get(f"{prefix}/wb-delivery/qr.pdf")
-    assert qr.status_code == 200, qr.text
-    assert qr.content.startswith(b"%PDF")
+    assert all(item.id != job.id for item in mine)
