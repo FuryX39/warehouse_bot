@@ -12,6 +12,7 @@ from reportlab.pdfgen import canvas
 
 from app.pdf_fonts import get_pdf_label_fonts
 from app.wb_fbw_pallet_sheets import parse_pallet_count
+from app.wb_fbw_supply_qr import normalize_wb_supply_type
 
 # Word: A4 portrait, WILDBERRIES 70, подзаголовок 40, поля 25, слева 42.5 pt.
 _LEFT = 42.5
@@ -55,10 +56,7 @@ def _display_date(raw: object) -> str:
 
 
 def _display_supply_type(raw: object) -> str:
-    value = str(raw or "").strip()
-    if value.casefold().startswith("монопал"):
-        return "Монопаллет"
-    return value
+    return normalize_wb_supply_type(raw)
 
 
 def _pretty_company_words(text: str) -> str:

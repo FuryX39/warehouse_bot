@@ -109,6 +109,7 @@ def register_warehouse_wb_fbo_sheet_routes(
             seller_name: str = Form(""),
             plan_date: str = Form(""),
             box_type: str = Form("Короб"),
+            transfer_number: str = Form(""),
             user: WarehouseUserRow = Depends(require_warehouse_user),
         ) -> dict:
             packers = _parse_packer_ids(packer_user_ids)
@@ -137,6 +138,7 @@ def register_warehouse_wb_fbo_sheet_routes(
                     seller_name=seller_name,
                     plan_date=plan_date,
                     box_type=box_type,
+                    transfer_number=transfer_number,
                 )
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
@@ -181,6 +183,19 @@ def register_warehouse_wb_fbo_sheet_routes(
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"ok": True, "packer_user_ids": ids}
+
+        @app.post("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/transfer-number")
+        async def api_wb_fbo_sheet_job_transfer(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> dict:
+            number = str((body or {}).get("transfer_number") or "").strip()[:128]
+            try:
+                job = await asyncio.to_thread(packing_repo.set_transfer_number, job_id, number)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": packing_repo.job_to_dict(job)}
 
         @app.get("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
         async def api_wb_fbo_sheet_boxes_xlsx(

@@ -158,6 +158,7 @@ def test_sku_progress_marks_sku_done_when_plan_filled(db_url: str, tmp_path) -> 
     assert mine.status_code == 200, mine.text
     row = mine.json()["jobs"][0]
     assert row["supply_id"] == "41505518"
+    assert row["supply_type"] == "Монопаллет"
     assert row["sku_done"] == 1
     assert row["sku_pending"] == 1
 
@@ -284,7 +285,7 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     created = client.post(
         "/api/warehouse/marketplaces/wb-fbo-new/jobs",
-        data={"packer_user_ids": "[7]", "supply_id": "41357389"},
+        data={"packer_user_ids": "[7]", "supply_id": "41357389", "transfer_number": " ПР-15 "},
         files={
             "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
             "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
@@ -300,6 +301,13 @@ def test_create_print_assign_and_download_boxes_xlsx(db_url: str, tmp_path) -> N
     assert job["sku_pending"] == 4
     assert job["supply_id"] == "41505518"
     assert job["warehouse_name"] == "СЦ Коледино 2"
+    assert job["supply_type"] == "Монопаллет"
+    assert job["transfer_number"] == "ПР-15"
+    mine = client.get("/api/v1/fbo-sheet-packing/my")
+    assert mine.status_code == 200, mine.text
+    packer_job = mine.json()["jobs"][0]
+    assert packer_job["supply_type"] == "Монопаллет"
+    assert packer_job["transfer_number"] == "ПР-15"
     assert job["source_pallet_count"] == 9
     assert job["has_supply_qr"] is True
     job_id = job["id"]

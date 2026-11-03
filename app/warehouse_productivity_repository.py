@@ -777,7 +777,7 @@ class WarehouseProductivityRepository:
                     """
                     SELECT i.assigned_at_ts AS event_ts, i.assigned_by_user_id AS user_id,
                            j.id AS task_id, i.item_qty AS quantity, '' AS marketplace,
-                           j.supply_id, '' AS transfer_number, j.warehouse_name,
+                           j.supply_id, j.transfer_number, j.warehouse_name,
                            j.seller_name, j.plan_date, '' AS order_number,
                            '' AS supplier, '' AS delivery_date
                     FROM wb_fbo_sheet_box_items i

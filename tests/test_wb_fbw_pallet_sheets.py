@@ -24,6 +24,7 @@ from app.wb_fbw_supply_qr import (
     extract_wb_supply_data_from_pdf,
     extract_wb_supply_qr_code_from_pdf,
     normalize_wb_supply_qr_code,
+    normalize_wb_supply_type,
 )
 
 
@@ -79,6 +80,16 @@ def test_extract_gi_from_generated_pdf() -> None:
     assert extract_wb_supply_qr_code_from_pdf(buf.getvalue()) == "WB-GI-277689956"
 
 
+def test_normalize_wb_supply_type() -> None:
+    assert normalize_wb_supply_type("Короб") == "Короб"
+    assert normalize_wb_supply_type("короба") == "Короб"
+    assert normalize_wb_supply_type("Монопаллета") == "Монопаллет"
+    assert normalize_wb_supply_type("Монопаллет") == "Монопаллет"
+    assert normalize_wb_supply_type("Пошт. паллет") == "Пошт. паллет"
+    assert normalize_wb_supply_type("Поштучная паллета") == "Пошт. паллет"
+    assert normalize_wb_supply_type("") == ""
+
+
 def test_extract_supply_data_from_qr_pdf() -> None:
     regular, _bold = get_pdf_label_fonts()
     buf = BytesIO()
@@ -106,7 +117,7 @@ def test_extract_supply_data_from_qr_pdf() -> None:
     assert data.warehouse_name == "СЦ Коледино 2"
     assert data.seller_name == 'ООО "ШАЙН СИСТЕМС"'
     assert data.plan_date == "11.10.2026"
-    assert data.supply_type == "Монопаллета"
+    assert data.supply_type == "Монопаллет"
     assert data.pallet_count == 9
 
 
@@ -154,7 +165,7 @@ def test_extract_real_wb_fbo_new_supply_qr() -> None:
     assert data.warehouse_name == "СЦ Коледино 2"
     assert data.seller_name == 'ООО "ШАЙН СИСТЕМС"'
     assert data.plan_date == "11.10.2026"
-    assert data.supply_type == "Монопаллета"
+    assert data.supply_type == "Монопаллет"
     assert data.pallet_count == 2
     pdf = generate_wb_fbo_packing_sheets_pdf(
         WbFboPackingSheetData(

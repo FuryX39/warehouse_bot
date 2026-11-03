@@ -17,6 +17,7 @@ from app.warehouse_task_files import (
     MAX_TASK_ATTACHMENT_MB,
     WarehouseTaskFileStorage,
 )
+from app.wb_fbw_supply_qr import normalize_wb_supply_type
 
 JOB_STATUS_OPEN = "open"
 JOB_STATUS_IN_PROGRESS = "in_progress"
@@ -51,6 +52,7 @@ class WbFboSheetJob(_Base):
     supply_qr_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     supply_qr_stored_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     supply_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    transfer_number: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     source_pallet_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=JOB_STATUS_OPEN)
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -231,6 +233,7 @@ class WbFboSheetJobRow:
     supply_qr_code: str
     supply_qr_stored_name: str
     supply_type: str
+    transfer_number: str
     source_pallet_count: int
     status: str
     created_by_user_id: int | None
@@ -300,6 +303,7 @@ class WbFboSheetRepository:
             "supply_qr_code": "VARCHAR(64) NOT NULL DEFAULT ''",
             "supply_qr_stored_name": "VARCHAR(256) NOT NULL DEFAULT ''",
             "supply_type": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "transfer_number": "VARCHAR(128) NOT NULL DEFAULT ''",
             "source_pallet_count": "INTEGER NOT NULL DEFAULT 0",
         }
         with Session(self.engine) as session:
@@ -624,6 +628,7 @@ class WbFboSheetRepository:
             supply_qr_code=str(job.supply_qr_code or ""),
             supply_qr_stored_name=str(job.supply_qr_stored_name or ""),
             supply_type=str(job.supply_type or ""),
+            transfer_number=str(getattr(job, "transfer_number", None) or ""),
             source_pallet_count=int(job.source_pallet_count or 0),
             status=str(job.status or ""),
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
@@ -675,6 +680,7 @@ class WbFboSheetRepository:
         source_pallet_count: int,
         products: list[dict[str, Any]],
         boxes: list[dict[str, Any]],
+        transfer_number: str = "",
     ) -> WbFboSheetJobRow:
         now = int(time.time())
         goods_name = self.store_xlsx(goods_xlsx, original_filename="goods.xlsx")
@@ -691,7 +697,8 @@ class WbFboSheetRepository:
                 boxes_stored_name=boxes_name,
                 supply_qr_code=str(supply_qr_code or ""),
                 supply_qr_stored_name=qr_name,
-                supply_type=str(supply_type or ""),
+                supply_type=normalize_wb_supply_type(supply_type),
+                transfer_number=str(transfer_number or "").strip()[:128],
                 source_pallet_count=max(0, int(source_pallet_count or 0)),
                 status=JOB_STATUS_OPEN,
                 created_by_user_id=created_by_user_id,
@@ -796,6 +803,20 @@ class WbFboSheetRepository:
         with Session(self.engine) as session:
             row = session.get(WbFboSheetJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_transfer_number(self, job_id: int, transfer_number: str) -> WbFboSheetJobRow:
+        number = str(transfer_number or "").strip()[:128]
+        with Session(self.engine) as session:
+            job = session.get(WbFboSheetJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.transfer_number = number
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def set_assignees(self, job_id: int, user_ids: list[int]) -> WbFboSheetJobRow:
         ids = list(dict.fromkeys(int(value) for value in user_ids if int(value) > 0))
@@ -1413,7 +1434,8 @@ class WbFboSheetRepository:
             "box_type": job.box_type,
             "supply_qr_code": job.supply_qr_code,
             "has_supply_qr": bool(job.supply_qr_stored_name),
-            "supply_type": job.supply_type,
+            "supply_type": normalize_wb_supply_type(job.supply_type),
+            "transfer_number": job.transfer_number,
             "source_pallet_count": job.source_pallet_count,
             "status": job.status,
             "created_by_user_id": job.created_by_user_id,

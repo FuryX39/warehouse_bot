@@ -42,6 +42,7 @@ def create_wb_fbo_sheet_job(
     seller_name: str = "",
     plan_date: str = "",
     box_type: str = "Короб",
+    transfer_number: str = "",
 ) -> WbFboSheetJobRow:
     if not supply_qr_pdf or not supply_qr_pdf.startswith(b"%PDF"):
         raise ValueError("Прикрепите PDF с QR поставки из кабинета WB")
@@ -99,6 +100,7 @@ def create_wb_fbo_sheet_job(
         supply_qr_pdf=supply_qr_pdf,
         supply_qr_code=supply_data.qr_code,
         supply_type=resolved_type,
+        transfer_number=str(transfer_number or "").strip()[:128],
         source_pallet_count=supply_data.pallet_count,
         products=products,
         boxes=_boxes_for_job(boxes),

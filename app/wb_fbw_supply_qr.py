@@ -9,6 +9,24 @@ from datetime import datetime
 
 _GI_RE = re.compile(r"WB-GI-?\s*([\d\s]+)", re.IGNORECASE)
 _GI_COMPACT_RE = re.compile(r"^WB-GI-\d+$", re.IGNORECASE)
+_SUPPLY_TYPE_CANONICAL = (
+    ("монопал", "Монопаллет"),
+    ("поштуч", "Пошт. паллет"),
+    ("пошт", "Пошт. паллет"),
+    ("короб", "Короб"),
+)
+
+
+def normalize_wb_supply_type(raw: object) -> str:
+    """Канон из QR: Короб, Монопаллет, Пошт. паллет."""
+    text = re.sub(r"\s+", " ", str(raw or "").replace("\u00a0", " ")).strip()
+    if not text:
+        return ""
+    key = text.casefold().replace("ё", "е")
+    for needle, label in _SUPPLY_TYPE_CANONICAL:
+        if needle in key:
+            return label
+    return text
 
 
 @dataclass(frozen=True)
@@ -101,7 +119,7 @@ def extract_wb_supply_data_from_pdf(content: bytes) -> WbSupplyQrData:
         warehouse_name=_field(text, "Пункт отгрузки", until="Продавец"),
         seller_name=_field(text, "Продавец", to_end=True),
         plan_date=_full_date(date_match.group(1) if date_match else ""),
-        supply_type=_field(text, "Тип поставки"),
+        supply_type=normalize_wb_supply_type(_field(text, "Тип поставки")),
         pallet_count=int(count_match.group(1)) if count_match else 0,
     )
 

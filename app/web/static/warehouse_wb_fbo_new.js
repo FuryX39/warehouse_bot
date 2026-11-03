@@ -103,7 +103,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Поставка</th><th>Штук</th><th>Артикулы</th><th>Упаковщики</th><th></th>" +
+      "<th>№</th><th>Поставка</th><th>Тип</th><th>Перемещение</th><th>Штук</th><th>Артикулы</th><th>Упаковщики</th><th></th>" +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -132,6 +132,10 @@
             esc(job.supply_id || "—") +
             " · " +
             esc(jobStatusLabel(job.status)) +
+            "</td><td>" +
+            esc(job.supply_type || "—") +
+            "</td><td>" +
+            esc(job.transfer_number || "—") +
             "</td><td>" +
             esc(job.pcs_assigned) +
             " / " +
@@ -233,6 +237,7 @@
     fd.append("warehouse_name", root.querySelector("#whWbFboNewWarehouse").value.trim());
     fd.append("seller_name", root.querySelector("#whWbFboNewSeller").value.trim());
     fd.append("plan_date", root.querySelector("#whWbFboNewPlanDate").value.trim());
+    fd.append("transfer_number", root.querySelector("#whWbFboNewTransfer").value.trim());
     setBusy(root, true);
     fetchJson("/api/warehouse/marketplaces/wb-fbo-new/jobs", { method: "POST", body: fd })
       .then(function (data) {
@@ -304,6 +309,7 @@
           '<label>Товары.xlsx<input type="file" id="whWbFboNewGoods" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
           '<label>Шк коробов.xlsx<input type="file" id="whWbFboNewBoxes" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>' +
           '<label>QR поставки.pdf<input type="file" id="whWbFboNewQr" accept=".pdf,application/pdf" /></label>' +
+          '<label>Перемещение<input type="text" id="whWbFboNewTransfer" maxlength="128" placeholder="необязательно" /></label>' +
           '<label>№ поставки (резерв, если PDF не распознан)<input type="text" id="whWbFboNewSupplyId" placeholder="необязательно" /></label>' +
           '<label>Склад (резерв)<input type="text" id="whWbFboNewWarehouse" /></label>' +
           '<label>Продавец (резерв)<input type="text" id="whWbFboNewSeller" /></label>' +
