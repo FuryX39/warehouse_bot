@@ -1,8 +1,9 @@
-"""Отчёт «Потребность товаров»: остатки на складах плюс продажи за 30/60/90 дней."""
+"""Отчёт «Потребность товаров»: остатки на складах плюс заказы WB за 30/60/90 дней."""
 
 from __future__ import annotations
 
 import io
+import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -17,16 +18,19 @@ from openpyxl.utils import get_column_letter
 from app.adapters.base import is_value_configured
 from app.catalog_repository import CatalogRepository
 from app.stock_by_warehouse_report import (
+    ANALYTICS_BASE,
+    MISSING_NAME,
     FetchInTransitFn,
     FetchRawFn,
     StockByWarehouseRow,
     build_stock_by_warehouse_report,
 )
 
-STATS_BASE = "https://statistics-api.wildberries.ru"
+logger = logging.getLogger(__name__)
 _TZ = ZoneInfo("Europe/Moscow")
-_SALES_PAGE_LIMIT = 100_000
-_SALES_MAX_PAGES = 40
+_FUNNEL_LIMIT = 1000
+_FUNNEL_MAX_OFFSET = 20000
+_FUNNEL_INTERVAL_SEC = 21
 _HEADERS = (
     "Артикул",
     "Название",
@@ -34,11 +38,11 @@ _HEADERS = (
     "В пути",
     "Всего",
     "Продажи за 30 дней",
-    "Остатки минус продажи за 30 дней",
+    "Продажи минус остатки за 30 дней",
     "Продажи за 60 дней",
-    "Остатки минус продажи за 60 дней",
+    "Продажи минус остатки за 60 дней",
     "Продажи за 90 дней",
-    "Остатки минус продажи за 90 дней",
+    "Продажи минус остатки за 90 дней",
 )
 
 FetchSalesFn = Callable[[str, date, date], dict[str, int]]
@@ -88,14 +92,28 @@ def _excel_safe_text(value: object) -> str:
 
 def _qty(value: object) -> int:
     try:
-        return int(value or 0)
+        return int(float(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _as_dict(raw: Any) -> dict[str, Any]:
+    return raw if isinstance(raw, dict) else {}
 
 
 def _as_list(raw: Any) -> list[Any]:
     if isinstance(raw, list):
         return raw
+    data = _as_dict(raw)
+    for key in ("products", "cards", "data", "report"):
+        inner = data.get(key)
+        if isinstance(inner, list):
+            return inner
+        nested = _as_dict(inner)
+        for nested_key in ("products", "cards", "report"):
+            nested_list = nested.get(nested_key)
+            if isinstance(nested_list, list):
+                return nested_list
     return []
 
 
@@ -115,49 +133,33 @@ def sales_window_30_days(*, today: date | None = None) -> tuple[date, date]:
     return start, end
 
 
-def _parse_sale_date(raw: object) -> date | None:
-    text = str(raw or "").strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        try:
-            parsed = datetime.fromisoformat(text[:10])
-        except ValueError:
-            return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_TZ)
-    return parsed.astimezone(_TZ).date()
-
-
-def _sale_sign(row: dict[str, Any]) -> int:
-    sale_id = str(row.get("saleID") or row.get("saleId") or "").strip()
-    if sale_id[:1].casefold() == "r":
-        return -1
-    order_type = str(row.get("orderType") or "").casefold()
-    if "возврат" in order_type:
-        return -1
-    return 1
-
-
-def aggregate_sales_by_sku(
-    raw_rows: list[dict[str, Any]],
-    *,
-    date_from: date,
-    date_to: date,
-) -> dict[str, int]:
+def aggregate_funnel_sales_by_sku(cards: list[dict[str, Any]]) -> dict[str, int]:
     by_key: dict[str, tuple[str, int]] = {}
-    for row in raw_rows:
-        sku = str(row.get("supplierArticle") or row.get("vendorCode") or "").strip()
+    for card in cards:
+        product = _as_dict(card.get("product") or card.get("nm") or card)
+        sku = str(
+            product.get("vendorCode")
+            or card.get("vendorCode")
+            or product.get("saName")
+            or ""
+        ).strip()
         if not sku:
             continue
-        sold_on = _parse_sale_date(row.get("date") or row.get("saleDate"))
-        if sold_on is None or sold_on < date_from or sold_on > date_to:
-            continue
-        qty = _qty(row.get("quantity")) * _sale_sign(row)
+        statistic = _as_dict(card.get("statistic") or card.get("statistics"))
+        stats = _as_dict(
+            statistic.get("selected")
+            or statistic.get("selectedPeriod")
+            or card.get("currentPeriod")
+            or card.get("selectedPeriod")
+            or card.get("period")
+        )
+        qty = _qty(
+            stats.get("orderCount")
+            if stats.get("orderCount") is not None
+            else stats.get("ordersCount")
+            if stats.get("ordersCount") is not None
+            else stats.get("orders")
+        )
         if qty == 0:
             continue
         key = sku.casefold()
@@ -169,56 +171,117 @@ def aggregate_sales_by_sku(
 def fetch_wb_sales_by_sku(token: str, date_from: date, date_to: date) -> dict[str, int]:
     if not is_value_configured(token):
         raise ValueError("Не задан WB_API_TOKEN")
-    headers = {"Authorization": token}
-    date_from_raw = datetime(date_from.year, date_from.month, date_from.day, tzinfo=_TZ).isoformat(
-        timespec="seconds"
-    )
-    collected: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    cursor = date_from_raw
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    cards: list[dict[str, Any]] = []
+    offset = 0
     try:
-        for _ in range(_SALES_MAX_PAGES):
+        while offset < _FUNNEL_MAX_OFFSET:
+            body = {
+                "selectedPeriod": {
+                    "start": date_from.isoformat(),
+                    "end": date_to.isoformat(),
+                },
+                "limit": _FUNNEL_LIMIT,
+                "offset": offset,
+                "skipDeletedNm": True,
+                "orderBy": {"field": "orderCount", "mode": "desc"},
+            }
             for attempt in range(5):
-                response = requests.get(
-                    f"{STATS_BASE}/api/v1/supplier/sales",
+                if offset > 0 or attempt > 0:
+                    time.sleep(_FUNNEL_INTERVAL_SEC)
+                response = requests.post(
+                    f"{ANALYTICS_BASE}/api/analytics/v3/sales-funnel/products",
                     headers=headers,
-                    params={"dateFrom": cursor, "flag": 0},
-                    timeout=120,
+                    json=body,
+                    timeout=90,
                 )
                 if response.status_code == 429:
-                    time.sleep(20 * (attempt + 1))
                     continue
                 if not response.ok:
                     raise _http_error(response)
-                payload = response.json() if (response.content or b"").strip() else []
+                payload = response.json() if (response.content or b"").strip() else {}
                 break
             else:
-                raise ValueError("WB ограничивает частоту запросов к продажам. Повторите через минуту.")
+                raise ValueError(
+                    "WB ограничивает частоту запросов к воронке продаж. Повторите через минуту."
+                )
             batch = [item for item in _as_list(payload) if isinstance(item, dict)]
             if not batch:
                 break
-            new_rows = 0
-            last_change = ""
-            for item in batch:
-                sale_id = str(item.get("saleID") or item.get("rrd_id") or item.get("srid") or "").strip()
-                key = sale_id or f"{item.get('date')}:{item.get('supplierArticle')}:{item.get('barcode')}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                collected.append(item)
-                new_rows += 1
-                last_change = str(item.get("lastChangeDate") or last_change)
-            if len(batch) < _SALES_PAGE_LIMIT or not last_change or last_change == cursor or new_rows == 0:
+            cards.extend(batch)
+            if len(batch) < _FUNNEL_LIMIT:
                 break
-            cursor = last_change
+            offset += len(batch)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         if status in (401, 403):
             raise ValueError(
-                "Нет доступа к статистике WB. Нужен токен с категорией «Статистика»."
+                "Нет доступа к аналитике WB. Нужен токен с категорией «Аналитика»."
             ) from exc
         raise RuntimeError(str(exc)) from exc
-    return aggregate_sales_by_sku(collected, date_from=date_from, date_to=date_to)
+    sales = aggregate_funnel_sales_by_sku(cards)
+    logger.info(
+        "wb funnel sales cards=%s skus=%s period=%s..%s",
+        len(cards),
+        len(sales),
+        date_from,
+        date_to,
+    )
+    return sales
+
+
+def _catalog_sku_map(catalog_repo: CatalogRepository) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for product in catalog_repo.list_products({}):
+        sku = str(getattr(product, "sku", "") or "").strip()
+        if not sku:
+            continue
+        out[sku.casefold()] = {
+            "sku": sku,
+            "name": str(getattr(product, "name", "") or "").strip(),
+        }
+    return out
+
+
+def expand_demand_stock_rows(
+    stock_rows: list[StockByWarehouseRow],
+    sales_by_sku: dict[str, int],
+    catalog_by_sku: dict[str, dict[str, str]],
+) -> list[StockByWarehouseRow]:
+    by_key: dict[str, StockByWarehouseRow] = {}
+    for row in stock_rows:
+        key = str(row.sku or "").strip().casefold()
+        if not key:
+            continue
+        by_key[key] = row
+    for key, item in (catalog_by_sku or {}).items():
+        sku_key = str(key or "").strip().casefold()
+        if not sku_key or sku_key in by_key:
+            continue
+        sku = str(item.get("sku") or key).strip() or key
+        name = str(item.get("name") or "").strip() or MISSING_NAME
+        by_key[sku_key] = StockByWarehouseRow(
+            sku=sku,
+            name=name,
+            quantity=0,
+            in_transit=0,
+            total=0,
+        )
+    for sku, _qty in (sales_by_sku or {}).items():
+        sku_key = str(sku or "").strip().casefold()
+        if not sku_key or sku_key in by_key:
+            continue
+        catalog = (catalog_by_sku or {}).get(sku_key) or {}
+        display_sku = str(catalog.get("sku") or sku).strip() or sku
+        name = str(catalog.get("name") or "").strip() or MISSING_NAME
+        by_key[sku_key] = StockByWarehouseRow(
+            sku=display_sku,
+            name=name,
+            quantity=0,
+            in_transit=0,
+            total=0,
+        )
+    return [by_key[key] for key in sorted(by_key)]
 
 
 def attach_demand_columns(
@@ -240,11 +303,11 @@ def attach_demand_columns(
                 in_transit=int(row.in_transit),
                 total=total,
                 sales_30=sales_30,
-                remain_30=total - sales_30,
+                remain_30=sales_30 - total,
                 sales_60=sales_60,
-                remain_60=total - sales_60,
+                remain_60=sales_60 - total,
                 sales_90=sales_90,
-                remain_90=total - sales_90,
+                remain_90=sales_90 - total,
             )
         )
     return out
@@ -349,7 +412,9 @@ def build_product_demand_report(
         sales = {}
     else:
         sales = fetch_wb_sales_by_sku(wb_api_token, date_from, date_to)
-    rows = attach_demand_columns(stock.rows, sales)
+    base_rows = expand_demand_stock_rows(stock.rows, sales, _catalog_sku_map(catalog_repo))
+    rows = attach_demand_columns(base_rows, sales)
+    missing = sum(1 for row in rows if row.name == MISSING_NAME)
     workbook = build_demand_workbook(
         rows,
         source_title=stock.source_title,
@@ -373,7 +438,7 @@ def build_product_demand_report(
         total_remain_60=sum(row.remain_60 for row in rows),
         total_sales_90=sum(row.sales_90 for row in rows),
         total_remain_90=sum(row.remain_90 for row in rows),
-        missing_name_count=stock.missing_name_count,
+        missing_name_count=missing,
         workbook_bytes=workbook,
         filename="potrebnost_tovarov_wb.xlsx",
     )

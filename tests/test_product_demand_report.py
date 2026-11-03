@@ -10,9 +10,10 @@ from openpyxl import load_workbook
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.product_demand_report import (
-    aggregate_sales_by_sku,
+    aggregate_funnel_sales_by_sku,
     attach_demand_columns,
     build_product_demand_report,
+    expand_demand_stock_rows,
     sales_window_30_days,
 )
 from app.stock_by_warehouse_report import MISSING_NAME, WB_RF_WAREHOUSE, StockByWarehouseRow
@@ -53,20 +54,25 @@ def test_sales_window_is_30_inclusive_days() -> None:
     assert end == date(2026, 10, 28)
 
 
-def test_aggregate_sales_subtracts_returns() -> None:
-    rows = [
-        {"supplierArticle": "SS100", "date": "2026-10-10T12:00:00+03:00", "quantity": 4, "saleID": "S1"},
-        {"supplierArticle": "ss100", "date": "2026-10-11T12:00:00+03:00", "quantity": 1, "saleID": "R2"},
-        {"supplierArticle": "SS200", "date": "2026-08-01T12:00:00+03:00", "quantity": 9, "saleID": "S3"},
-        {"supplierArticle": "SS300", "date": "2026-10-12T12:00:00+03:00", "quantity": 2, "orderType": "Возврат"},
+def test_aggregate_funnel_sales_sums_order_count() -> None:
+    cards = [
+        {
+            "product": {"vendorCode": "SS100"},
+            "statistic": {"selected": {"orderCount": 4, "buyoutCount": 1}},
+        },
+        {
+            "product": {"vendorCode": "ss100"},
+            "statistic": {"selected": {"orderCount": 6}},
+        },
+        {
+            "product": {"vendorCode": "SS200"},
+            "statistic": {"selected": {"orderCount": 0}},
+        },
     ]
-    result = aggregate_sales_by_sku(
-        rows, date_from=date(2026, 9, 29), date_to=date(2026, 10, 28)
-    )
-    assert result == {"SS100": 3, "SS300": -2}
+    assert aggregate_funnel_sales_by_sku(cards) == {"SS100": 10}
 
 
-def test_attach_demand_allows_negative_remainder() -> None:
+def test_attach_demand_is_sales_minus_stock() -> None:
     rows = attach_demand_columns(
         [
             StockByWarehouseRow(sku="SS100", name="Case", quantity=13, in_transit=5, total=18),
@@ -75,14 +81,31 @@ def test_attach_demand_allows_negative_remainder() -> None:
         {"ss100": 10},
     )
     assert [(row.sku, row.sales_30, row.remain_30, row.sales_60, row.remain_60, row.sales_90, row.remain_90) for row in rows] == [
-        ("SS100", 10, 8, 20, -2, 30, -12),
-        ("NEW-SKU", 0, 7, 0, 7, 0, 7),
+        ("SS100", 10, -8, 20, 2, 30, 12),
+        ("NEW-SKU", 0, -7, 0, -7, 0, -7),
     ]
 
 
-def test_demand_report_keeps_stock_rows_and_adds_sales(db_url: str) -> None:
+def test_expand_demand_adds_catalog_and_sales_without_stock() -> None:
+    rows = expand_demand_stock_rows(
+        [StockByWarehouseRow(sku="SS100", name="Case", quantity=13, in_transit=5, total=18)],
+        {"SS100": 10, "ghost": 99},
+        {
+            "ss100": {"sku": "SS100", "name": "Case"},
+            "ss300": {"sku": "SS300", "name": "CatalogOnly"},
+        },
+    )
+    assert [(row.sku, row.name, row.quantity, row.total) for row in rows] == [
+        ("ghost", MISSING_NAME, 0, 0),
+        ("SS100", "Case", 13, 18),
+        ("SS300", "CatalogOnly", 0, 0),
+    ]
+
+
+def test_demand_report_includes_catalog_and_sales_without_stock(db_url: str) -> None:
     catalog = _catalog(db_url)
     catalog.create_product({"name": "NanoGlass", "sku": "SS100", "code": "00100"})
+    catalog.create_product({"name": "CatalogOnly", "sku": "SS300", "code": "00300"})
     result = build_product_demand_report(
         catalog,
         source="wb",
@@ -93,13 +116,16 @@ def test_demand_report_keeps_stock_rows_and_adds_sales(db_url: str) -> None:
         today=date(2026, 10, 28),
     )
     assert [(row.sku, row.quantity, row.in_transit, row.total, row.sales_30, row.remain_30, row.sales_60, row.remain_60, row.sales_90, row.remain_90) for row in result.rows] == [
-        ("NEW-SKU", 7, 0, 7, 0, 7, 0, 7, 0, 7),
-        ("SS100", 13, 5, 18, 10, 8, 20, -2, 30, -12),
+        ("ghost", 0, 0, 0, 99, 99, 198, 198, 297, 297),
+        ("NEW-SKU", 7, 0, 7, 0, -7, 0, -7, 0, -7),
+        ("SS100", 13, 5, 18, 10, -8, 20, 2, 30, 12),
+        ("SS300", 0, 0, 0, 0, 0, 0, 0, 0, 0),
     ]
     assert result.date_from == "2026-09-29"
     assert result.date_to == "2026-10-28"
-    assert result.total_sales_30 == 10
-    assert result.total_remain_90 == -5
+    assert result.total_sales_30 == 109
+    assert result.total_remain_90 == 302
+    assert result.missing_name_count == 2
     assert result.filename == "potrebnost_tovarov_wb.xlsx"
 
     book = load_workbook(BytesIO(result.workbook_bytes))
@@ -114,13 +140,15 @@ def test_demand_report_keeps_stock_rows_and_adds_sales(db_url: str) -> None:
         "В пути",
         "Всего",
         "Продажи за 30 дней",
-        "Остатки минус продажи за 30 дней",
+        "Продажи минус остатки за 30 дней",
         "Продажи за 60 дней",
-        "Остатки минус продажи за 60 дней",
+        "Продажи минус остатки за 60 дней",
         "Продажи за 90 дней",
-        "Остатки минус продажи за 90 дней",
+        "Продажи минус остатки за 90 дней",
     ]
-    assert [cell.value for cell in sheet[6]] == ["NEW-SKU", MISSING_NAME, 7, 0, 7, 0, 7, 0, 7, 0, 7]
-    assert [cell.value for cell in sheet[7]] == ["SS100", "NanoGlass", 13, 5, 18, 10, 8, 20, -2, 30, -12]
-    assert sheet[8][0].value == "Итого"
-    assert [sheet[8][n].value for n in range(2, 11)] == [20, 5, 25, 10, 15, 20, 5, 30, -5]
+    assert [cell.value for cell in sheet[6]] == ["ghost", MISSING_NAME, 0, 0, 0, 99, 99, 198, 198, 297, 297]
+    assert [cell.value for cell in sheet[7]] == ["NEW-SKU", MISSING_NAME, 7, 0, 7, 0, -7, 0, -7, 0, -7]
+    assert [cell.value for cell in sheet[8]] == ["SS100", "NanoGlass", 13, 5, 18, 10, -8, 20, 2, 30, 12]
+    assert [cell.value for cell in sheet[9]] == ["SS300", "CatalogOnly", 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert sheet[10][0].value == "Итого"
+    assert [sheet[10][n].value for n in range(2, 11)] == [20, 5, 25, 109, 84, 218, 193, 327, 302]
