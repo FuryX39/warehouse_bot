@@ -1156,7 +1156,7 @@ def test_wb_fbo_sheet_requires_cis_for_marking_type(db_url: str, tmp_path) -> No
     assert without_cis.status_code == 400, without_cis.text
     assert without_cis.json()["detail"] == CIS_REQUIRED_ERROR
 
-    assigned = client.post(
+    qty_mismatch = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
         json={
             "barcode": first_box,
@@ -1165,8 +1165,21 @@ def test_wb_fbo_sheet_requires_cis_for_marking_type(db_url: str, tmp_path) -> No
             "cis": cis,
         },
     )
+    assert qty_mismatch.status_code == 400, qty_mismatch.text
+    assert "КИЗ" in qty_mismatch.json()["detail"]
+
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": first_box,
+            "product_barcode": _CIS_EAN,
+            "quantity": 1,
+            "cis": cis,
+        },
+    )
     assert assigned.status_code == 200, assigned.text
     assert assigned.json()["box"]["status"] == BOX_ASSIGNED
+    assert assigned.json()["box"]["items"][0]["cis_count"] == 1
 
     plain = client.post(
         f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
@@ -1185,7 +1198,78 @@ def test_wb_fbo_sheet_requires_cis_for_marking_type(db_url: str, tmp_path) -> No
     assert plain_assigned.status_code == 200, plain_assigned.text
     stored = packing.get_job(job_id)
     assert stored is not None
-    assert stored.pcs_assigned == 15
+    assert stored.pcs_assigned == 11
+
+
+def test_wb_fbo_sheet_assigns_multiple_cis_to_one_box(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    catalog.create_product(
+        {
+            "name": "Маркируемый",
+            "sku": "SS-CIS",
+            "code": "00999",
+            "is_kit": False,
+            "marking_type_id": _marking_id(catalog, "Обувь"),
+            "barcodes": [{"barcode": _CIS_EAN, "label": "", "group": ""}],
+            "gtins": [_CIS_GTIN13],
+            "components": [],
+        }
+    )
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _cis_goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    assert printed.status_code == 200, printed.text
+    box_id = printed.json()["boxes"][0]["box_id"]
+    codes = [_cis_code(serial=f"Ser{i}") for i in (1, 2, 3)]
+    for code in codes:
+        resolved = client.post(
+            f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+            json={"barcode": code},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["has_cis"] is True
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": box_id,
+            "product_barcode": _CIS_EAN,
+            "quantity": 3,
+            "cis_list": codes,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    item = assigned.json()["box"]["items"][0]
+    assert item["item_qty"] == 3
+    assert item["cis_count"] == 3
+    assert len(item["cis_codes"]) == 3
+    stored = packing.get_job(job_id, include_lines=True)
+    assert stored is not None
+    assert stored.pcs_assigned == 3
+    duplicate = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": box_id,
+            "product_barcode": _CIS_EAN,
+            "quantity": 1,
+            "cis_list": [codes[0]],
+        },
+    )
+    assert duplicate.status_code == 400, duplicate.text
+    assert "КИЗ" in duplicate.json()["detail"]
 
 
 def test_update_transfer_number_after_create(db_url: str, tmp_path) -> None:

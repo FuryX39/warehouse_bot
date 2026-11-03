@@ -25,6 +25,7 @@ from app.wb_fbo_sheet_service import (
     pdf_for_boxes,
     pdf_for_pallets,
     qty_warning_for_box,
+    collect_sheet_cis_codes,
     require_cis_for_sheet_product,
     resolve_sheet_scan,
 )
@@ -525,11 +526,13 @@ def _register_sheet_packer_prefix(
         barcode = str(payload.get("barcode") or payload.get("box_code") or "")
         product_barcode = str(payload.get("product_barcode") or "")
         production_date = str(payload.get("production_date") or "")
-        cis_raw = str(payload.get("cis") or payload.get("cis_raw") or "")
+        cis_codes = collect_sheet_cis_codes(payload)
         try:
             qty = int(payload.get("quantity") or payload.get("qty") or 0)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Некорректное количество") from exc
+        if cis_codes and qty <= 0:
+            qty = len(cis_codes)
 
         def _run():
             job = packing_repo.get_job(job_id, include_lines=True)
@@ -547,7 +550,9 @@ def _register_sheet_packer_prefix(
                 ),
                 None,
             )
-            require_cis_for_sheet_product(catalog_repo, product, cis_raw)
+            stored_cis = require_cis_for_sheet_product(
+                catalog_repo, product, cis_codes, quantity=qty
+            )
             existing = next(
                 (
                     item
@@ -572,6 +577,7 @@ def _register_sheet_packer_prefix(
                 product_barcode=product_barcode,
                 item_qty=qty,
                 expiry=expiry,
+                cis_codes=stored_cis,
             )
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:

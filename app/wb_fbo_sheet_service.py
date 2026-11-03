@@ -235,18 +235,56 @@ def _product_resolve_payload(
     }
 
 
-def require_cis_for_sheet_product(catalog: CatalogRepository, product, cis_raw: str) -> None:
+def collect_sheet_cis_codes(payload: dict[str, Any] | None) -> list[str]:
+    data = payload or {}
+    raw = data.get("cis_list")
+    if raw is None:
+        raw = data.get("cis_codes")
+    items: list[str] = []
+    if isinstance(raw, list):
+        items = [str(item or "").strip() for item in raw]
+    else:
+        text = str(data.get("cis") or data.get("cis_raw") or "").strip()
+        if text:
+            items = [text]
+    return [item for item in items if item]
+
+
+def require_cis_for_sheet_product(
+    catalog: CatalogRepository,
+    product,
+    cis_codes: list[str] | str,
+    *,
+    quantity: int,
+) -> list[str]:
     product_id = product.product_id if product is not None else None
     if not catalog.product_requires_cis(product_id):
-        return
-    text = remap_jcuken_to_qwerty(str(cis_raw or "").strip())
-    if not text:
+        return []
+    if isinstance(cis_codes, str):
+        codes = [cis_codes.strip()] if cis_codes.strip() else []
+    else:
+        codes = [str(item or "").strip() for item in (cis_codes or []) if str(item or "").strip()]
+    if not codes:
         raise ValueError(CIS_REQUIRED_ERROR)
-    resolved = resolve_packing_scan(catalog, text)
-    if not resolved.is_cis:
-        raise ValueError(CIS_REQUIRED_ERROR)
-    if product_id and resolved.product_id and int(product_id) != int(resolved.product_id):
-        raise ValueError("КИЗ не относится к выбранному товару")
+    if len(codes) != int(quantity):
+        raise ValueError(
+            f"Количество ({quantity}) должно совпадать с числом пропиканных КИЗ ({len(codes)})"
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in codes:
+        text = remap_jcuken_to_qwerty(raw)
+        resolved = resolve_packing_scan(catalog, text)
+        if not resolved.is_cis:
+            raise ValueError(CIS_REQUIRED_ERROR)
+        if product_id and resolved.product_id and int(product_id) != int(resolved.product_id):
+            raise ValueError("КИЗ не относится к выбранному товару")
+        key = resolved.cis_key or text
+        if key in seen:
+            raise ValueError("Этот КИЗ уже пропикан")
+        seen.add(key)
+        normalized.append(resolved.cis_raw or text)
+    return normalized
 
 
 def resolve_sheet_scan(
