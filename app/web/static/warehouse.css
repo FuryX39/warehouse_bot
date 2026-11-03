@@ -1426,6 +1426,18 @@ body.wh-body {
   margin-bottom: 0.75rem;
 }
 
+.wh-employees-table .wh-om-purchase {
+  width: 100%;
+  min-width: 9rem;
+  max-width: 16rem;
+  padding: 0.32rem 0.45rem;
+  border: 1px solid var(--wh-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--wh-text);
+  font: inherit;
+}
+
 .wh-order-lines-table input {
   width: 5.5rem;
   padding: 0.25rem 0.35rem;

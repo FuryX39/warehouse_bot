@@ -81,16 +81,16 @@
 
   function renderJobs(jobs) {
     jobsCache = jobs || [];
-    if (!jobs.length) return '<p class="wh-msg">Заданий пока нет.</p>';
+    if (!jobs.length) return '<p class="wh-muted">Заданий пока нет.</p>';
     var rows = jobs
       .map(function (job) {
         return (
-          "<tr><td>" +
+          "<tr><td>#" +
           esc(job.id) +
           "</td><td>" +
-          esc(job.order_number) +
+          esc(job.order_number || "—") +
           "</td><td>" +
-          esc(job.transfer_number) +
+          esc(job.transfer_number || "—") +
           '</td><td><select class="wh-om-purchase" data-job="' +
           esc(job.id) +
           '" data-prev="' +
@@ -98,15 +98,15 @@
           '">' +
           statusOptions(job.purchase_status || "") +
           "</select></td><td>" +
-          esc(statusRu(job.status)) +
+          esc(statusRu(job.status) || "—") +
           "</td><td>" +
           esc((job.line_done || 0) + "/" + (job.line_total || 0)) +
           "</td><td>" +
-          esc((job.packer_names || []).join(", ")) +
+          esc((job.packer_names || []).join(", ") || "—") +
           '<br><button type="button" class="wh-btn wh-btn-sm" data-packers="' +
           esc(job.id) +
           '">Изменить</button>' +
-          '</td><td><a href="/api/warehouse/other-platforms/jobs/' +
+          '</td><td><a class="wh-btn wh-btn-sm" href="/api/warehouse/other-platforms/jobs/' +
           esc(job.id) +
           '/marking.xlsx">КИЗ</a></td><td>' +
           (job.status === "cancelled" || job.status === "done"
@@ -117,9 +117,11 @@
       })
       .join("");
     return (
-      '<table class="wh-table"><thead><tr><th>№</th><th>Заказ</th><th>Перемещение</th><th>Статус закупки</th><th>Статус</th><th>Строки</th><th>Упаковщики</th><th>Файл</th><th></th></tr></thead><tbody>' +
+      '<div class="wh-order-table-wrap"><table class="wh-employees-table wh-crm-table"><thead><tr>' +
+      "<th>№</th><th>Заказ</th><th>Перемещение</th><th>Статус закупки</th><th>Статус</th><th>Строки</th><th>Упаковщики</th><th>Файл</th><th></th>" +
+      "</tr></thead><tbody>" +
       rows +
-      "</tbody></table>"
+      "</tbody></table></div>"
     );
   }
 
@@ -181,24 +183,75 @@
         msg.textContent = "Выберите упаковщика";
         return;
       }
-      var body = new FormData();
-      body.append("file", file);
-      body.append("transfer_number", transfer);
-      body.append("purchase_status", purchaseStatus);
-      body.append("packer_user_ids", packers.join(","));
-      fetch("/api/warehouse/other-platforms/vseinstrumenti/jobs", {
-        method: "POST",
-        body: body,
-        credentials: "include",
-      })
-        .then(function (response) {
+      var createUrl = "/api/warehouse/other-platforms/vseinstrumenti/jobs";
+      var btn = root.querySelector("#whOmCreate");
+      if (btn) btn.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Создание задания…";
+
+      function isNet(err) {
+        if (shell().isNetworkFetchError) return shell().isNetworkFetchError(err);
+        return /Failed to fetch|Load failed|NetworkError|network/i.test(String((err && err.message) || ""));
+      }
+
+      function wake() {
+        return fetch("/api/warehouse/session", { credentials: "include", cache: "no-store" }).then(function (r) {
+          return r.text();
+        });
+      }
+
+      function postOnce() {
+        var body = new FormData();
+        body.append("file", file);
+        body.append("transfer_number", transfer);
+        body.append("purchase_status", purchaseStatus);
+        body.append("packer_user_ids", packers.join(","));
+        return fetch(createUrl, {
+          method: "POST",
+          body: body,
+          credentials: "include",
+          cache: "no-store",
+        }).then(function (response) {
           return response.text().then(function (text) {
-            var data = text ? JSON.parse(text) : {};
+            var data = {};
+            try {
+              data = text ? JSON.parse(text) : {};
+            } catch (e) {
+              throw new Error("Сервер вернул не JSON");
+            }
             if (!response.ok) {
               var detail = data && data.detail ? data.detail : "Не удалось создать задание";
               throw new Error(typeof detail === "string" ? detail : "Не удалось создать задание");
             }
             return data;
+          });
+        });
+      }
+
+      function recoverIfCreated() {
+        return fetchJson(createUrl).then(function (data) {
+          var jobs = data.jobs || [];
+          var found = jobs.find(function (job) {
+            return (
+              String(job.transfer_number || "") === transfer &&
+              (job.status === "open" || job.status === "in_progress")
+            );
+          });
+          return found ? { job: found, warnings: [], recovered: true } : null;
+        });
+      }
+
+      wake()
+        .then(function () {
+          return postOnce();
+        })
+        .catch(function (err) {
+          if (!isNet(err)) throw err;
+          return recoverIfCreated().then(function (recovered) {
+            if (recovered) return recovered;
+            return wake().then(function () {
+              return postOnce();
+            });
           });
         })
         .then(function (data) {
@@ -206,14 +259,19 @@
           msg.className = "wh-msg wh-msg-ok";
           msg.textContent = "Задание создано." + (warnings ? " " + warnings : "");
           root.querySelector("#whOmFile").value = "";
-          return fetchJson("/api/warehouse/other-platforms/vseinstrumenti/jobs");
+          return fetchJson(createUrl);
         })
         .then(function (data) {
           root.querySelector("#whOmJobs").innerHTML = renderJobs(data.jobs || []);
         })
         .catch(function (err) {
           msg.className = "wh-msg wh-msg-error";
-          msg.textContent = err.message || "Ошибка";
+          msg.textContent = isNet(err)
+            ? "Нет связи с сервером. Обновите страницу и повторите."
+            : err.message || "Ошибка";
+        })
+        .then(function () {
+          if (btn) btn.disabled = false;
         });
     });
     root.querySelector("#whOmJobs").addEventListener("change", function (event) {
@@ -281,6 +339,7 @@
           "</div>" +
           '<p><button type="button" class="wh-btn wh-btn-primary" id="whOmCreate">Создать задание</button></p>' +
           '<p class="wh-msg" id="whOmMsg"></p></section>' +
+          '<h4 class="wh-crm-section-title">Задания</h4>' +
           '<div id="whOmJobs">' +
           renderJobs(data.jobs || []) +
           "</div>";

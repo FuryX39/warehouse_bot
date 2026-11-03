@@ -1188,4 +1188,45 @@ def test_wb_fbo_sheet_requires_cis_for_marking_type(db_url: str, tmp_path) -> No
     assert stored.pcs_assigned == 15
 
 
+def test_update_transfer_number_after_create(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=3), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    assert created.json()["job"]["transfer_number"] == ""
+
+    updated = client.post(
+        f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/transfer-number",
+        json={"transfer_number": " ПР-22 "},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["job"]["transfer_number"] == "ПР-22"
+    stored = packing.get_job(job_id)
+    assert stored is not None
+    assert stored.transfer_number == "ПР-22"
+    mine = client.get("/api/v1/fbo-sheet-packing/my")
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["jobs"][0]["transfer_number"] == "ПР-22"
+
+    cleared = client.post(
+        f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/transfer-number",
+        json={"transfer_number": "  "},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["job"]["transfer_number"] == ""
+    stored = packing.get_job(job_id)
+    assert stored is not None
+    assert stored.transfer_number == ""
+
+
 

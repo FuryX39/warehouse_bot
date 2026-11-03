@@ -103,7 +103,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Поставка</th><th>Тип</th><th>Перемещение</th><th>Штук</th><th>Артикулы</th><th>Упаковщики</th><th></th>" +
+      '<th>№</th><th>Поставка</th><th>Тип</th><th class="wh-fbs-transfer-column">Перемещение</th><th>Штук</th><th>Артикулы</th><th>Упаковщики</th><th></th>' +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -134,9 +134,13 @@
             esc(jobStatusLabel(job.status)) +
             "</td><td>" +
             esc(job.supply_type || "—") +
-            "</td><td>" +
-            esc(job.transfer_number || "—") +
-            "</td><td>" +
+            '</td><td><div class="wh-fbs-transfer-editor"><input type="text" class="wh-fbs-transfer wh-wb-fbo-new-transfer" maxlength="128" autocomplete="off" aria-label="Номер перемещения" placeholder="Не указано" data-id="' +
+            esc(job.id) +
+            '" data-prev="' +
+            esc(job.transfer_number || "") +
+            '" value="' +
+            esc(job.transfer_number || "") +
+            '" /><button type="button" class="wh-btn wh-btn-sm wh-fbs-transfer-save wh-wb-fbo-new-transfer-save" title="Сохранить перемещение">Сохранить</button></div></td><td>' +
             esc(job.pcs_assigned) +
             " / " +
             esc(job.pcs_plan) +
@@ -177,6 +181,74 @@
         editJobPackers(root, parseInt(btn.getAttribute("data-id"), 10));
       });
     });
+    wrap.querySelectorAll(".wh-wb-fbo-new-transfer").forEach(function (input) {
+      input.addEventListener("input", function () {
+        var editor = input.closest(".wh-fbs-transfer-editor");
+        if (editor) {
+          editor.classList.toggle(
+            "wh-fbs-transfer-editor--dirty",
+            String(input.value || "").trim() !== (input.getAttribute("data-prev") || "")
+          );
+        }
+      });
+      input.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        saveTransfer(root, input);
+      });
+    });
+    wrap.querySelectorAll(".wh-wb-fbo-new-transfer-save").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var editor = button.closest(".wh-fbs-transfer-editor");
+        var input = editor && editor.querySelector(".wh-wb-fbo-new-transfer");
+        if (input) saveTransfer(root, input);
+      });
+    });
+  }
+
+  function saveTransfer(root, input) {
+    var jobId = input.getAttribute("data-id");
+    var previous = input.getAttribute("data-prev") || "";
+    var value = String(input.value || "").trim();
+    if (!jobId || value === previous) return;
+    var editor = input.closest(".wh-fbs-transfer-editor");
+    var button = editor && editor.querySelector(".wh-wb-fbo-new-transfer-save");
+    input.disabled = true;
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Сохраняем…";
+    }
+    fetchJson("/api/warehouse/marketplaces/wb-fbo-new/jobs/" + jobId + "/transfer-number", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transfer_number: value }),
+    })
+      .then(function () {
+        input.value = value;
+        input.setAttribute("data-prev", value);
+        if (editor) {
+          editor.classList.remove("wh-fbs-transfer-editor--dirty");
+          editor.classList.add("wh-fbs-transfer-editor--saved");
+          setTimeout(function () {
+            editor.classList.remove("wh-fbs-transfer-editor--saved");
+          }, 1200);
+        }
+        (jobsCache || []).forEach(function (job) {
+          if (String(job.id) === String(jobId)) job.transfer_number = value;
+        });
+        setMessage(root, "Перемещение задания #" + jobId + " сохранено.", false);
+      })
+      .catch(function (error) {
+        input.value = previous;
+        setMessage(root, error.message || "Не удалось сохранить перемещение", true);
+      })
+      .finally(function () {
+        input.disabled = false;
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Сохранить";
+        }
+      });
   }
 
   function editJobPackers(root, jobId) {
