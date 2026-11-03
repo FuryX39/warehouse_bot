@@ -25,6 +25,7 @@ from app.wb_fbo_sheet_service import (
     pdf_for_boxes,
     pdf_for_pallets,
     qty_warning_for_box,
+    require_cis_for_sheet_product,
     resolve_sheet_scan,
 )
 from app.wb_fbo_sheet_xlsx import fill_boxes_xlsx
@@ -509,6 +510,7 @@ def _register_sheet_packer_prefix(
         barcode = str(payload.get("barcode") or payload.get("box_code") or "")
         product_barcode = str(payload.get("product_barcode") or "")
         production_date = str(payload.get("production_date") or "")
+        cis_raw = str(payload.get("cis") or payload.get("cis_raw") or "")
         try:
             qty = int(payload.get("quantity") or payload.get("qty") or 0)
         except (TypeError, ValueError) as exc:
@@ -530,6 +532,7 @@ def _register_sheet_packer_prefix(
                 ),
                 None,
             )
+            require_cis_for_sheet_product(catalog_repo, product, cis_raw)
             existing = next(
                 (
                     item

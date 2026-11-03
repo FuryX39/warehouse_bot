@@ -14,6 +14,7 @@ from reportlab.pdfgen import canvas
 
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
+from app.fbs_packing_service import CIS_REQUIRED_ERROR
 from app.warehouse_users_repository import WarehouseUserRow
 from app.wb_fbo_sheet_repository import (
     BOX_ASSIGNED,
@@ -1038,6 +1039,145 @@ def test_unbind_cargo_from_pallet_keeps_product(db_url: str, tmp_path) -> None:
     job = packing.get_job(job_id, include_lines=True)
     assert job is not None
     assert job.pcs_assigned == 10
+
+
+_CIS_GTIN13 = "4600605012345"
+_CIS_GTIN14 = "04600605012345"
+_CIS_EAN = "2000000000092"
+
+
+def _cis_code(gtin14: str = _CIS_GTIN14, serial: str = "Ab12Xy") -> str:
+    from app.marking.cis import GS
+
+    return f"01{gtin14}21{serial}{GS}91FFD0{GS}92abcdef0123456789"
+
+
+def _marking_id(catalog: CatalogRepository, name: str) -> int:
+    for item in catalog.get_meta()["marking_types"]:
+        if str(item.get("name") or "") == name:
+            return int(item["id"])
+    raise AssertionError(f"нет типа маркировки {name}")
+
+
+def _cis_goods_xlsx() -> bytes:
+    return _workbook_bytes(
+        [
+            ["Баркод", "Количество, шт", "Артикул поставщика"],
+            [_CIS_EAN, 10, "SS-CIS"],
+            ["4673746970607", 10, "SS958"],
+        ]
+    )
+
+
+def test_wb_fbo_sheet_requires_cis_for_marking_type(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    catalog.create_product(
+        {
+            "name": "Маркируемый",
+            "sku": "SS-CIS",
+            "code": "00999",
+            "is_kit": False,
+            "marking_type_id": _marking_id(catalog, "Обувь"),
+            "barcodes": [{"barcode": _CIS_EAN, "label": "", "group": ""}],
+            "gtins": [_CIS_GTIN13],
+            "components": [],
+        }
+    )
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _cis_goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=2), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    packed = client.get(f"/api/v1/fbo-sheet-packing/jobs/{job_id}/pack")
+    assert packed.status_code == 200, packed.text
+    payload = packed.json()["job"]
+    assert payload["require_cis"] is True
+    by_sku = {item["sku"]: item for item in payload["remaining_groups"]}
+    assert by_sku["SS-CIS"]["require_cis"] is True
+    assert by_sku["SS958"]["require_cis"] is False
+
+    rejected = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": _CIS_EAN},
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["detail"] == CIS_REQUIRED_ERROR
+
+    sku_pick = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": "SS-CIS"},
+    )
+    assert sku_pick.status_code == 400, sku_pick.text
+    assert sku_pick.json()["detail"] == CIS_REQUIRED_ERROR
+
+    cis = _cis_code(serial="SerWb1")
+    ok = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": cis},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["kind"] == "product"
+    assert ok.json()["has_cis"] is True
+    assert ok.json()["product"]["sku"] == "SS-CIS"
+    assert ok.json()["product"]["require_cis"] is True
+
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 2},
+    )
+    assert printed.status_code == 200, printed.text
+    first_box = printed.json()["boxes"][0]["box_id"]
+    second_box = printed.json()["boxes"][1]["box_id"]
+
+    without_cis = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": first_box,
+            "product_barcode": _CIS_EAN,
+            "quantity": 5,
+        },
+    )
+    assert without_cis.status_code == 400, without_cis.text
+    assert without_cis.json()["detail"] == CIS_REQUIRED_ERROR
+
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": first_box,
+            "product_barcode": _CIS_EAN,
+            "quantity": 5,
+            "cis": cis,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["status"] == BOX_ASSIGNED
+
+    plain = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": "4673746970607"},
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["has_cis"] is False
+    plain_assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": second_box,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert plain_assigned.status_code == 200, plain_assigned.text
+    stored = packing.get_job(job_id)
+    assert stored is not None
+    assert stored.pcs_assigned == 15
 
 
 

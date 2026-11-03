@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.catalog_repository import CatalogProduct, CatalogRepository
+from app.fbs_packing_service import CIS_REQUIRED_ERROR, resolve_packing_scan
+from app.marking.cis import parse_cis, remap_jcuken_to_qwerty
 from app.shelf_life import expiry_from_production
 from app.wb_fbo_packing_service import fbo_nonstandard_box_qty_warning
 from app.wb_fbo_sheet_repository import (
@@ -164,25 +166,27 @@ def find_pallet_by_scan(job: WbFboSheetJobRow, barcode: str) -> WbFboSheetPallet
     return None
 
 
-def resolve_sheet_scan(
-    catalog: CatalogRepository,
-    packing_repo: WbFboSheetRepository,
-    job_id: int,
-    barcode: str,
-    *,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    text = str(barcode or "").strip()
-    if not text:
-        raise ValueError("Пустой штрихкод")
-    job = packing_repo.get_job(job_id, include_lines=True)
-    if job is None:
-        raise ValueError("Задание не найдено")
-    box = find_box_by_scan(job, text)
-    if box is not None:
-        return {"kind": "wb_box", "box": packing_repo.box_to_dict(box)}
-    goods = None
+def _job_product_by_catalog(
+    job: WbFboSheetJobRow,
+    product_id: int | None,
+    sku: str = "",
+):
+    if product_id:
+        pid = int(product_id)
+        for item in job.products:
+            if item.product_id and int(item.product_id) == pid:
+                return item
+    sku_key = str(sku or "").strip().casefold()
+    if sku_key:
+        for item in job.products:
+            if str(item.sku or "").casefold() == sku_key:
+                return item
+    return None
+
+
+def _find_job_goods_by_code(job: WbFboSheetJobRow, text: str, catalog: CatalogRepository):
     fold = text.casefold()
+    goods = None
     for item in job.products:
         if item.barcode.casefold() == fold or item.sku.casefold() == fold:
             goods = item
@@ -204,16 +208,86 @@ def resolve_sheet_scan(
                 if item.sku and item.sku.casefold() == str(catalog_product.sku or "").casefold():
                     goods = item
                     break
-    if goods is None:
-        raise ValueError("Штрихкод не найден в задании")
+    return goods, suggested_qty
+
+
+def _product_resolve_payload(
+    catalog: CatalogRepository,
+    packing_repo: WbFboSheetRepository,
+    goods,
+    *,
+    suggested_qty: int | None,
+    cis_raw: str = "",
+) -> dict[str, Any]:
     product_payload = packing_repo.product_to_dict(goods)
     attach_sheet_images(catalog, {"products": [product_payload]})
+    has_cis = bool(str(cis_raw or "").strip())
+    product_payload["has_cis"] = has_cis
     return {
         "kind": "product",
         "product": product_payload,
         "suggested_qty": suggested_qty,
         "remaining": max(0, goods.qty_plan - goods.qty_assigned),
+        "has_cis": has_cis,
+        "cis": str(cis_raw or "").strip(),
     }
+
+
+def require_cis_for_sheet_product(catalog: CatalogRepository, product, cis_raw: str) -> None:
+    product_id = product.product_id if product is not None else None
+    if not catalog.product_requires_cis(product_id):
+        return
+    text = remap_jcuken_to_qwerty(str(cis_raw or "").strip())
+    if not text:
+        raise ValueError(CIS_REQUIRED_ERROR)
+    resolved = resolve_packing_scan(catalog, text)
+    if not resolved.is_cis:
+        raise ValueError(CIS_REQUIRED_ERROR)
+    if product_id and resolved.product_id and int(product_id) != int(resolved.product_id):
+        raise ValueError("КИЗ не относится к выбранному товару")
+
+
+def resolve_sheet_scan(
+    catalog: CatalogRepository,
+    packing_repo: WbFboSheetRepository,
+    job_id: int,
+    barcode: str,
+    *,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    text = remap_jcuken_to_qwerty(str(barcode or "").strip())
+    if not text:
+        raise ValueError("Пустой штрихкод")
+    job = packing_repo.get_job(job_id, include_lines=True)
+    if job is None:
+        raise ValueError("Задание не найдено")
+    box = find_box_by_scan(job, text)
+    if box is not None:
+        return {"kind": "wb_box", "box": packing_repo.box_to_dict(box)}
+    cis_record = parse_cis(text)
+    if cis_record.ok:
+        packing_resolved = resolve_packing_scan(catalog, text)
+        goods = _job_product_by_catalog(job, packing_resolved.product_id, packing_resolved.sku)
+        if goods is None:
+            raise ValueError("Товар есть в базе, в этой поставке его нет")
+        return _product_resolve_payload(
+            catalog,
+            packing_repo,
+            goods,
+            suggested_qty=None,
+            cis_raw=packing_resolved.cis_raw or text,
+        )
+    goods, suggested_qty = _find_job_goods_by_code(job, text, catalog)
+    if goods is None:
+        raise ValueError("Штрихкод не найден в задании")
+    if catalog.product_requires_cis(goods.product_id):
+        raise ValueError(CIS_REQUIRED_ERROR)
+    return _product_resolve_payload(
+        catalog,
+        packing_repo,
+        goods,
+        suggested_qty=suggested_qty,
+    )
 
 
 def _boxes_for_job(boxes) -> list[dict[str, Any]]:
@@ -366,8 +440,14 @@ def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> 
     pids = [int(item["product_id"]) for item in buckets if item.get("product_id")]
     urls = catalog.image_urls_by_product_ids(pids) if pids else {}
     shelf = catalog.shelf_life_by_product_ids(pids) if pids else {}
+    cis_flags = catalog.products_require_cis(pids) if pids else {}
+    any_required = False
     for item in buckets:
         pid = item.get("product_id")
+        required = bool(cis_flags.get(int(pid))) if pid else False
+        item["require_cis"] = required
+        if required:
+            any_required = True
         if not pid:
             item.setdefault("has_shelf_life", False)
             item.setdefault("shelf_life_years", 0)
@@ -376,3 +456,4 @@ def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> 
         has_life, years = shelf.get(int(pid), (False, 0))
         item["has_shelf_life"] = bool(has_life)
         item["shelf_life_years"] = int(years) if has_life else 0
+    payload["require_cis"] = any_required
