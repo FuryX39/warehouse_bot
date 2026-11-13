@@ -1271,6 +1271,17 @@ def test_wb_fbo_sheet_assigns_multiple_cis_to_one_box(db_url: str, tmp_path) -> 
     assert duplicate.status_code == 400, duplicate.text
     assert "КИЗ" in duplicate.json()["detail"]
 
+    xlsx = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/marking.xlsx")
+    assert xlsx.status_code == 200, xlsx.text
+    book = load_workbook(BytesIO(xlsx.content))
+    assert book.sheetnames == ["Все строки", "С КИЗ"]
+    only = book["С КИЗ"]
+    assert only.cell(1, 1).value == "Поставка"
+    assert only.cell(1, 5).value == "КИЗ"
+    values = [only.cell(row, 5).value for row in range(2, only.max_row + 1)]
+    assert len(values) == 3
+    assert all(values)
+
 
 def test_update_transfer_number_after_create(db_url: str, tmp_path) -> None:
     catalog = _catalog(db_url)
@@ -1311,6 +1322,136 @@ def test_update_transfer_number_after_create(db_url: str, tmp_path) -> None:
     stored = packing.get_job(job_id)
     assert stored is not None
     assert stored.transfer_number == ""
+
+
+def test_fill_boxes_xlsx_keeps_original_and_writes_scanned_in_free_column() -> None:
+    original = _boxes_xlsx(count=1)
+    boxes = parse_boxes_xlsx(original)
+    filled = fill_boxes_xlsx(
+        original,
+        [
+            {
+                "box_id": boxes[0].box_id,
+                "product_barcode": "4673746970607",
+                "item_qty": 10,
+                "scanned_barcodes": ["BOX-SS958-100"],
+            }
+        ],
+    )
+    parsed = parse_boxes_xlsx(filled)
+    assert parsed[0].product_barcode == "4673746970607"
+    assert parsed[0].qty == 10
+    wb = load_workbook(BytesIO(filled), data_only=True)
+    try:
+        headers = [str(item or "") for item in next(wb.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+        assert "Баркод товара" in headers
+        assert "Отсканированный ШК" in headers
+        extra = headers.index("Отсканированный ШК") + 1
+        orig_col = headers.index("Баркод товара") + 1
+        assert wb.active.cell(2, orig_col).value == "4673746970607"
+        assert wb.active.cell(2, extra).value == "BOX-SS958-100"
+    finally:
+        wb.close()
+
+
+def test_assign_records_scanned_barcode_from_resolve(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, _packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+    resolved = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": "BOX-SS958-100"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["product"]["barcode"] == "4673746970607"
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    items = assigned.json()["box"]["items"]
+    assert items[0]["product_barcode"] == "4673746970607"
+    assert items[0]["scanned_barcodes"] == ["BOX-SS958-100"]
+
+    downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
+    assert downloaded.status_code == 200, downloaded.text
+    parsed = parse_boxes_xlsx(downloaded.content)
+    assert parsed[0].product_barcode == "4673746970607"
+    assert parsed[0].qty == 10
+    wb = load_workbook(BytesIO(downloaded.content), data_only=True)
+    try:
+        headers = [str(item or "") for item in next(wb.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+        extra = headers.index("Отсканированный ШК") + 1
+        orig_col = headers.index("Баркод товара") + 1
+        assert wb.active.cell(2, orig_col).value == "4673746970607"
+        assert wb.active.cell(2, extra).value == "BOX-SS958-100"
+    finally:
+        wb.close()
+
+
+def test_assign_same_barcode_does_not_add_scanned_column(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, _packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    cargo_id = printed.json()["boxes"][0]["box_id"]
+    resolved = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": "4673746970607"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": cargo_id,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["items"][0]["scanned_barcodes"] == []
+    downloaded = client.get(f"/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/boxes.xlsx")
+    wb = load_workbook(BytesIO(downloaded.content), data_only=True)
+    try:
+        headers = [str(item or "") for item in next(wb.active.iter_rows(min_row=1, max_row=1, values_only=True))]
+        assert "Отсканированный ШК" not in headers
+        orig_col = headers.index("Баркод товара") + 1
+        assert wb.active.cell(2, orig_col).value == "4673746970607"
+    finally:
+        wb.close()
 
 
 

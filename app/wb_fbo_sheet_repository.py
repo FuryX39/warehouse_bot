@@ -149,8 +149,23 @@ class WbFboSheetBoxItem(_Base):
     item_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expiry: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     cis_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scanned_barcodes_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
     assigned_at_ts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assigned_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class WbFboSheetPendingScan(_Base):
+    """Последний пик товара упаковщика: программа шлёт исходный ШК из таблицы, а не скан."""
+
+    __tablename__ = "wb_fbo_sheet_pending_scans"
+
+    job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("wb_fbo_sheet_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_barcode: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    scanned_barcode: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 def _cis_key(raw: object) -> str:
@@ -169,6 +184,32 @@ def _parse_json_list(raw: str) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item).strip() for item in data if str(item or "").strip()]
+
+
+def _merge_scanned_barcodes(
+    existing: list[str] | str,
+    incoming: list[str] | None,
+    *,
+    original: str,
+) -> list[str]:
+    if isinstance(existing, str):
+        out = _parse_json_list(existing)
+    else:
+        out = [str(item).strip() for item in (existing or []) if str(item or "").strip()]
+    seen = {item.casefold() for item in out}
+    orig = str(original or "").strip().casefold()
+    for raw in incoming or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if orig and key == orig:
+            continue
+        if key in seen:
+            continue
+        out.append(text)
+        seen.add(key)
+    return out
 
 
 @dataclass
@@ -194,6 +235,7 @@ class WbFboSheetBoxItemRow:
     product_id: int | None = None
     expiry: str = ""
     cis_codes: list[str] = field(default_factory=list)
+    scanned_barcodes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -302,6 +344,7 @@ class WbFboSheetRepository:
         self._migrate_supply_qr()
         self._migrate_box_item_expiry()
         self._migrate_box_item_cis()
+        self._migrate_box_item_scanned_barcodes()
         self._migrate_pallets()
         self._backfill_box_items()
 
@@ -378,6 +421,32 @@ class WbFboSheetRepository:
                     text(
                         "ALTER TABLE wb_fbo_sheet_box_items "
                         "ADD COLUMN cis_json TEXT NOT NULL DEFAULT ''"
+                    )
+                )
+            session.commit()
+
+    def _migrate_box_item_scanned_barcodes(self) -> None:
+        from sqlalchemy import inspect, text
+
+        if "wb_fbo_sheet_box_items" not in inspect(self.engine).get_table_names():
+            return
+        cols = {c["name"] for c in inspect(self.engine).get_columns("wb_fbo_sheet_box_items")}
+        if "scanned_barcodes_json" in cols:
+            return
+        dialect = self.engine.dialect.name
+        with Session(self.engine) as session:
+            if dialect == "postgresql":
+                session.execute(
+                    text(
+                        "ALTER TABLE wb_fbo_sheet_box_items "
+                        "ADD COLUMN IF NOT EXISTS scanned_barcodes_json TEXT NOT NULL DEFAULT ''"
+                    )
+                )
+            else:
+                session.execute(
+                    text(
+                        "ALTER TABLE wb_fbo_sheet_box_items "
+                        "ADD COLUMN scanned_barcodes_json TEXT NOT NULL DEFAULT ''"
                     )
                 )
             session.commit()
@@ -507,6 +576,7 @@ class WbFboSheetRepository:
             product_id=product.product_id if product else None,
             expiry=str(row.expiry or ""),
             cis_codes=_parse_json_list(getattr(row, "cis_json", None) or ""),
+            scanned_barcodes=_parse_json_list(getattr(row, "scanned_barcodes_json", None) or ""),
         )
 
     def _box_row(
@@ -1187,6 +1257,57 @@ class WbFboSheetRepository:
             if str(item.product_barcode or "").casefold() == key:
                 item.expiry = text
 
+    def set_pending_product_scan(
+        self,
+        job_id: int,
+        user_id: int,
+        *,
+        product_barcode: str,
+        scanned_barcode: str,
+    ) -> None:
+        original = str(product_barcode or "").strip()
+        scanned = str(scanned_barcode or "").strip()
+        if int(user_id) <= 0:
+            return
+        with Session(self.engine) as session:
+            row = session.get(WbFboSheetPendingScan, (int(job_id), int(user_id)))
+            if not original or not scanned or original.casefold() == scanned.casefold():
+                if row is not None:
+                    session.delete(row)
+                    session.commit()
+                return
+            now = int(time.time())
+            if row is None:
+                session.add(
+                    WbFboSheetPendingScan(
+                        job_id=int(job_id),
+                        user_id=int(user_id),
+                        product_barcode=original,
+                        scanned_barcode=scanned,
+                        updated_at_ts=now,
+                    )
+                )
+            else:
+                row.product_barcode = original
+                row.scanned_barcode = scanned
+                row.updated_at_ts = now
+            session.commit()
+
+    def pending_product_scan(
+        self, job_id: int, user_id: int
+    ) -> tuple[str, str] | None:
+        if int(user_id) <= 0:
+            return None
+        with Session(self.engine) as session:
+            row = session.get(WbFboSheetPendingScan, (int(job_id), int(user_id)))
+            if row is None:
+                return None
+            original = str(row.product_barcode or "").strip()
+            scanned = str(row.scanned_barcode or "").strip()
+            if not original or not scanned:
+                return None
+            return original, scanned
+
     def assign_box(
         self,
         job_id: int,
@@ -1197,6 +1318,7 @@ class WbFboSheetRepository:
         item_qty: int,
         expiry: str = "",
         cis_codes: list[str] | None = None,
+        scanned_barcodes: list[str] | None = None,
     ) -> WbFboSheetBoxRow:
         now = int(time.time())
         qty = int(item_qty)
@@ -1259,6 +1381,11 @@ class WbFboSheetRepository:
                 ),
                 None,
             )
+            scanned = _merge_scanned_barcodes(
+                getattr(existing, "scanned_barcodes_json", None) or "" if existing is not None else "",
+                scanned_barcodes,
+                original=barcode,
+            )
             if existing is not None:
                 existing.item_qty = int(existing.item_qty or 0) + qty
                 existing.assigned_at_ts = now
@@ -1268,6 +1395,8 @@ class WbFboSheetRepository:
                 if codes:
                     merged = _parse_json_list(getattr(existing, "cis_json", None) or "") + codes
                     existing.cis_json = json.dumps(merged, ensure_ascii=False)
+                if scanned:
+                    existing.scanned_barcodes_json = json.dumps(scanned, ensure_ascii=False)
             else:
                 next_seq = int(
                     session.scalar(
@@ -1286,6 +1415,7 @@ class WbFboSheetRepository:
                         item_qty=qty,
                         expiry=expiry_text,
                         cis_json=json.dumps(codes, ensure_ascii=False) if codes else "",
+                        scanned_barcodes_json=json.dumps(scanned, ensure_ascii=False) if scanned else "",
                         assigned_at_ts=now,
                         assigned_by_user_id=int(user_id),
                     )
@@ -1447,6 +1577,7 @@ class WbFboSheetRepository:
                 "expiry": item.expiry,
                 "cis_codes": list(item.cis_codes),
                 "cis_count": len(item.cis_codes),
+                "scanned_barcodes": list(item.scanned_barcodes),
             }
             for item in row.items
         ]
@@ -1481,6 +1612,7 @@ class WbFboSheetRepository:
                             "product_barcode": item.product_barcode,
                             "item_qty": item.item_qty,
                             "expiry": item.expiry,
+                            "scanned_barcodes": list(item.scanned_barcodes),
                         }
                     )
                 continue

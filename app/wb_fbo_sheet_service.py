@@ -310,6 +310,10 @@ def resolve_sheet_scan(
         goods = _job_product_by_catalog(job, packing_resolved.product_id, packing_resolved.sku)
         if goods is None:
             raise ValueError("Товар есть в базе, в этой поставке его нет")
+        if user_id:
+            packing_repo.set_pending_product_scan(
+                job_id, int(user_id), product_barcode=goods.barcode, scanned_barcode=goods.barcode
+            )
         return _product_resolve_payload(
             catalog,
             packing_repo,
@@ -322,6 +326,10 @@ def resolve_sheet_scan(
         raise ValueError("Штрихкод не найден в задании")
     if catalog.product_requires_cis(goods.product_id):
         raise ValueError(CIS_REQUIRED_ERROR)
+    if user_id:
+        packing_repo.set_pending_product_scan(
+            job_id, int(user_id), product_barcode=goods.barcode, scanned_barcode=text
+        )
     return _product_resolve_payload(
         catalog,
         packing_repo,
@@ -497,3 +505,62 @@ def attach_sheet_images(catalog: CatalogRepository, payload: dict[str, Any]) -> 
         item["has_shelf_life"] = bool(has_life)
         item["shelf_life_years"] = int(years) if has_life else 0
     payload["require_cis"] = any_required
+
+
+def build_wb_fbo_sheet_marking_xlsx(job: WbFboSheetJobRow) -> bytes:
+    """Excel: грузоместа задания и пропиканные КИЗ."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    from app.marking.cis import replace_gs_for_excel
+
+    headers = ("Поставка", "Грузоместо", "SKU", "Баркод", "КИЗ")
+    header_font = Font(bold=True)
+    header_fill = PatternFill("solid", fgColor="E8EEF4")
+    supply = str(job.supply_id or "")
+    all_rows: list[list[str]] = []
+    cis_rows: list[list[str]] = []
+    for box in sorted(job.boxes, key=lambda item: (item.seq, item.id)):
+        for item in box.items:
+            codes = [replace_gs_for_excel(code) for code in (item.cis_codes or []) if str(code or "").strip()]
+            slots = max(int(item.item_qty or 0), len(codes), 1)
+            if int(item.item_qty or 0) <= 0 and not codes:
+                continue
+            for index in range(slots):
+                cis = codes[index] if index < len(codes) else ""
+                row = [
+                    supply,
+                    str(box.box_human_id or ""),
+                    str(item.sku or ""),
+                    str(item.product_barcode or ""),
+                    cis,
+                ]
+                all_rows.append(row)
+                if cis:
+                    cis_rows.append(row)
+
+    def write_sheet(ws, rows: list[list[str]]) -> None:
+        ws.append(list(headers))
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+        for row in rows:
+            ws.append(row)
+        ws.column_dimensions["A"].width = 16
+        ws.column_dimensions["B"].width = 18
+        ws.column_dimensions["C"].width = 18
+        ws.column_dimensions["D"].width = 18
+        ws.column_dimensions["E"].width = 48
+
+    wb = Workbook()
+    full = wb.active
+    full.title = "Все строки"
+    write_sheet(full, all_rows)
+    with_cis = wb.create_sheet("С КИЗ")
+    write_sheet(with_cis, cis_rows)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

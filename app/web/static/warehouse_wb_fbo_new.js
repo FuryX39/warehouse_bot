@@ -119,6 +119,12 @@
             '/boxes.xlsx" download="wb_fbo_sheet_' +
             esc(job.id) +
             '_boxes.xlsx">Скачать таблицу грузомест</a>';
+          var kiz =
+            '<a class="wh-btn wh-btn-sm" href="/api/warehouse/marketplaces/wb-fbo-new/jobs/' +
+            esc(job.id) +
+            '/marking.xlsx" download="wb_fbo_sheet_' +
+            esc(job.id) +
+            '_kiz.xlsx">КИЗ</a>';
           var qr =
             job.has_supply_qr
               ? '<a class="wh-btn wh-btn-sm" href="/api/warehouse/marketplaces/wb-fbo-new/jobs/' +
@@ -155,6 +161,8 @@
             '">Изменить</button>' +
             "</td><td>" +
             xlsx +
+            " " +
+            kiz +
             " " +
             qr +
             " " +

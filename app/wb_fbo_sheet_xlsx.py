@@ -31,6 +31,8 @@ _BOX_HEADERS = {
     "шк короба для печати в стороннем сервисе": "package_code",
 }
 
+_SCANNED_HEADER = "Отсканированный ШК"
+
 
 def _norm_header(raw: object) -> str:
     text = str(raw or "").strip().casefold().replace("ё", "е")
@@ -240,6 +242,7 @@ def _assignment_lines(assignments: list[dict[str, Any]]) -> list[dict[str, Any]]
                             "product_barcode": barcode,
                             "item_qty": qty,
                             "expiry": cell_text(line.get("expiry")),
+                            "scanned_barcodes": _scanned_list(line),
                         }
                     )
             continue
@@ -252,9 +255,18 @@ def _assignment_lines(assignments: list[dict[str, Any]]) -> list[dict[str, Any]]
                     "product_barcode": barcode,
                     "item_qty": qty,
                     "expiry": cell_text(item.get("expiry")),
+                    "scanned_barcodes": _scanned_list(item),
                 }
             )
     return lines
+
+
+def _scanned_list(item: dict[str, Any]) -> list[str]:
+    raw = item.get("scanned_barcodes")
+    if isinstance(raw, list):
+        return [cell_text(part) for part in raw if cell_text(part)]
+    text = cell_text(item.get("scanned_barcode"))
+    return [text] if text else []
 
 
 def _group_assignment_lines(lines: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -275,6 +287,7 @@ def _group_assignment_lines(lines: list[dict[str, Any]]) -> dict[str, list[dict[
                 "product_barcode": barcode,
                 "item_qty": int(line.get("item_qty") or 0),
                 "expiry": cell_text(line.get("expiry")),
+                "scanned_barcodes": list(line.get("scanned_barcodes") or []),
             }
             order.setdefault(key, []).append(bkey)
         else:
@@ -282,6 +295,14 @@ def _group_assignment_lines(lines: list[dict[str, Any]]) -> dict[str, list[dict[
             expiry = cell_text(line.get("expiry"))
             if expiry:
                 bucket[bkey]["expiry"] = expiry
+            extra = [cell_text(part) for part in (line.get("scanned_barcodes") or []) if cell_text(part)]
+            seen = {cell_text(part).casefold() for part in bucket[bkey]["scanned_barcodes"]}
+            orig = barcode.casefold()
+            for part in extra:
+                if part.casefold() == orig or part.casefold() in seen:
+                    continue
+                bucket[bkey]["scanned_barcodes"].append(part)
+                seen.add(part.casefold())
     for key, barcodes in order.items():
         grouped[key] = [merged[key][bkey] for bkey in barcodes]
     return grouped
@@ -296,6 +317,33 @@ def _copy_row(ws, src: int, dest: int) -> None:
         dest_cell.number_format = src_cell.number_format
 
 
+def _scanned_codes_for_item(item: dict[str, Any]) -> list[str]:
+    original = cell_text(item.get("product_barcode")).casefold()
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in item.get("scanned_barcodes") or []:
+        text = cell_text(part)
+        key = text.casefold()
+        if not text or key == original or key in seen:
+            continue
+        out.append(text)
+        seen.add(key)
+    return out
+
+
+def _first_free_columns(ws, used: set[int], count: int) -> list[int]:
+    found: list[int] = []
+    col = 1
+    limit = max(int(ws.max_column or 1), max(used) if used else 1) + count + 8
+    while len(found) < count and col <= limit:
+        if col not in used:
+            header = cell_text(ws.cell(1, col).value)
+            if not header or header.casefold().startswith("отсканированный"):
+                found.append(col)
+        col += 1
+    return found
+
+
 def _write_product_qty(
     ws,
     row_idx: int,
@@ -304,6 +352,7 @@ def _write_product_qty(
     item: dict[str, Any],
     *,
     expiry_col: int | None = None,
+    scanned_cols: list[int] | None = None,
 ) -> None:
     barcode = cell_text(item.get("product_barcode"))
     qty = int(item.get("item_qty") or item.get("quantity") or item.get("qty") or 0)
@@ -316,6 +365,12 @@ def _write_product_qty(
         expiry_cell = ws.cell(row_idx, expiry_col)
         expiry_cell.number_format = "@"
         expiry_cell.value = cell_text(item.get("expiry")) if barcode else ""
+    if scanned_cols:
+        codes = _scanned_codes_for_item(item)
+        for offset, col in enumerate(scanned_cols):
+            cell = ws.cell(row_idx, col)
+            cell.number_format = "@"
+            cell.value = codes[offset] if offset < len(codes) else ""
 
 
 def fill_boxes_xlsx(
@@ -342,6 +397,17 @@ def fill_boxes_xlsx(
     qty_col = cols["qty"] + 1
     box_col = cols["box_id"] + 1
     expiry_col = cols["expiry"] + 1 if "expiry" in cols else None
+    used_cols = {index + 1 for index in cols.values()}
+    extra_needed = 0
+    for lines in grouped.values():
+        for line in lines:
+            extra_needed = max(extra_needed, len(_scanned_codes_for_item(line)))
+    scanned_cols = _first_free_columns(ws, used_cols, extra_needed) if extra_needed else []
+    for offset, col in enumerate(scanned_cols):
+        header_cell = ws.cell(1, col)
+        if not cell_text(header_cell.value):
+            header_cell.value = _SCANNED_HEADER if offset == 0 else f"{_SCANNED_HEADER} {offset + 1}"
+            header_cell.number_format = "@"
     extras: list[tuple[int, list[dict[str, Any]]]] = []
     max_row = int(ws.max_row or 1)
     for row_idx in range(2, max_row + 1):
@@ -350,7 +416,15 @@ def fill_boxes_xlsx(
         lines = grouped.get(key)
         if not lines:
             continue
-        _write_product_qty(ws, row_idx, barcode_col, qty_col, lines[0], expiry_col=expiry_col)
+        _write_product_qty(
+            ws,
+            row_idx,
+            barcode_col,
+            qty_col,
+            lines[0],
+            expiry_col=expiry_col,
+            scanned_cols=scanned_cols,
+        )
         if len(lines) > 1:
             extras.append((row_idx, lines[1:]))
     for row_idx, rest in reversed(extras):
@@ -358,7 +432,15 @@ def fill_boxes_xlsx(
         for offset, line in enumerate(rest):
             dest = row_idx + 1 + offset
             _copy_row(ws, row_idx, dest)
-            _write_product_qty(ws, dest, barcode_col, qty_col, line, expiry_col=expiry_col)
+            _write_product_qty(
+                ws,
+                dest,
+                barcode_col,
+                qty_col,
+                line,
+                expiry_col=expiry_col,
+                scanned_cols=scanned_cols,
+            )
     buf = io.BytesIO()
     wb.save(buf)
     wb.close()

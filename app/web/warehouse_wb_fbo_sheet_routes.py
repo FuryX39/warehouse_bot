@@ -25,6 +25,7 @@ from app.wb_fbo_sheet_service import (
     pdf_for_boxes,
     pdf_for_pallets,
     qty_warning_for_box,
+    build_wb_fbo_sheet_marking_xlsx,
     collect_sheet_cis_codes,
     require_cis_for_sheet_product,
     resolve_sheet_scan,
@@ -220,6 +221,31 @@ def register_warehouse_wb_fbo_sheet_routes(
                 headers={
                     "Content-Disposition": _attachment_disposition(
                         f"wb_fbo_sheet_{job_id}_boxes.xlsx"
+                    )
+                },
+            )
+
+        @app.get("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/marking.xlsx")
+        async def api_wb_fbo_sheet_marking_xlsx(
+            job_id: int,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> Response:
+            job = packing_repo.get_job(job_id, include_lines=True)
+            if job is None:
+                raise HTTPException(status_code=404, detail="Задание не найдено")
+            try:
+                content = await asyncio.to_thread(build_wb_fbo_sheet_marking_xlsx, job)
+            except ImportError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Не установлен openpyxl: pip install openpyxl",
+                ) from exc
+            return Response(
+                content=content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": _attachment_disposition(
+                        f"wb_fbo_sheet_{job_id}_kiz.xlsx"
                     )
                 },
             )
@@ -526,6 +552,7 @@ def _register_sheet_packer_prefix(
         barcode = str(payload.get("barcode") or payload.get("box_code") or "")
         product_barcode = str(payload.get("product_barcode") or "")
         production_date = str(payload.get("production_date") or "")
+        scanned_from_client = str(payload.get("scanned_barcode") or "").strip()
         cis_codes = collect_sheet_cis_codes(payload)
         try:
             qty = int(payload.get("quantity") or payload.get("qty") or 0)
@@ -570,6 +597,14 @@ def _register_sheet_packer_prefix(
                 production_date=production_date,
                 existing_expiry=kept_expiry,
             )
+            scanned_codes: list[str] = []
+            if scanned_from_client:
+                scanned_codes.append(scanned_from_client)
+            pending = packing_repo.pending_product_scan(job_id, user_id)
+            if pending is not None:
+                pending_original, pending_scanned = pending
+                if pending_original.casefold() == product_barcode.strip().casefold():
+                    scanned_codes.append(pending_scanned)
             assigned = packing_repo.assign_box(
                 job_id,
                 user_id,
@@ -578,6 +613,7 @@ def _register_sheet_packer_prefix(
                 item_qty=qty,
                 expiry=expiry,
                 cis_codes=stored_cis,
+                scanned_barcodes=scanned_codes,
             )
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
