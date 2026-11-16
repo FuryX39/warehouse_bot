@@ -99,6 +99,9 @@ def create_vseinstrumenti_job(
         raise ValueError("Выберите хотя бы одного упаковщика")
     order = parse_vseinstrumenti_order(content)
     by_sku = catalog.lookup_products_by_skus([line.sku for line in order.lines])
+    cis_by_id = catalog.products_require_cis(
+        [int(item["id"]) for item in by_sku.values() if item.get("id")]
+    )
     warnings: list[str] = []
     payloads: list[dict[str, Any]] = []
     for line in order.lines:
@@ -113,7 +116,7 @@ def create_vseinstrumenti_job(
                 "product_name": str(product["name"]) if product else line.excel_name,
                 "excel_barcode": line.excel_barcode,
                 "quantity": line.quantity,
-                "require_cis": catalog.product_requires_cis(product_id) if product_id else False,
+                "require_cis": bool(cis_by_id.get(product_id)) if product_id else False,
             }
         )
     job = repo.create_job(

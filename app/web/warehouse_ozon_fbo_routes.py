@@ -67,6 +67,7 @@ from app.ozon_fbo_supply_repository import (
     supply_to_dict,
 )
 from app.warehouse_users_repository import WarehouseUserRow
+from app.web.warehouse_assignment_helpers import parse_http_bool
 
 
 def _filters_from_query(params: Any) -> dict[str, str]:
@@ -445,6 +446,20 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=404, detail="FBO-заявка не найдена")
         catalog_map = fbo_repo.catalog_map_for_supply(row)
         return {"supply": supply_to_dict(row, include_details=True, catalog_map=catalog_map)}
+
+    @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies/{supply_id}/honest-sign-1c")
+    async def api_ozon_fbo_supply_honest_sign(
+        supply_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            row = fbo_repo.set_supply_honest_sign_1c(
+                supply_id, parse_http_bool((body or {}).get("honest_sign_1c"))
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"supply": supply_to_dict(row, include_details=False)}
 
     @app.post("/api/warehouse/marketplaces/ozon-fbo/supplies")
     async def api_ozon_fbo_create_supply(
@@ -1110,6 +1125,20 @@ def register_warehouse_ozon_fbo_routes(
             raise HTTPException(status_code=404, detail="Пакет FBO не найден")
         catalog_map = fbo_repo.catalog_map_for_supplies(row.supplies) if row.supplies else {}
         return {"batch": _batch_dict(row, include_details=True, catalog_map=catalog_map)}
+
+    @app.post("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}/honest-sign-1c")
+    async def api_ozon_fbo_batch_honest_sign(
+        batch_id: int,
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        try:
+            row = fbo_repo.set_batch_honest_sign_1c(
+                batch_id, parse_http_bool((body or {}).get("honest_sign_1c"))
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"batch": _batch_dict(row, include_details=False)}
 
     @app.delete("/api/warehouse/marketplaces/ozon-fbo/batches/{batch_id}")
     async def api_ozon_fbo_delete_batch(

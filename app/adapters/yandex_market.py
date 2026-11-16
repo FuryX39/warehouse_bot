@@ -392,7 +392,7 @@ class YandexMarketAdapter(MarketplaceAdapter):
         response.raise_for_status()
 
     def fetch_order(self, posting_id: str) -> dict | None:
-        """GET /campaigns/{id}/orders/{orderId} — сумма покупателя и статус."""
+        """GET /campaigns/{id}/orders/{orderId} — состав заказа и статус."""
         pid = str(posting_id or "").strip()
         if not pid or not self.is_configured():
             return None
@@ -409,34 +409,6 @@ class YandexMarketAdapter(MarketplaceAdapter):
         body = response.json() or {}
         order = body.get("order") or body
         return order if isinstance(order, dict) else None
-
-    def fetch_order_stats(self, posting_id: str) -> dict | None:
-        """POST /campaigns/{id}/stats/orders — комиссии/удержания по заказу."""
-        pid = str(posting_id or "").strip()
-        if not pid or not pid.isdigit() or not self.is_configured():
-            return None
-        try:
-            response = requests.post(
-                f"{self.base_url}/campaigns/{self.campaign_id}/stats/orders",
-                headers=self._headers(),
-                json={"orders": [int(pid)]},
-                timeout=30,
-            )
-            response.raise_for_status()
-        except requests.RequestException:
-            logger.warning("Yandex order stats failed order=%s", pid, exc_info=True)
-            return None
-        body = response.json() or {}
-        orders = ((body.get("result") or {}).get("orders")) or body.get("orders") or []
-        for order in orders:
-            if not isinstance(order, dict):
-                continue
-            try:
-                if int(order.get("id")) == int(pid):
-                    return order
-            except (TypeError, ValueError):
-                continue
-        return orders[0] if orders and isinstance(orders[0], dict) else None
 
     def fetch_business_id(self) -> int | None:
         if self._business_id:

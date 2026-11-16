@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from app.catalog_repository import CatalogRepository
 from app.config import Settings
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
-from app.web.warehouse_assignment_helpers import requested_packer_ids
+from app.web.warehouse_assignment_helpers import parse_http_bool, requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.yandex_fbo_api import (
     YandexFboApi,
@@ -224,6 +224,20 @@ def register_warehouse_yandex_fbo_routes(
             job = packing_repo.cancel_job(int(job_id))
             if job is None:
                 raise HTTPException(status_code=404, detail="Задание не найдено")
+            return {"job": packing_repo.job_to_dict(job)}
+
+        @app.post("/api/warehouse/marketplaces/yandex-fbo/jobs/{job_id}/honest-sign-1c")
+        async def api_yandex_fbo_honest_sign(
+            job_id: int,
+            body: dict[str, Any],
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> dict:
+            try:
+                job = packing_repo.set_honest_sign_1c(
+                    int(job_id), parse_http_bool((body or {}).get("honest_sign_1c"))
+                )
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
             return {"job": packing_repo.job_to_dict(job)}
 
         @app.get("/api/warehouse/marketplaces/yandex-fbo/jobs/{job_id}/labels.pdf")

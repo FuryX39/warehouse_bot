@@ -25,7 +25,7 @@ from app.other_marketplace_service import (
     require_purchase_status,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
-from app.web.warehouse_assignment_helpers import requested_packer_ids
+from app.web.warehouse_assignment_helpers import parse_http_bool, requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,12 @@ def register_warehouse_other_platform_routes(
         ) -> dict:
             content = await file.read()
             ids = [part.strip() for part in str(packer_user_ids or "").replace(";", ",").split(",") if part.strip()]
+            logger.info(
+                "Создание задания ВсеИнструменты: filename=%s bytes=%s transfer=%s",
+                file.filename,
+                len(content or b""),
+                transfer_number,
+            )
             try:
                 job, warnings = await asyncio.to_thread(
                     create_vseinstrumenti_job,
@@ -105,7 +111,10 @@ def register_warehouse_other_platform_routes(
                 )
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
-            return {"job": _job_dict(job, include_lines=True), "warnings": warnings}
+            except Exception:
+                logger.exception("Не удалось создать задание ВсеИнструменты")
+                raise HTTPException(status_code=500, detail="Не удалось создать задание") from None
+            return {"job": _job_dict(job, include_lines=False), "warnings": warnings}
 
         @app.post("/api/warehouse/other-platforms/jobs/{job_id}/cancel")
         async def api_vi_cancel(
@@ -127,6 +136,22 @@ def register_warehouse_other_platform_routes(
             try:
                 status_name = require_purchase_status(str((body or {}).get("purchase_status") or ""))
                 job = await asyncio.to_thread(repo.set_purchase_status, job_id, status_name)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": _job_dict(job, include_lines=False)}
+
+        @app.post("/api/warehouse/other-platforms/jobs/{job_id}/honest-sign-1c")
+        async def api_vi_honest_sign(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_access),
+        ) -> dict:
+            try:
+                job = await asyncio.to_thread(
+                    repo.set_honest_sign_1c,
+                    job_id,
+                    parse_http_bool((body or {}).get("honest_sign_1c")),
+                )
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": _job_dict(job, include_lines=False)}

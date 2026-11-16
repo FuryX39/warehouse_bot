@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.adapters.base import ReservationAction
 from app.repositories import InventoryRepository, OrderItem
-from app.warehouse_order_money import fetch_order_money
 from app.warehouse_order_pricing import fill_empty_yandex_pricing
 from app.warehouse_orders_repository import (
     SOURCE_YM,
@@ -66,16 +65,6 @@ def upsert_orders_from_actions(
                     row = updated
             except Exception:
                 logger.exception("yandex line pricing failed source=%s posting=%s", source, posting_id)
-            continue
-        needs_money = row.buyer_paid is None and row.cabinet_price is None
-        if coordinator is not None and needs_money:
-            try:
-                money = fetch_order_money(coordinator, source, posting_id, row.created_at_ts)
-            except Exception:
-                logger.exception("order money fetch failed source=%s posting=%s", source, posting_id)
-                money = None
-            if money:
-                orders_repo.set_order_money(row.id, money)
     return n
 
 

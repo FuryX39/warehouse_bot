@@ -267,6 +267,10 @@ def test_product_requires_cis_follows_marking_type(db_url: str) -> None:
     assert repo.product_requires_cis(with_gtin.id) is False
     assert repo.product_requires_cis(marked.id) is True
     assert repo.product_requires_cis(unset.id) is False
+    flags = repo.products_require_cis([with_gtin.id, marked.id, unset.id, 0])
+    assert flags[int(with_gtin.id)] is False
+    assert flags[int(marked.id)] is True
+    assert flags[int(unset.id)] is False
 
 
 def test_gtin_excel_import(db_url: str) -> None:

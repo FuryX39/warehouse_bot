@@ -17,6 +17,7 @@
   var ozonOrdersCount = 0;
   var ozonOrdersPage = 1;
   var batchListPage = 1;
+  var batchStatusFilter = "active";
   var listView = "overview";
   var opsPackingFields = [];
   var opsLogisticsFields = [];
@@ -361,6 +362,12 @@
 
   function shell() {
     return global.WH_SHELL || {};
+  }
+
+  function chzCell(row, url) {
+    var fn = shell().honestSignCheckbox;
+    if (!fn) return '<td class="wh-chz-column"></td>';
+    return '<td class="wh-chz-column">' + fn(url, !!row.honest_sign_1c, row.id) + "</td>";
   }
 
   function fetchJson(url, options) {
@@ -1520,14 +1527,20 @@
     Promise.all([loadMeta(), fetchJson("/api/warehouse/marketplaces/ozon-fbo/batches")])
       .then(function (parts) {
         var batches = (parts[1].batches || []);
+        var visibleBatches = shell().filterJobsByStatus
+          ? shell().filterJobsByStatus(batches, batchStatusFilter)
+          : batches.filter(function (b) {
+              return String(b.status || "") !== "cancelled";
+            });
         var p = global.WH_PAGER;
-        var sliced = p ? p.slice(batches, batchListPage) : { items: batches, state: { page: 1 } };
+        var sliced = p ? p.slice(visibleBatches, batchListPage) : { items: visibleBatches, state: { page: 1 } };
         batchListPage = sliced.state.page;
         var batchRows = sliced.items
           .map(function (b) {
             return (
               '<tr data-id="' + esc(b.id) + '">' +
               "<td>#" + esc(b.id) + "</td>" +
+              chzCell(b, "/api/warehouse/marketplaces/ozon-fbo/batches/" + b.id + "/honest-sign-1c") +
               "<td>" + esc(b.title) + "</td>" +
               "<td>" + esc(b.delivery_type_label || deliveryLabel(b.delivery_type)) + "</td>" +
               "<td>" + esc(b.timeslot_label || "—") + "</td>" +
@@ -1543,16 +1556,28 @@
           '<div class="wh-fbo-layout">' +
           '<div class="wh-crm-toolbar">' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboNewBatch">+ Создать пакет заявок</button>' +
-          '<button type="button" class="wh-btn" id="whFboRefreshBatches">Обновить</button></div>' +
+          '<button type="button" class="wh-btn" id="whFboRefreshBatches">Обновить</button>' +
+          (function () {
+            var extra = (meta.batch_statuses || []).map(function (item) {
+              return { value: item.id, label: item.name };
+            });
+            var opts = extra.length
+              ? [{ value: "active", label: "Кроме отменённых" }, { value: "all", label: "Все" }].concat(extra)
+              : null;
+            return shell().jobStatusFilterHtml ? shell().jobStatusFilterHtml(batchStatusFilter, opts) : "";
+          })() +
+          "</div>" +
           '<p class="wh-msg" id="whFboListMsg"></p>' +
           renderDefaultClientSettings() +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Пакеты в системе</h4>' +
           (batchRows
             ? '<table class="wh-employees-table wh-crm-table wh-fbo-batch-table"><thead><tr>' +
-              "<th>№</th><th>Название</th><th>Доставка</th><th>Слот</th><th>Заявок</th><th>Статус</th><th>Этикетки</th><th>Обновлено</th><th></th>" +
+              '<th>№</th><th class="wh-chz-column" title="Отражено в 1С">ЧЗ</th><th>Название</th><th>Доставка</th><th>Слот</th><th>Заявок</th><th>Статус</th><th>Этикетки</th><th>Обновлено</th><th></th>' +
               "</tr></thead><tbody>" + batchRows + "</tbody></table>" +
               (p ? p.html(sliced.state) : "")
-            : '<p class="wh-msg">Пакетов в системе пока нет.</p>') +
+            : (batches.length
+                ? '<p class="wh-msg">Нет пакетов с выбранным статусом.</p>'
+                : '<p class="wh-msg">Пакетов в системе пока нет.</p>')) +
           "</section>" +
           '<section class="wh-crm-section"><h4 class="wh-crm-section-title">Сводка для таблиц</h4>' +
           '<p class="wh-muted">Все пакеты в одной таблице — редактируйте ячейки и сохраните без входа в каждый пакет.</p>' +
@@ -1580,10 +1605,18 @@
         bindOzonListEvents(tab, item, root);
         bindDefaultClientSettings(tab, item, root);
         bindGlobalOpsSummary(tab, item, root);
+        if (shell().bindJobStatusFilter) {
+          shell().bindJobStatusFilter(root, function (value) {
+            batchStatusFilter = value;
+            batchListPage = 1;
+            renderBatchList(tab, item, { reloadOzon: ozonOrdersLoaded });
+          });
+        }
+        if (shell().bindHonestSign) shell().bindHonestSign(root, batches);
         root.querySelectorAll(".wh-fbo-batch-table tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
           tr.addEventListener("click", function (e) {
-            if (e.target && e.target.closest(".wh-fbo-batch-del, .wh-fbo-batch-labels-link")) return;
+            if (e.target && e.target.closest(".wh-fbo-batch-del, .wh-fbo-batch-labels-link, .wh-chz")) return;
             renderBatchDetail(tab, item, parseInt(tr.getAttribute("data-id"), 10));
           });
         });

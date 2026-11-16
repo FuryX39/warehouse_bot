@@ -17,6 +17,7 @@ from app.crm_repository import CrmRepository
 from app.fbs_packing_repository import FbsPackingRepository
 from app.fbs_packing_service import create_wb_packing_job
 from app.wb_fbs_labels import (
+    load_wb_fbs_list_rows,
     merged_wb_supply_title,
     normalize_wb_supply_ids,
     png_bytes_to_label_pdf,
@@ -67,6 +68,7 @@ class FakeWbAdapter(WildberriesAdapter):
         self.sticker_b64 = base64.b64encode(_png_bytes()).decode("ascii")
         self.created: list[tuple[str, str]] = []
         self.added: dict[str, list[int]] = {}
+        self.order_fetch_calls: list[list[int]] = []
 
     def is_configured(self) -> bool:
         return True
@@ -75,6 +77,7 @@ class FakeWbAdapter(WildberriesAdapter):
         return list(self.orders)
 
     def fetch_orders_by_ids(self, order_ids: list[int]) -> list[dict]:
+        self.order_fetch_calls.append(list(order_ids))
         want = {int(x) for x in order_ids}
         return [o for o in self.orders if int(o["id"]) in want]
 
@@ -239,6 +242,20 @@ def test_one_supply_per_warehouse_for_retail_and_one_for_legal(db_url: str, tmp_
     assert "FBS" not in adapter.created[0][1]
     assert "склад" not in adapter.created[0][1].casefold()
     assert all(packing.read_line_pdf(job.id, line.id).startswith(b"%PDF") for line in job.lines)
+
+
+def test_ready_to_ship_loads_orders_once_for_many_supplies() -> None:
+    adapter = FakeWbAdapter()
+    rows, orders, warnings, available = load_wb_fbs_list_rows(
+        adapter,
+        substatus="READY_TO_SHIP",
+        supply_ids=["WB-GI-A", "WB-GI-B"],
+    )
+    assert warnings == []
+    assert available == 2
+    assert {row.order_id for row in rows} == {"9001", "9002"}
+    assert {int(order["id"]) for order in orders} == {9001, 9002}
+    assert adapter.order_fetch_calls == [[9001, 9002]]
 
 
 def test_create_wb_job_merged_ready_to_ship(db_url: str, tmp_path) -> None:

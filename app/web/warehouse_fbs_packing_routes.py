@@ -30,7 +30,7 @@ from app.fbs_packing_service import (
     resolve_packing_scan,
 )
 from app.warehouse_users_repository import WarehouseUserRow, WarehouseUsersRepository
-from app.web.warehouse_assignment_helpers import requested_packer_ids
+from app.web.warehouse_assignment_helpers import parse_http_bool, requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.yandex_fbs_labels import (
     get_configured_yandex_adapter,
@@ -464,6 +464,20 @@ def register_warehouse_fbs_packing_routes(
             number = str((body or {}).get("transfer_number") or "").strip()[:128]
             try:
                 job = packing_repo.set_transfer_number(job_id, number)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": packing_repo.job_to_dict(job)}
+
+        @app.post("/api/warehouse/fbs-packing/jobs/{job_id}/honest-sign-1c")
+        async def api_fbs_packing_job_honest_sign(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow | None = Depends(require_fbs_access),
+        ) -> dict:
+            try:
+                job = packing_repo.set_honest_sign_1c(
+                    job_id, parse_http_bool((body or {}).get("honest_sign_1c"))
+                )
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": packing_repo.job_to_dict(job)}

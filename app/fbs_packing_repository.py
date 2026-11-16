@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from app.db import coerce_sql_bool
 from app.warehouse_task_files import WarehouseTaskFileStorage
 from app.yandex_label_sorter import parse_sheet_label_key
 
@@ -54,6 +55,7 @@ class FbsPackingJob(_Base):
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     supplies_delivered_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class FbsPackingJobAssignee(_Base):
@@ -144,6 +146,7 @@ class FbsPackingJobRow:
     supply_id: str = ""
     transfer_number: str = ""
     supplies_delivered_at_ts: int = 0
+    honest_sign_1c: bool = False
     lines: list[FbsPackingLineRow] = field(default_factory=list)
 
 
@@ -186,8 +189,11 @@ class FbsPackingRepository:
         self.file_storage = WarehouseTaskFileStorage(Path(files_data_dir))
 
     def init_schema(self) -> None:
+        from app.db import ensure_boolean_column
+
         _Base.metadata.create_all(self.engine)
         self._migrate_cis_columns()
+        ensure_boolean_column(self.engine, "fbs_packing_jobs", "honest_sign_1c")
 
     def _migrate_cis_columns(self) -> None:
         from sqlalchemy import inspect, text
@@ -302,6 +308,7 @@ class FbsPackingRepository:
             supply_id=str(getattr(job, "supply_id", None) or ""),
             transfer_number=str(getattr(job, "transfer_number", None) or ""),
             supplies_delivered_at_ts=int(getattr(job, "supplies_delivered_at_ts", 0) or 0),
+            honest_sign_1c=coerce_sql_bool(getattr(job, "honest_sign_1c", False)),
             status=str(job.status or JOB_STATUS_OPEN),
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
             sheet_url=str(job.sheet_url or ""),
@@ -463,6 +470,19 @@ class FbsPackingRepository:
         with Session(self.engine) as session:
             row = session.get(FbsPackingJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_honest_sign_1c(self, job_id: int, value: bool) -> FbsPackingJobRow:
+        with Session(self.engine) as session:
+            job = session.get(FbsPackingJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.honest_sign_1c = bool(value)
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def set_transfer_number(self, job_id: int, transfer_number: str) -> FbsPackingJobRow:
         number = str(transfer_number or "").strip()[:128]
@@ -1024,6 +1044,7 @@ class FbsPackingRepository:
             "line_printed": job.line_printed,
             "remaining": job.line_pending,
             "supplies_delivered": int(getattr(job, "supplies_delivered_at_ts", 0) or 0) > 0,
+            "honest_sign_1c": bool(getattr(job, "honest_sign_1c", False)),
         }
         if include_lines:
             payload["lines"] = [self.line_to_dict(line) for line in job.lines]

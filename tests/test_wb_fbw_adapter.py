@@ -23,15 +23,41 @@ def test_wb_request_supports_patch() -> None:
     request.assert_called_once_with("https://example/orders", json={"orders": [1]})
 
 
-def _resp(*, ok: bool, status: int, payload=None, text: str = "", url: str = "https://example"):
+def _resp(
+    *,
+    ok: bool,
+    status: int,
+    payload=None,
+    text: str = "",
+    url: str = "https://example",
+    headers: dict | None = None,
+):
     resp = MagicMock()
     resp.ok = ok
     resp.status_code = status
     resp.reason = "Error" if not ok else "OK"
     resp.url = url
     resp.text = text
+    resp.headers = headers or {}
     resp.json.return_value = payload
     return resp
+
+
+def test_wb_request_retries_429(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.adapters.wildberries.time.sleep", sleeps.append)
+    limited = _resp(
+        ok=False,
+        status=429,
+        text='{"detail":"rate limit exceeded"}',
+        headers={"X-Ratelimit-Retry": "1"},
+    )
+    ok = _resp(ok=True, status=200, payload={"orders": []})
+    with patch("app.adapters.wildberries.requests.get", side_effect=[limited, ok]) as request:
+        actual = _wb_request("GET", "https://marketplace-api.wildberries.ru/api/v3/orders")
+    assert actual is ok
+    assert request.call_count == 2
+    assert sleeps == [1.0]
 
 
 def test_fetch_fbw_supply_retries_preorder_on_404() -> None:

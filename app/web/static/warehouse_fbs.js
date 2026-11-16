@@ -6,11 +6,22 @@
   var hasMerged = false;
   var jobsCache = [];
   var jobsPage = 1;
+  var jobsStatusFilter = "active";
   var previewRowsCache = [];
   var previewPage = 1;
 
   function shell() {
     return global.WH_SHELL || {};
+  }
+
+  function chzCell(job) {
+    var fn = shell().honestSignCheckbox;
+    if (!fn) return '<td class="wh-chz-column"></td>';
+    return (
+      '<td class="wh-chz-column">' +
+      fn("/api/warehouse/fbs-packing/jobs/" + job.id + "/honest-sign-1c", !!job.honest_sign_1c, job.id) +
+      "</td>"
+    );
   }
 
   function esc(value) {
@@ -205,9 +216,14 @@
       jobsCache = jobs;
       jobsPage = 1;
     }
-    jobs = jobsCache || [];
+    var all = jobsCache || [];
+    jobs = shell().filterJobsByStatus ? shell().filterJobsByStatus(all, jobsStatusFilter) : all.filter(function (job) {
+      return String(job.status || "") !== "cancelled";
+    });
     if (!jobs.length) {
-      wrap.innerHTML = '<p class="wh-muted">Заданий пока нет.</p>';
+      wrap.innerHTML = all.length
+        ? '<p class="wh-muted">Нет заданий с выбранным статусом.</p>'
+        : '<p class="wh-muted">Заданий пока нет.</p>';
       return;
     }
     var p = global.WH_PAGER;
@@ -215,7 +231,7 @@
     jobsPage = sliced.state.page;
     wrap.innerHTML =
       '<table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      '<th>№</th><th>Статус</th><th class="wh-fbs-transfer-column">Перемещение</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>' +
+      '<th>№</th><th class="wh-chz-column" title="Отражено в 1С">ЧЗ</th><th>Статус</th><th class="wh-fbs-transfer-column">Перемещение</th><th>Заказы</th><th>Строки</th><th>Упаковщики</th><th>Список</th><th></th>' +
       "</tr></thead><tbody>" +
       sliced.items
         .map(function (job) {
@@ -252,7 +268,9 @@
           return (
             "<tr><td>#" +
             esc(job.id) +
-            "</td><td>" +
+            "</td>" +
+            chzCell(job) +
+            "<td>" +
             esc(jobStatusLabel(job.status)) +
             '</td><td><div class="wh-fbs-transfer-editor"><input type="text" class="wh-fbs-transfer" maxlength="128" autocomplete="off" aria-label="Номер перемещения" placeholder="Не указано" data-id="' +
             esc(job.id) +
@@ -302,6 +320,7 @@
         renderJobs(root, null);
       });
     }
+    if (shell().bindHonestSign) shell().bindHonestSign(wrap, jobsCache);
     wrap.querySelectorAll(".wh-fbs-job-cancel").forEach(function (btn) {
       btn.addEventListener("click", function () {
         cancelJob(root, parseInt(btn.getAttribute("data-id"), 10));
@@ -1180,6 +1199,13 @@
 
   function bindPanel(root) {
     if (global.WhPackerAssignment) global.WhPackerAssignment.bind(root);
+    if (shell().bindJobStatusFilter) {
+      shell().bindJobStatusFilter(root, function (value) {
+        jobsStatusFilter = value;
+        jobsPage = 1;
+        renderJobs(root, null);
+      });
+    }
     root.querySelectorAll(".wh-fbs-marketplace-tab").forEach(function (button) {
       button.addEventListener("click", function () {
         activeMarketplace = button.getAttribute("data-marketplace") || "yandex";
@@ -1214,7 +1240,10 @@
       '<p class="wh-msg" id="whFbsMessage"></p>' +
       '<div id="whFbsResult"></div>' +
       (isPackingJobsMarketplace()
-        ? '<h4 class="wh-crm-section-title">Задания упаковки</h4><div id="whFbsJobs"></div>'
+        ? (shell().jobsSectionHtml
+            ? shell().jobsSectionHtml("Задания упаковки", jobsStatusFilter)
+            : '<h4 class="wh-crm-section-title">Задания упаковки</h4>') +
+          '<div id="whFbsJobs"></div>'
         : "");
     bindPanel(root);
     if (activeMarketplace === "wildberries") {

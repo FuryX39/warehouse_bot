@@ -23,7 +23,7 @@ from app.wb_fbo_packing_service import (
     resolve_fbo_scan,
 )
 from app.wb_fbs_labels import get_configured_wb_adapter
-from app.web.warehouse_assignment_helpers import requested_packer_ids
+from app.web.warehouse_assignment_helpers import parse_http_bool, requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 
 
@@ -217,6 +217,20 @@ def register_warehouse_wb_fbo_routes(
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"ok": True, "packer_user_ids": ids}
+
+        @app.post("/api/warehouse/marketplaces/wb-fbo/jobs/{job_id}/honest-sign-1c")
+        async def api_wb_fbo_job_honest_sign(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> dict:
+            try:
+                job = packing_repo.set_honest_sign_1c(
+                    job_id, parse_http_bool((body or {}).get("honest_sign_1c"))
+                )
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": packing_repo.job_to_dict(job)}
 
         def _manager_pdf(job_id: int, kind: str, filename: str) -> Response:
             try:

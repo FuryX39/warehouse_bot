@@ -10,6 +10,7 @@ from sqlalchemy import Boolean, ForeignKey, Integer, String, delete, func, selec
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.catalog_repository import CatalogRepository
+from app.db import coerce_sql_bool
 from app.ozon_fbo_labels_storage import batch_labels_url, supply_labels_url
 from app.warehouse_users_repository import WarehouseUsersRepository
 
@@ -106,6 +107,7 @@ class OzonFboBatch(_Base):
     ops_car_driver: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class OzonFboUnloadAddress(_Base):
@@ -188,6 +190,7 @@ class OzonFboSupply(_Base):
     comment: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class OzonFboSupplyItem(_Base):
@@ -325,6 +328,7 @@ class FboBatchRow:
     ops_car_driver: str
     created_at_ts: int
     updated_at_ts: int
+    honest_sign_1c: bool = False
     ops_packer_user_ids: list[int] = field(default_factory=list)
     ops_packer_display: str = ""
     supply_count: int = 0
@@ -364,6 +368,7 @@ class FboSupplyRow:
     comment: str
     created_at_ts: int
     updated_at_ts: int
+    honest_sign_1c: bool = False
     items: list[FboSupplyItemRow] = field(default_factory=list)
     cargoes: list[FboCargoRow] = field(default_factory=list)
 
@@ -438,8 +443,12 @@ class OzonFboSupplyRepository:
         self.users_repo = users_repo
 
     def init_schema(self) -> None:
+        from app.db import ensure_boolean_column
+
         _Base.metadata.create_all(self.engine)
         self._ensure_columns()
+        ensure_boolean_column(self.engine, "ozon_fbo_supplies", "honest_sign_1c")
+        ensure_boolean_column(self.engine, "ozon_fbo_batches", "honest_sign_1c")
         self._seed_packing_statuses()
         self._seed_supply_types()
 
@@ -1068,6 +1077,19 @@ class OzonFboSupplyRepository:
                 return None
             return self._batch_row(session, row, include_details=True)
 
+    def set_batch_honest_sign_1c(self, batch_id: int, value: bool) -> FboBatchRow:
+        with Session(self.engine) as session:
+            row = session.get(OzonFboBatch, int(batch_id))
+            if row is None:
+                raise ValueError("Пакет FBO не найден")
+            row.honest_sign_1c = bool(value)
+            row.updated_at_ts = int(time.time())
+            session.commit()
+        found = self.get_batch(batch_id)
+        if found is None:
+            raise ValueError("Пакет FBO не найден")
+        return found
+
     def create_batch(self, data: dict[str, Any], *, manager_user_id: int | None = None) -> FboBatchRow:
         now = int(time.time())
         with Session(self.engine) as session:
@@ -1187,6 +1209,19 @@ class OzonFboSupplyRepository:
             if row is None:
                 return None
             return self._row(session, row, include_details=True)
+
+    def set_supply_honest_sign_1c(self, supply_id: int, value: bool) -> FboSupplyRow:
+        with Session(self.engine) as session:
+            row = session.get(OzonFboSupply, int(supply_id))
+            if row is None:
+                raise ValueError("FBO-заявка не найдена")
+            row.honest_sign_1c = bool(value)
+            row.updated_at_ts = int(time.time())
+            session.commit()
+        found = self.get_supply(supply_id)
+        if found is None:
+            raise ValueError("FBO-заявка не найдена")
+        return found
 
     def create_supply(self, data: dict[str, Any], *, manager_user_id: int | None = None) -> FboSupplyRow:
         now = int(time.time())
@@ -1560,6 +1595,7 @@ class OzonFboSupplyRepository:
             comment=str(row.comment or ""),
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
+            honest_sign_1c=coerce_sql_bool(getattr(row, "honest_sign_1c", False)),
             items=items,
             cargoes=cargoes,
         )
@@ -1626,6 +1662,7 @@ class OzonFboSupplyRepository:
             ops_packer_display=packer_display,
             created_at_ts=int(row.created_at_ts or 0),
             updated_at_ts=int(row.updated_at_ts or 0),
+            honest_sign_1c=coerce_sql_bool(getattr(row, "honest_sign_1c", False)),
             supply_count=int(supply_count or 0),
             labels_url=batch_labels_url(int(row.id)) if int(labels_count or 0) > 0 else "",
             supplies=supplies,
@@ -1675,6 +1712,7 @@ def supply_to_dict(
         "updated_at_ts": row.updated_at_ts,
         "item_count": len(row.items),
         "cargo_count": len(row.cargoes),
+        "honest_sign_1c": bool(getattr(row, "honest_sign_1c", False)),
     }
     if include_details:
         data["items"] = [
@@ -1787,6 +1825,7 @@ def batch_to_dict(
         "updated_at_ts": row.updated_at_ts,
         "supply_count": row.supply_count,
         "labels_url": row.labels_url,
+        "honest_sign_1c": bool(getattr(row, "honest_sign_1c", False)),
     }
     if include_details:
         from app.ozon_fbo_ops_sheets import batch_ship_date, ops_editable_from_batch, ops_sheet_for_batch

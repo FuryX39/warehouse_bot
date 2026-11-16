@@ -142,22 +142,27 @@ def load_wb_fbs_list_rows(
         if not supplies:
             raise ValueError("Выберите поставку WB для «готовы к отгрузке»")
         seen_oids: set[int] = set()
+        all_ids: list[int] = []
         for sid in supplies:
             order_ids = adapter.fetch_supply_order_ids(sid)
             if not order_ids:
                 warnings.append(f"{sid}: в поставке нет заказов")
                 continue
-            fetched = adapter.fetch_orders_by_ids(order_ids)
-            found_ids = {_order_id(o) for o in fetched}
-            for oid in order_ids:
-                if int(oid) not in found_ids:
-                    warnings.append(f"Заказ WB {oid} не найден в API")
-            for order in fetched:
-                oid = _order_id(order)
-                if oid in seen_oids:
+            for raw in order_ids:
+                try:
+                    oid = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if oid <= 0 or oid in seen_oids:
                     continue
                 seen_oids.add(oid)
-                orders.append(order)
+                all_ids.append(oid)
+        fetched = adapter.fetch_orders_by_ids(all_ids) if all_ids else []
+        found_ids = {_order_id(o) for o in fetched}
+        for oid in all_ids:
+            if oid not in found_ids:
+                warnings.append(f"Заказ WB {oid} не найден в API")
+        orders.extend(fetched)
     available = len(orders)
     if max_units is not None and max_units > 0:
         orders = orders[: int(max_units)]

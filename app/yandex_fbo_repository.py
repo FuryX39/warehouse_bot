@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, delete, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from app.db import coerce_sql_bool
 from app.warehouse_task_files import WarehouseTaskFileStorage
 
 JOB_STATUS_OPEN = "open"
@@ -43,6 +44,7 @@ class YandexFboJob(_Base):
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class YandexFboJobAssignee(_Base):
@@ -156,6 +158,7 @@ class YandexFboJobRow:
     created_by_user_id: int | None
     created_at_ts: int
     updated_at_ts: int
+    honest_sign_1c: bool = False
     packer_user_ids: list[int] = field(default_factory=list)
     packer_names: list[str] = field(default_factory=list)
     line_total: int = 0
@@ -189,7 +192,10 @@ class YandexFboRepository:
         self.files = WarehouseTaskFileStorage(Path(files_data_dir))
 
     def init_schema(self) -> None:
+        from app.db import ensure_boolean_column
+
         _Base.metadata.create_all(self.engine)
+        ensure_boolean_column(self.engine, "yandex_fbo_jobs", "honest_sign_1c")
 
     def read_stored(self, stored_name: str) -> bytes:
         path = self.files.path_for(stored_name)
@@ -263,6 +269,19 @@ class YandexFboRepository:
         with Session(self.engine) as session:
             row = session.get(YandexFboJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_honest_sign_1c(self, job_id: int, value: bool) -> YandexFboJobRow:
+        with Session(self.engine) as session:
+            job = session.get(YandexFboJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.honest_sign_1c = bool(value)
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def set_assignees(self, job_id: int, user_ids: list[int]) -> YandexFboJobRow:
         ids = list(dict.fromkeys(int(value) for value in user_ids if int(value) > 0))
@@ -567,6 +586,7 @@ class YandexFboRepository:
             "remaining": job.line_pending,
             "cargo_total": job.cargo_total,
             "cargo_used": job.cargo_used,
+            "honest_sign_1c": bool(getattr(job, "honest_sign_1c", False)),
         }
         if include_details:
             payload["products"] = [self._product_dict(item) for item in job.products]
@@ -752,6 +772,7 @@ class YandexFboRepository:
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id else None,
             created_at_ts=int(job.created_at_ts or 0),
             updated_at_ts=int(job.updated_at_ts or 0),
+            honest_sign_1c=coerce_sql_bool(getattr(job, "honest_sign_1c", False)),
             packer_user_ids=assignee_ids,
             packer_names=names,
             line_total=planned_total,

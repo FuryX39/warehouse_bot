@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, delete, func, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from app.db import coerce_sql_bool
 from app.marking.cis import parse_cis, remap_jcuken_to_qwerty
 from app.warehouse_task_files import (
     MAX_TASK_ATTACHMENT_BYTES,
@@ -60,6 +61,7 @@ class WbFboSheetJob(_Base):
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class WbFboSheetJobAssignee(_Base):
@@ -307,6 +309,7 @@ class WbFboSheetJobRow:
     pallet_total: int = 0
     pallet_closed: int = 0
     occupied_pallet_count: int = 0
+    honest_sign_1c: bool = False
     products: list[WbFboSheetProductRow] = field(default_factory=list)
     boxes: list[WbFboSheetBoxRow] = field(default_factory=list)
     pallets: list[WbFboSheetPalletRow] = field(default_factory=list)
@@ -340,6 +343,8 @@ class WbFboSheetRepository:
         self.file_storage = WarehouseTaskFileStorage(Path(files_data_dir))
 
     def init_schema(self) -> None:
+        from app.db import ensure_boolean_column
+
         _Base.metadata.create_all(self.engine)
         self._migrate_supply_qr()
         self._migrate_box_item_expiry()
@@ -347,6 +352,7 @@ class WbFboSheetRepository:
         self._migrate_box_item_scanned_barcodes()
         self._migrate_pallets()
         self._backfill_box_items()
+        ensure_boolean_column(self.engine, "wb_fbo_sheet_jobs", "honest_sign_1c")
 
     def _migrate_supply_qr(self) -> None:
         from sqlalchemy import inspect, text
@@ -764,6 +770,7 @@ class WbFboSheetRepository:
                     if item.pallet_id and any(line.item_qty > 0 for line in item.items)
                 }
             ),
+            honest_sign_1c=coerce_sql_bool(getattr(job, "honest_sign_1c", False)),
             products=product_rows if include_lines else [],
             boxes=box_rows if include_lines else [],
             pallets=pallet_rows if include_lines else [],
@@ -912,6 +919,19 @@ class WbFboSheetRepository:
         with Session(self.engine) as session:
             row = session.get(WbFboSheetJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_honest_sign_1c(self, job_id: int, value: bool) -> WbFboSheetJobRow:
+        with Session(self.engine) as session:
+            job = session.get(WbFboSheetJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.honest_sign_1c = bool(value)
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def set_transfer_number(self, job_id: int, transfer_number: str) -> WbFboSheetJobRow:
         number = str(transfer_number or "").strip()[:128]
@@ -1665,6 +1685,7 @@ class WbFboSheetRepository:
             "line_done": job.box_assigned,
             "line_printed": job.box_printed,
             "line_pending": job.box_pending,
+            "honest_sign_1c": bool(getattr(job, "honest_sign_1c", False)),
         }
         if include_lines:
             payload["products"] = [self.product_to_dict(item) for item in job.products]

@@ -13,6 +13,7 @@ _STOCKS_CHUNK = 1000
 # Повторы при обрыве TLS/сети (SSLEOFError, reset и т.п.) на VPS и «длинных» маршрутах до WB.
 _MP_HTTP_RETRIES = 5
 _MP_RETRY_BASE_DELAY = 2.0
+_MP_429_MAX_SLEEP = 60.0
 _ORDERS_PAGE_LIMIT = 1000
 _STATUS_BATCH = 1000
 # GET /api/v3/orders — не больше 30 дней за запрос; полный синк: одно окно (30 суток назад — сейчас).
@@ -146,8 +147,33 @@ def _fbw_http_error(response: requests.Response) -> requests.HTTPError:
     return requests.HTTPError(detail, response=response)
 
 
+def _wb_retry_after_seconds(response: requests.Response, *, attempt: int) -> float:
+    headers = response.headers or {}
+    for name in ("X-Ratelimit-Retry", "X-RateLimit-Retry", "Retry-After"):
+        raw = headers.get(name)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            return min(max(float(raw), 0.2), _MP_429_MAX_SLEEP)
+        except (TypeError, ValueError):
+            continue
+    return min(_MP_RETRY_BASE_DELAY * (2 ** (attempt - 1)), _MP_429_MAX_SLEEP)
+
+
+def _wb_send(method_u: str, url: str, **kwargs) -> requests.Response:
+    if method_u == "GET":
+        return requests.get(url, **kwargs)
+    if method_u == "POST":
+        return requests.post(url, **kwargs)
+    if method_u == "PUT":
+        return requests.put(url, **kwargs)
+    if method_u == "PATCH":
+        return requests.patch(url, **kwargs)
+    raise ValueError(f"unsupported HTTP method: {method_u}")
+
+
 def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
-    """GET/POST/PUT/PATCH с повторами при временных сбоях TLS и транспорта."""
+    """GET/POST/PUT/PATCH с повторами при 429, обрыве TLS и транспорта."""
     transient = (
         req_exc.SSLError,
         req_exc.ConnectionError,
@@ -157,15 +183,7 @@ def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
     method_u = method.upper()
     for attempt in range(1, _MP_HTTP_RETRIES + 1):
         try:
-            if method_u == "GET":
-                return requests.get(url, **kwargs)
-            if method_u == "POST":
-                return requests.post(url, **kwargs)
-            if method_u == "PUT":
-                return requests.put(url, **kwargs)
-            if method_u == "PATCH":
-                return requests.patch(url, **kwargs)
-            raise ValueError(f"unsupported HTTP method: {method}")
+            response = _wb_send(method_u, url, **kwargs)
         except transient as exc:
             logger.warning(
                 "Wildberries %s %s — временная ошибка: %s (попытка %s/%s)",
@@ -179,6 +197,19 @@ def _wb_request(method: str, url: str, **kwargs) -> requests.Response:
                 raise
             delay = min(_MP_RETRY_BASE_DELAY ** (attempt - 1), 30.0)
             time.sleep(delay)
+            continue
+        if response.status_code == 429 and attempt < _MP_HTTP_RETRIES:
+            delay = _wb_retry_after_seconds(response, attempt=attempt)
+            logger.warning(
+                "Wildberries 429 %s — повтор через %.1fs (попытка %s/%s)",
+                url,
+                delay,
+                attempt,
+                _MP_HTTP_RETRIES,
+            )
+            time.sleep(delay)
+            continue
+        return response
     raise RuntimeError("unreachable")
 
 
@@ -252,7 +283,6 @@ class WildberriesAdapter(MarketplaceAdapter):
         # Категория «Контент» для списка карточек (vendorCode → chrtId). Часто совпадает с Marketplace-токеном.
         self._content_token = (content_token.strip() or api_token).strip()
         self._vendor_chrt_cache: tuple[float, dict[str, list[int]]] | None = None
-        self._commission_tariffs_cache: tuple[float, list[dict]] | None = None
 
     def is_configured(self) -> bool:
         return is_value_configured(self.api_token)
@@ -780,130 +810,6 @@ class WildberriesAdapter(MarketplaceAdapter):
             raise _wb_http_error(response)
         data = response.json() or {}
         return [item for item in data.get("orders") or [] if isinstance(item, dict)]
-
-    def fetch_order_by_id(self, order_id: int, *, around_ts: int | None = None) -> dict | None:
-        """Одно сборочное задание WB: сначала /orders/new, затем узкое окно /orders."""
-        try:
-            oid = int(order_id)
-        except (TypeError, ValueError):
-            return None
-        if not self.is_configured() or oid <= 0:
-            return None
-        for order in self.fetch_new_assembly_orders():
-            try:
-                if int(order.get("id")) == oid:
-                    return order
-            except (TypeError, ValueError):
-                continue
-        headers = self._auth_headers()
-        now = int(time.time())
-        ts = int(around_ts or now)
-        date_from = max(0, ts - 3 * 86400)
-        date_to = min(now + 86400, max(ts + 3 * 86400, now))
-        for order in self._fetch_assembly_orders_between(headers, date_from, date_to):
-            try:
-                if int(order.get("id")) == oid:
-                    return order
-            except (TypeError, ValueError):
-                continue
-        return None
-
-    def fetch_commission_tariffs(self) -> list[dict]:
-        """GET common-api /api/v1/tariffs/commission — % КВВ по предметам."""
-        now = time.time()
-        cached = self._commission_tariffs_cache
-        if cached and now - cached[0] < 3600:
-            return cached[1]
-        if not self.is_configured():
-            return []
-        try:
-            response = _wb_request(
-                "GET",
-                "https://common-api.wildberries.ru/api/v1/tariffs/commission",
-                headers=self._auth_headers(),
-                timeout=60,
-            )
-            if not response.ok:
-                raise _wb_http_error(response)
-            data = response.json() or {}
-            rows = data.get("report") or data.get("data") or []
-            out = [row for row in rows if isinstance(row, dict)]
-        except Exception:
-            logger.warning("Wildberries commission tariffs failed", exc_info=True)
-            return cached[1] if cached else []
-        self._commission_tariffs_cache = (now, out)
-        return out
-
-    def fetch_product_card(self, *, vendor_code: str = "", nm_id: int | None = None) -> dict | None:
-        search = str(vendor_code or "").strip() or (str(nm_id) if nm_id else "")
-        if not search or not self._content_token:
-            return None
-        payload = {
-            "settings": {
-                "cursor": {"limit": 20},
-                "filter": {"textSearch": search, "withPhoto": -1},
-            }
-        }
-        try:
-            response = _wb_request(
-                "POST",
-                f"{_CONTENT_BASE}/content/v2/get/cards/list",
-                headers={
-                    "Authorization": self._content_token,
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=60,
-            )
-            if not response.ok:
-                raise _wb_http_error(response)
-        except Exception:
-            logger.warning("Wildberries card lookup failed search=%s", search, exc_info=True)
-            return None
-        rows = (response.json() or {}).get("cards") or []
-        want_nm = int(nm_id) if nm_id else None
-        want_vc = str(vendor_code or "").strip().casefold()
-
-        def _match(cards: list) -> dict | None:
-            for card in cards:
-                if not isinstance(card, dict):
-                    continue
-                vc = str(card.get("vendorCode") or "").strip().casefold()
-                try:
-                    cid = int(card.get("nmID") or card.get("nmId") or 0)
-                except (TypeError, ValueError):
-                    cid = 0
-                if want_vc and vc == want_vc:
-                    return card
-                if want_nm and cid == want_nm:
-                    return card
-            return None
-
-        hit = _match(rows)
-        if hit is not None:
-            return hit
-        if want_nm and search != str(want_nm):
-            try:
-                response = _wb_request(
-                    "POST",
-                    f"{_CONTENT_BASE}/content/v2/get/cards/list",
-                    headers={
-                        "Authorization": self._content_token,
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "settings": {
-                            "cursor": {"limit": 20},
-                            "filter": {"textSearch": str(want_nm), "withPhoto": -1},
-                        }
-                    },
-                    timeout=60,
-                )
-                if response.ok:
-                    return _match((response.json() or {}).get("cards") or [])
-            except Exception:
-                logger.warning("Wildberries card lookup by nmId failed nm=%s", want_nm, exc_info=True)
-        return None
 
     def list_supplies(self, *, limit: int = 100, next_cursor: int = 0) -> tuple[list[dict], int]:
         if not self.is_configured():

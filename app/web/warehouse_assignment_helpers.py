@@ -7,6 +7,14 @@ from typing import Any
 from app.warehouse_users_repository import WarehouseUsersRepository
 
 
+def parse_http_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def requested_packer_ids(
     body: dict[str, Any] | None,
     users_repo: WarehouseUsersRepository,

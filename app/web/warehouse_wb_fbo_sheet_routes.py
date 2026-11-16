@@ -31,7 +31,7 @@ from app.wb_fbo_sheet_service import (
     resolve_sheet_scan,
 )
 from app.wb_fbo_sheet_xlsx import fill_boxes_xlsx
-from app.web.warehouse_assignment_helpers import requested_packer_ids
+from app.web.warehouse_assignment_helpers import parse_http_bool, requested_packer_ids
 from app.web.warehouse_tasks_api_auth import TasksApiActor
 from app.web.warehouse_wb_fbo_routes import (
     _attachment_disposition,
@@ -195,6 +195,20 @@ def register_warehouse_wb_fbo_sheet_routes(
             number = str((body or {}).get("transfer_number") or "").strip()[:128]
             try:
                 job = await asyncio.to_thread(packing_repo.set_transfer_number, job_id, number)
+            except ValueError as exc:
+                raise _http_value_error(exc) from exc
+            return {"job": packing_repo.job_to_dict(job)}
+
+        @app.post("/api/warehouse/marketplaces/wb-fbo-new/jobs/{job_id}/honest-sign-1c")
+        async def api_wb_fbo_sheet_job_honest_sign(
+            job_id: int,
+            body: dict,
+            _: WarehouseUserRow = Depends(require_warehouse_user),
+        ) -> dict:
+            try:
+                job = packing_repo.set_honest_sign_1c(
+                    job_id, parse_http_bool((body or {}).get("honest_sign_1c"))
+                )
             except ValueError as exc:
                 raise _http_value_error(exc) from exc
             return {"job": packing_repo.job_to_dict(job)}

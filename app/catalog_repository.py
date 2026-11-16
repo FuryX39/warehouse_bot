@@ -2084,13 +2084,35 @@ class CatalogRepository:
         """Сканирование КИЗ обязательно по типу маркировки, не по наличию GTIN."""
         if not product_id:
             return False
+        return bool(self.products_require_cis([int(product_id)]).get(int(product_id)))
+
+    def products_require_cis(self, product_ids: list[int]) -> dict[int, bool]:
+        ids: list[int] = []
+        seen: set[int] = set()
+        for raw in product_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0 or pid in seen:
+                continue
+            seen.add(pid)
+            ids.append(pid)
+        if not ids:
+            return {}
         with Session(self.engine) as session:
-            row = session.get(CatalogProduct, int(product_id))
-            if row is None or not row.marking_type_id:
-                return False
-            marking = session.get(CatalogMarkingType, int(row.marking_type_id))
-            name = str(marking.name or "") if marking is not None else ""
-            return marking_type_requires_cis(name)
+            rows = session.execute(
+                select(CatalogProduct.id, CatalogMarkingType.name)
+                .outerjoin(
+                    CatalogMarkingType,
+                    CatalogMarkingType.id == CatalogProduct.marking_type_id,
+                )
+                .where(CatalogProduct.id.in_(ids))
+            ).all()
+        out = {pid: False for pid in ids}
+        for pid, name in rows:
+            out[int(pid)] = marking_type_requires_cis(str(name or ""))
+        return out
 
     def add_product_gtin(self, product_id: int, gtin: str) -> str:
         from app.marking.cis import gtin14_from_user_input

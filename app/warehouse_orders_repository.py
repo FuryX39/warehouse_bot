@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Iterable
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, or_, select
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -64,12 +64,6 @@ class WarehouseOrder(_Base):
     vat_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=DEFAULT_VAT_RATE)
     lines_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     packing_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    buyer_paid: Mapped[float | None] = mapped_column(Float, nullable=True)
-    cabinet_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    listed_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    mp_hold: Mapped[float | None] = mapped_column(Float, nullable=True)
-    mp_hold_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    mp_hold_note: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -128,12 +122,6 @@ class WarehouseOrderRow:
     order_kind: str = ORDER_KIND_SALE
     vat_rate: Decimal = DEFAULT_VAT_RATE
     lines_manual: bool = False
-    buyer_paid: float | None = None
-    cabinet_price: float | None = None
-    listed_price: float | None = None
-    mp_hold: float | None = None
-    mp_hold_kind: str = ""
-    mp_hold_note: str = ""
     lines: list[WarehouseOrderLineRow] = field(default_factory=list)
 
 
@@ -196,32 +184,6 @@ class WarehouseOrdersRepository:
         if "counterparty_id" not in cols:
             statements.append(
                 "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS counterparty_id INTEGER"
-            )
-        if "buyer_paid" not in cols:
-            statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS buyer_paid DOUBLE PRECISION"
-            )
-        if "cabinet_price" not in cols:
-            statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS cabinet_price DOUBLE PRECISION"
-            )
-        if "listed_price" not in cols:
-            statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS listed_price DOUBLE PRECISION"
-            )
-        if "mp_hold" not in cols:
-            statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS mp_hold DOUBLE PRECISION"
-            )
-        if "mp_hold_kind" not in cols:
-            statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS mp_hold_kind "
-                "VARCHAR(32) NOT NULL DEFAULT ''"
-            )
-        if "mp_hold_note" not in cols:
-            statements.append(
-                "ALTER TABLE warehouse_orders ADD COLUMN IF NOT EXISTS mp_hold_note "
-                "VARCHAR(512) NOT NULL DEFAULT ''"
             )
         if "order_kind" not in cols:
             added_kind = True
@@ -618,22 +580,6 @@ class WarehouseOrdersRepository:
         filled = self.fill_empty_costs(created.id)
         return filled or created
 
-    def set_order_money(self, order_id: int, money: dict[str, Any] | None) -> None:
-        if not money:
-            return
-        with Session(self.engine) as session:
-            row = session.get(WarehouseOrder, int(order_id))
-            if row is None:
-                return
-            row.buyer_paid = money.get("buyer_paid")
-            row.cabinet_price = money.get("cabinet_price")
-            row.listed_price = money.get("listed_price")
-            row.mp_hold = money.get("mp_hold")
-            row.mp_hold_kind = str(money.get("mp_hold_kind") or "")[:32]
-            row.mp_hold_note = str(money.get("mp_hold_note") or "")[:512]
-            row.updated_at_ts = int(time.time())
-            session.commit()
-
     def _merge_line_payloads(self, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
         by_sku: dict[str, dict[str, Any]] = {}
         for raw in lines:
@@ -942,7 +888,11 @@ class WarehouseOrdersRepository:
         with Session(self.engine) as session:
             rows = session.scalars(select(WarehouseOrder).where(WarehouseOrder.id.in_(ids))).all()
             for row in rows:
+                # Уже отгруженные/отменённые: только привязка к волне для флага «Отгружено».
                 if row.status in TERMINAL_STATUSES:
+                    if job_id is not None:
+                        row.packing_job_id = int(job_id)
+                        row.updated_at_ts = now
                     continue
                 row.packing_job_id = int(job_id) if job_id is not None else None
                 if job_id is None and row.status == ORDER_IN_WAVE:
@@ -1324,11 +1274,5 @@ class WarehouseOrdersRepository:
             order_kind=str(getattr(row, "order_kind", None) or ORDER_KIND_SALE),
             vat_rate=vat_rate,
             lines_manual=bool(getattr(row, "lines_manual", False)),
-            buyer_paid=float(row.buyer_paid) if row.buyer_paid is not None else None,
-            cabinet_price=float(row.cabinet_price) if row.cabinet_price is not None else None,
-            listed_price=float(row.listed_price) if row.listed_price is not None else None,
-            mp_hold=float(row.mp_hold) if row.mp_hold is not None else None,
-            mp_hold_kind=str(row.mp_hold_kind or ""),
-            mp_hold_note=str(row.mp_hold_note or ""),
             lines=lines,
         )

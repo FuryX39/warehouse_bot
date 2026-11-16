@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text, delete, select
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from app.db import coerce_sql_bool
 from app.warehouse_task_files import WarehouseTaskFileStorage
 
 JOB_STATUS_OPEN = "open"
@@ -47,6 +48,7 @@ class WbFboPackingJob(_Base):
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class WbFboPackingJobAssignee(_Base):
@@ -142,6 +144,7 @@ class WbFboPackingJobRow:
     line_done: int
     line_pending: int
     line_printed: int
+    honest_sign_1c: bool = False
     lines: list[WbFboPackingLineRow] = field(default_factory=list)
 
 
@@ -153,7 +156,10 @@ class WbFboPackingRepository:
         self.file_storage = WarehouseTaskFileStorage(Path(files_data_dir))
 
     def init_schema(self) -> None:
+        from app.db import ensure_boolean_column
+
         _Base.metadata.create_all(self.engine)
+        ensure_boolean_column(self.engine, "wb_fbo_packing_jobs", "honest_sign_1c")
 
     def _line_row(self, row: WbFboPackingLine) -> WbFboPackingLineRow:
         return WbFboPackingLineRow(
@@ -231,6 +237,7 @@ class WbFboPackingRepository:
             line_done=done,
             line_pending=pending,
             line_printed=printed,
+            honest_sign_1c=coerce_sql_bool(getattr(job, "honest_sign_1c", False)),
             lines=lines,
         )
 
@@ -380,6 +387,19 @@ class WbFboPackingRepository:
         with Session(self.engine) as session:
             row = session.get(WbFboPackingJobAssignee, (int(job_id), int(user_id)))
             return row is not None
+
+    def set_honest_sign_1c(self, job_id: int, value: bool) -> WbFboPackingJobRow:
+        with Session(self.engine) as session:
+            job = session.get(WbFboPackingJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.honest_sign_1c = bool(value)
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def set_assignees(self, job_id: int, user_ids: list[int]) -> WbFboPackingJobRow:
         ids = list(dict.fromkeys(int(value) for value in user_ids if int(value) > 0))
@@ -708,6 +728,7 @@ class WbFboPackingRepository:
             "line_pending": job.line_pending,
             "line_printed": job.line_printed,
             "remaining": job.line_pending,
+            "honest_sign_1c": bool(getattr(job, "honest_sign_1c", False)),
         }
         if include_lines:
             payload["lines"] = [self.line_to_dict(line) for line in job.lines]

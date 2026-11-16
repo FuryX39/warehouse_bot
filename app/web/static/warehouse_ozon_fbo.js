@@ -2,7 +2,9 @@
   var meta = { assignees: [], supply_kinds: [], statuses: [] };
   var managerFilters = {};
   var managerPage = 1;
+  var managerStatusFilter = "active";
   var packingPage = 1;
+  var packingStatusFilter = "active";
   var itemDraft = [];
   var cargoDraft = [];
   var currentSupply = null;
@@ -17,6 +19,12 @@
 
   function shell() {
     return global.WH_SHELL || {};
+  }
+
+  function chzCell(row, url) {
+    var fn = shell().honestSignCheckbox;
+    if (!fn) return '<td class="wh-chz-column"></td>';
+    return '<td class="wh-chz-column">' + fn(url, !!row.honest_sign_1c, row.id) + "</td>";
   }
 
   function fetchJson(url, options) {
@@ -236,8 +244,14 @@
     var q = managerFilters.q ? "?q=" + encodeURIComponent(managerFilters.q) : "";
     fetchJson("/api/warehouse/marketplaces/ozon-fbo/supplies" + q)
       .then(function (data) {
+        var supplies = data.supplies || [];
+        var visible = shell().filterJobsByStatus
+          ? shell().filterJobsByStatus(supplies, managerStatusFilter)
+          : supplies.filter(function (s) {
+              return String(s.status || "") !== "cancelled";
+            });
         var p = global.WH_PAGER;
-        var sliced = p ? p.slice(data.supplies || [], managerPage) : { items: data.supplies || [], state: { page: 1 } };
+        var sliced = p ? p.slice(visible, managerPage) : { items: visible, state: { page: 1 } };
         managerPage = sliced.state.page;
         var rows = sliced.items
           .map(function (s) {
@@ -247,6 +261,7 @@
             return (
               '<tr data-id="' + esc(s.id) + '">' +
               "<td>#" + esc(s.id) + "</td>" +
+              chzCell(s, "/api/warehouse/marketplaces/ozon-fbo/supplies/" + s.id + "/honest-sign-1c") +
               "<td>" + esc(s.title) + "</td>" +
               "<td>" + esc(s.supply_kind_label || kindName(s.supply_kind)) + "</td>" +
               "<td>" + esc(s.status_label || statusName(s.status)) + "</td>" +
@@ -264,14 +279,33 @@
           '" />' +
           '<button type="button" class="wh-btn" id="whFboRefresh">Обновить</button>' +
           '<button type="button" class="wh-btn wh-btn-primary" id="whFboCreate">+ FBO-заявка</button>' +
+          (function () {
+            var extra = (meta.statuses || []).map(function (item) {
+              return { value: item.id, label: item.name };
+            });
+            var opts = extra.length
+              ? [{ value: "active", label: "Кроме отменённых" }, { value: "all", label: "Все" }].concat(extra)
+              : null;
+            return shell().jobStatusFilterHtml ? shell().jobStatusFilterHtml(managerStatusFilter, opts) : "";
+          })() +
           "</div>" +
           (rows
-            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>Кластер/склад</th><th>Упаковщик</th><th>Этикетки</th><th>Обновлено</th></tr></thead><tbody>' +
+            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th class="wh-chz-column" title="Отражено в 1С">ЧЗ</th><th>Название</th><th>Тип</th><th>Этап</th><th>Кластер/склад</th><th>Упаковщик</th><th>Этикетки</th><th>Обновлено</th></tr></thead><tbody>' +
               rows +
               "</tbody></table>"
-            : '<p class="wh-msg">FBO-заявки не найдены.</p>') +
+            : (supplies.length
+                ? '<p class="wh-msg">Нет заявок с выбранным статусом.</p>'
+                : '<p class="wh-msg">FBO-заявки не найдены.</p>')) +
           (p ? p.html(sliced.state) : "");
         bindManagerListEvents(tab, item, root);
+        if (shell().bindJobStatusFilter) {
+          shell().bindJobStatusFilter(root, function (value) {
+            managerStatusFilter = value;
+            managerPage = 1;
+            renderManagerList(tab, item);
+          });
+        }
+        if (shell().bindHonestSign) shell().bindHonestSign(root, sliced.items);
         if (p) {
           p.bind(root, function (delta) {
             managerPage += delta;
@@ -300,7 +334,8 @@
     });
     root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
       tr.style.cursor = "pointer";
-      tr.addEventListener("click", function () {
+      tr.addEventListener("click", function (e) {
+        if (e.target && e.target.closest(".wh-chz")) return;
         renderSupplyForm(tab, item, parseInt(tr.getAttribute("data-id"), 10));
       });
     });
@@ -751,8 +786,14 @@
     root.innerHTML = '<p class="wh-msg">Загрузка…</p>';
     fetchJson("/api/warehouse/marketplaces/ozon-fbo/my-supplies")
       .then(function (data) {
+        var supplies = data.supplies || [];
+        var visible = shell().filterJobsByStatus
+          ? shell().filterJobsByStatus(supplies, packingStatusFilter)
+          : supplies.filter(function (s) {
+              return String(s.status || "") !== "cancelled";
+            });
         var p = global.WH_PAGER;
-        var sliced = p ? p.slice(data.supplies || [], packingPage) : { items: data.supplies || [], state: { page: 1 } };
+        var sliced = p ? p.slice(visible, packingPage) : { items: visible, state: { page: 1 } };
         packingPage = sliced.state.page;
         var rows = sliced.items
           .map(function (s) {
@@ -762,6 +803,7 @@
             return (
               '<tr data-id="' + esc(s.id) + '">' +
               "<td>#" + esc(s.id) + "</td>" +
+              chzCell(s, "/api/warehouse/marketplaces/ozon-fbo/supplies/" + s.id + "/honest-sign-1c") +
               "<td>" + esc(s.title) + "</td>" +
               "<td>" + esc(s.supply_kind_label || kindName(s.supply_kind)) + "</td>" +
               "<td>" + esc(s.status_label || statusName(s.status)) + "</td>" +
@@ -771,27 +813,47 @@
           })
           .join("");
         root.innerHTML =
-          '<div class="wh-crm-toolbar"><button type="button" class="wh-btn" id="whFboPackRefresh">Обновить</button></div>' +
+          '<div class="wh-crm-toolbar"><button type="button" class="wh-btn" id="whFboPackRefresh">Обновить</button>' +
+          (function () {
+            var extra = (meta.statuses || []).map(function (item) {
+              return { value: item.id, label: item.name };
+            });
+            var opts = extra.length
+              ? [{ value: "active", label: "Кроме отменённых" }, { value: "all", label: "Все" }].concat(extra)
+              : null;
+            return shell().jobStatusFilterHtml ? shell().jobStatusFilterHtml(packingStatusFilter, opts) : "";
+          })() +
+          "</div>" +
           (rows
-            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th>Название</th><th>Тип</th><th>Этап</th><th>ГМ</th><th>Этикетки</th></tr></thead><tbody>' +
+            ? '<table class="wh-employees-table wh-crm-table"><thead><tr><th>№</th><th class="wh-chz-column" title="Отражено в 1С">ЧЗ</th><th>Название</th><th>Тип</th><th>Этап</th><th>ГМ</th><th>Этикетки</th></tr></thead><tbody>' +
               rows +
               "</tbody></table>"
-            : '<p class="wh-msg">Назначенных FBO-заданий нет.</p>') +
+            : (supplies.length
+                ? '<p class="wh-msg">Нет заданий с выбранным статусом.</p>'
+                : '<p class="wh-msg">Назначенных FBO-заданий нет.</p>')) +
           (p ? p.html(sliced.state) : "");
         root.querySelector("#whFboPackRefresh").addEventListener("click", function () {
           packingPage = 1;
           renderPackingList(tab, item);
         });
+        if (shell().bindJobStatusFilter) {
+          shell().bindJobStatusFilter(root, function (value) {
+            packingStatusFilter = value;
+            packingPage = 1;
+            renderPackingList(tab, item);
+          });
+        }
         if (p) {
           p.bind(root, function (delta) {
             packingPage += delta;
             renderPackingList(tab, item);
           });
         }
+        if (shell().bindHonestSign) shell().bindHonestSign(root, sliced.items);
         root.querySelectorAll("tbody tr[data-id]").forEach(function (tr) {
           tr.style.cursor = "pointer";
           tr.addEventListener("click", function (e) {
-            if (e.target && e.target.closest("a")) return;
+            if (e.target && e.target.closest("a, .wh-chz")) return;
             renderPackingForm(tab, item, parseInt(tr.getAttribute("data-id"), 10));
           });
         });

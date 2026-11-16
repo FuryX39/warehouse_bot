@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from app.db import create_db_engine
+from app.db import coerce_sql_bool, create_db_engine
 
 PLATFORM_VSEINSTRUMENTI = "vseinstrumenti"
 
@@ -41,6 +41,7 @@ class OtherMarketplaceJob(_Base):
     created_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at_ts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    honest_sign_1c: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class OtherMarketplaceAssignee(_Base):
@@ -149,6 +150,7 @@ class OtherMarketplaceJobRow:
     created_by_user_id: int | None
     created_at_ts: int
     updated_at_ts: int
+    honest_sign_1c: bool = False
     packer_user_ids: list[int] = field(default_factory=list)
     lines: list[OtherMarketplaceLineRow] = field(default_factory=list)
 
@@ -158,9 +160,12 @@ class OtherMarketplaceRepository:
         self.engine = create_db_engine(db_url)
 
     def init_schema(self) -> None:
+        from app.db import ensure_boolean_column
+
         _Base.metadata.create_all(self.engine)
         self._migrate_purchase_status()
         self._migrate_line_output_columns()
+        ensure_boolean_column(self.engine, "other_marketplace_jobs", "honest_sign_1c")
 
     def _migrate_purchase_status(self) -> None:
         from sqlalchemy import inspect, text
@@ -307,6 +312,19 @@ class OtherMarketplaceRepository:
         if row is None:
             raise ValueError("Задание не найдено")
             return row
+
+    def set_honest_sign_1c(self, job_id: int, value: bool) -> OtherMarketplaceJobRow:
+        with Session(self.engine) as session:
+            job = session.get(OtherMarketplaceJob, int(job_id))
+            if job is None:
+                raise ValueError("Задание не найдено")
+            job.honest_sign_1c = bool(value)
+            job.updated_at_ts = int(time.time())
+            session.commit()
+        row = self.get_job(job_id, include_lines=False)
+        if row is None:
+            raise ValueError("Задание не найдено")
+        return row
 
     def set_purchase_status(self, job_id: int, purchase_status: str) -> OtherMarketplaceJobRow:
         with Session(self.engine) as session:
@@ -485,6 +503,7 @@ class OtherMarketplaceRepository:
             "packer_names": [names.get(uid, str(uid)) for uid in row.packer_user_ids],
             "line_total": len(row.lines),
             "line_done": done,
+            "honest_sign_1c": bool(getattr(row, "honest_sign_1c", False)),
         }
         if include_lines:
             payload["lines"] = [
@@ -630,6 +649,7 @@ class OtherMarketplaceRepository:
             created_by_user_id=int(job.created_by_user_id) if job.created_by_user_id is not None else None,
             created_at_ts=int(job.created_at_ts),
             updated_at_ts=int(job.updated_at_ts),
+            honest_sign_1c=coerce_sql_bool(getattr(job, "honest_sign_1c", False)),
             packer_user_ids=[int(uid) for uid in assignees],
             lines=lines,
         )

@@ -991,6 +991,37 @@ def test_transfer_number_is_optional_and_can_be_set_later(db_url: str, tmp_path)
     assert cleared.transfer_number == ""
 
 
+def test_honest_sign_1c_toggle_is_informational(db_url: str, tmp_path) -> None:
+    client, packing, job, state, packer, other, product_a, product_b = _packing_client(
+        db_url, tmp_path
+    )
+    listed = client.get("/api/warehouse/fbs-packing/jobs")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["jobs"][0]["honest_sign_1c"] is False
+    assert listed.json()["jobs"][0]["line_pending"] == job.line_pending
+
+    toggled = client.post(
+        f"/api/warehouse/fbs-packing/jobs/{job.id}/honest-sign-1c",
+        json={"honest_sign_1c": True},
+    )
+    assert toggled.status_code == 200, toggled.text
+    assert toggled.json()["job"]["honest_sign_1c"] is True
+    stored = packing.get_job(job.id, include_lines=True)
+    assert stored is not None
+    assert stored.honest_sign_1c is True
+    assert stored.status == job.status
+    assert stored.line_pending == job.line_pending
+    assert [line.status for line in stored.lines] == [line.status for line in job.lines]
+
+    packed = client.get(f"/api/warehouse/fbs-packing/jobs/{job.id}/pack")
+    assert packed.status_code == 200, packed.text
+    assert packed.json()["job"]["honest_sign_1c"] is True
+    assert packed.json()["job"]["remaining"] == job.line_pending
+
+    cleared = packing.set_honest_sign_1c(job.id, False)
+    assert cleared.honest_sign_1c is False
+
+
 def test_manager_order_details_cancel_marks_lines_ready(db_url: str, tmp_path) -> None:
     client, packing, job, state, packer, other, product_a, product_b = _packing_client(
         db_url, tmp_path

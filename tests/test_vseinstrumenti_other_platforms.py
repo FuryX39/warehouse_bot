@@ -308,3 +308,53 @@ def test_manager_purchase_status_and_packer_line_status(db_url: str) -> None:
     assert opened_line.status == "pending"
     assert opened_line.picked_qty == 0
     assert any(item["line_id"] == line_id for item in repo.job_to_dict(opened)["remaining_groups"])
+
+
+def test_honest_sign_1c_does_not_change_packing(db_url: str) -> None:
+    catalog, repo = _repos(db_url)
+    catalog.create_product(
+        {
+            "name": "Товар",
+            "sku": "SS585",
+            "code": "585",
+            "barcodes": [{"barcode": "4673746970683", "label": ""}],
+        }
+    )
+    catalog.create_product(
+        {
+            "name": "Другой",
+            "sku": "SS100",
+            "code": "100",
+            "barcodes": [{"barcode": "9990000000002", "label": ""}],
+        }
+    )
+    job, warnings = create_vseinstrumenti_job(
+        catalog=catalog,
+        repo=repo,
+        content=_xlsx(),
+        filename="order.xlsx",
+        transfer_number="ПР-15",
+        purchase_status="КЗ",
+        packer_user_ids=[1],
+        created_by_user_id=1,
+    )
+    assert warnings == []
+    assert job.honest_sign_1c is False
+    assert repo.job_to_dict(job)["honest_sign_1c"] is False
+    before = [(line.id, line.status, line.picked_qty) for line in job.lines]
+    marked = repo.set_honest_sign_1c(job.id, True)
+    stored = repo.get_job(job.id, include_lines=True)
+    assert marked.honest_sign_1c is True
+    assert stored is not None
+    assert stored.honest_sign_1c is True
+    assert stored.status == job.status
+    assert [(line.id, line.status, line.picked_qty) for line in stored.lines] == before
+    assert repo.job_to_dict(stored)["honest_sign_1c"] is True
+    same = pick_other_marketplace_line(
+        catalog=catalog,
+        repo=repo,
+        job_id=job.id,
+        raw="4673746970683",
+    )
+    assert same["mismatch"] is False
+    assert same["picked_quantity"] == 5

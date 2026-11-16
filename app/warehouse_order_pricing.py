@@ -68,6 +68,10 @@ def comment_is_empty_for_fill(comment: str, posting_id: str) -> bool:
     return (not text) or (bool(pid) and text == pid)
 
 
+_YANDEX_ESTIMATE_CM = 10.0
+_YANDEX_ESTIMATE_KG = 0.3
+
+
 def item_offer_ids(item: dict[str, Any]) -> list[str]:
     out: list[str] = []
     for key in ("offerId", "shopSku", "sku", "offerID"):
@@ -75,6 +79,58 @@ def item_offer_ids(item: dict[str, Any]) -> list[str]:
         if raw and raw not in out:
             out.append(raw)
     return out
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _yandex_offer_id(item: dict[str, Any]) -> str:
+    ids = item_offer_ids(item)
+    return ids[0] if ids else ""
+
+
+def _yandex_category_id(snapshot: dict[str, Any]) -> int | None:
+    mapping = snapshot.get("mapping") if isinstance(snapshot.get("mapping"), dict) else {}
+    for raw in (
+        snapshot.get("marketCategoryId"),
+        snapshot.get("categoryId"),
+        mapping.get("marketCategoryId"),
+        mapping.get("categoryId"),
+        (snapshot.get("offer") or {}).get("marketCategoryId")
+        if isinstance(snapshot.get("offer"), dict)
+        else None,
+    ):
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _yandex_dimensions(snapshot: dict[str, Any]) -> tuple[float, float, float, float]:
+    dims = snapshot.get("weightDimensions") if isinstance(snapshot.get("weightDimensions"), dict) else {}
+    if not dims and isinstance(snapshot.get("offer"), dict):
+        nested = snapshot["offer"].get("weightDimensions")
+        if isinstance(nested, dict):
+            dims = nested
+    length = _as_float(dims.get("length")) or _YANDEX_ESTIMATE_CM
+    width = _as_float(dims.get("width")) or _YANDEX_ESTIMATE_CM
+    height = _as_float(dims.get("height")) or _YANDEX_ESTIMATE_CM
+    weight = _as_float(dims.get("weight")) or _YANDEX_ESTIMATE_KG
+    return (
+        max(length, 0.1),
+        max(width, 0.1),
+        max(height, 0.1),
+        max(weight, 0.01),
+    )
 
 
 def item_buyer_price(item: dict[str, Any]) -> Decimal | None:
@@ -210,12 +266,6 @@ def fill_empty_yandex_pricing(
     line_updates: list[dict[str, Any]] = []
     comment_parts: list[str] = []
     calc_meta: list[dict[str, Any]] = []
-    from app.warehouse_order_money import (
-        _yandex_category_id,
-        _yandex_dimensions,
-        _yandex_offer_id,
-    )
-
     snapshots_by_id: dict[str, dict[str, Any]] = {}
     offer_ids = [_yandex_offer_id(item) for item in items]
     offer_ids = [oid for oid in offer_ids if oid]

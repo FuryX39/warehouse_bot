@@ -2,6 +2,7 @@
   var meta = { assignees: [], purchase_statuses: [] };
   var platform = "vseinstrumenti";
   var jobsCache = [];
+  var jobsStatusFilter = "active";
 
   function esc(s) {
     return String(s || "")
@@ -13,6 +14,16 @@
 
   function shell() {
     return global.WH_SHELL || {};
+  }
+
+  function chzCell(job) {
+    var fn = shell().honestSignCheckbox;
+    if (!fn) return '<td class="wh-chz-column"></td>';
+    return (
+      '<td class="wh-chz-column">' +
+      fn("/api/warehouse/other-platforms/jobs/" + job.id + "/honest-sign-1c", !!job.honest_sign_1c, job.id) +
+      "</td>"
+    );
   }
 
   function fetchJson(url, options) {
@@ -80,14 +91,26 @@
   }
 
   function renderJobs(jobs) {
-    jobsCache = jobs || [];
-    if (!jobs.length) return '<p class="wh-muted">Заданий пока нет.</p>';
+    if (arguments.length) jobsCache = jobs || [];
+    var all = jobsCache || [];
+    jobs = shell().filterJobsByStatus
+      ? shell().filterJobsByStatus(all, jobsStatusFilter)
+      : all.filter(function (job) {
+          return String(job.status || "") !== "cancelled";
+        });
+    if (!jobs.length) {
+      return all.length
+        ? '<p class="wh-muted">Нет заданий с выбранным статусом.</p>'
+        : '<p class="wh-muted">Заданий пока нет.</p>';
+    }
     var rows = jobs
       .map(function (job) {
         return (
           "<tr><td>#" +
           esc(job.id) +
-          "</td><td>" +
+          "</td>" +
+          chzCell(job) +
+          "<td>" +
           esc(job.order_number || "—") +
           "</td><td>" +
           esc(job.transfer_number || "—") +
@@ -118,11 +141,17 @@
       .join("");
     return (
       '<div class="wh-order-table-wrap"><table class="wh-employees-table wh-crm-table"><thead><tr>' +
-      "<th>№</th><th>Заказ</th><th>Перемещение</th><th>Статус закупки</th><th>Статус</th><th>Строки</th><th>Упаковщики</th><th>Файл</th><th></th>" +
+      '<th>№</th><th class="wh-chz-column" title="Отражено в 1С">ЧЗ</th><th>Заказ</th><th>Перемещение</th><th>Статус закупки</th><th>Статус</th><th>Строки</th><th>Упаковщики</th><th>Файл</th><th></th>' +
       "</tr></thead><tbody>" +
       rows +
       "</tbody></table></div>"
     );
+  }
+
+  function paintJobs(root, jobs) {
+    var box = root.querySelector("#whOmJobs");
+    if (box) box.innerHTML = arguments.length > 1 ? renderJobs(jobs) : renderJobs();
+    if (shell().bindHonestSign) shell().bindHonestSign(box || root, jobsCache);
   }
 
   function editJobPackers(root, jobId) {
@@ -144,7 +173,7 @@
             return fetchJson("/api/warehouse/other-platforms/vseinstrumenti/jobs");
           })
           .then(function (data) {
-            root.querySelector("#whOmJobs").innerHTML = renderJobs(data.jobs || []);
+            paintJobs(root, data.jobs || []);
           });
       },
     });
@@ -152,6 +181,15 @@
 
   function bind(root) {
     if (global.WhPackerAssignment) global.WhPackerAssignment.bind(root);
+    if (shell().bindJobStatusFilter) {
+      shell().bindJobStatusFilter(root, function (value) {
+        jobsStatusFilter = value;
+        paintJobs(root);
+      });
+    }
+    if (shell().bindHonestSign) {
+      shell().bindHonestSign(root.querySelector("#whOmJobs") || root, jobsCache);
+    }
     root.querySelector("#whOmCreate").addEventListener("click", function () {
       var msg = root.querySelector("#whOmMsg");
       var file = root.querySelector("#whOmFile").files[0];
@@ -262,7 +300,7 @@
           return fetchJson(createUrl);
         })
         .then(function (data) {
-          root.querySelector("#whOmJobs").innerHTML = renderJobs(data.jobs || []);
+          paintJobs(root, data.jobs || []);
         })
         .catch(function (err) {
           msg.className = "wh-msg wh-msg-error";
@@ -307,7 +345,7 @@
       }).then(function () {
         return fetchJson("/api/warehouse/other-platforms/vseinstrumenti/jobs");
       }).then(function (data) {
-        root.querySelector("#whOmJobs").innerHTML = renderJobs(data.jobs || []);
+        paintJobs(root, data.jobs || []);
       });
     });
   }
@@ -339,7 +377,9 @@
           "</div>" +
           '<p><button type="button" class="wh-btn wh-btn-primary" id="whOmCreate">Создать задание</button></p>' +
           '<p class="wh-msg" id="whOmMsg"></p></section>' +
-          '<h4 class="wh-crm-section-title">Задания</h4>' +
+          (shell().jobsSectionHtml
+            ? shell().jobsSectionHtml("Задания", jobsStatusFilter)
+            : '<h4 class="wh-crm-section-title">Задания</h4>') +
           '<div id="whOmJobs">' +
           renderJobs(data.jobs || []) +
           "</div>";

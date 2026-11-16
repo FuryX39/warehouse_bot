@@ -55,27 +55,40 @@
     return String(detail);
   }
 
+  function isNetworkFetchError(err) {
+    var message = String((err && err.message) || err || "");
+    return /Failed to fetch|Load failed|NetworkError|network/i.test(message);
+  }
+
   function fetchJson(url, options) {
-    return fetch(url, Object.assign({ credentials: "include" }, options || {})).then(function (r) {
-      return r.text().then(function (text) {
-        var json = null;
-        try {
-          json = text ? JSON.parse(text) : null;
-        } catch (e) {
-          json = null;
+    return fetch(url, Object.assign({ credentials: "include", cache: "no-store" }, options || {}))
+      .then(function (r) {
+        return r.text().then(function (text) {
+          var json = null;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch (e) {
+            json = null;
+          }
+          if (!r.ok) {
+            var msg =
+              (json && json.detail != null ? apiDetailText(json.detail) : "") ||
+              text ||
+              "HTTP " + r.status;
+            var err = new Error(msg);
+            err.status = r.status;
+            throw err;
+          }
+          return json;
+        });
+      })
+      .catch(function (err) {
+        if (err && err.status) throw err;
+        if (isNetworkFetchError(err)) {
+          throw new Error("Нет связи с сервером. Обновите страницу и повторите.");
         }
-        if (!r.ok) {
-          var msg =
-            (json && json.detail != null ? apiDetailText(json.detail) : "") ||
-            text ||
-            "HTTP " + r.status;
-          var err = new Error(msg);
-          err.status = r.status;
-          throw err;
-        }
-        return json;
+        throw err;
       });
-    });
   }
 
   function getTab(tabId) {
@@ -430,11 +443,139 @@
       });
   });
 
+  function jobStatusFilterHtml(selected, options) {
+    selected = selected == null ? "active" : String(selected);
+    var opts = options && options.length ? options : [
+      { value: "active", label: "Кроме отменённых" },
+      { value: "all", label: "Все" },
+      { value: "open", label: "Открыто" },
+      { value: "in_progress", label: "В работе" },
+      { value: "done", label: "Выполнено" },
+      { value: "cancelled", label: "Отменено" },
+    ];
+    function attr(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;");
+    }
+    var html =
+      '<label class="wh-job-status-filter-wrap">Статус <select class="wh-job-status-filter" aria-label="Статус задания">';
+    opts.forEach(function (opt) {
+      var value = opt.value != null ? String(opt.value) : "";
+      var label = opt.label != null ? String(opt.label) : value;
+      html +=
+        '<option value="' +
+        attr(value) +
+        '"' +
+        (value === selected ? " selected" : "") +
+        ">" +
+        attr(label) +
+        "</option>";
+    });
+    return html + "</select></label>";
+  }
+
+  function jobsSectionHtml(title, selected) {
+    return (
+      '<div class="wh-job-status-filter-bar">' +
+      '<h4 class="wh-crm-section-title">' +
+      String(title || "Задания") +
+      "</h4>" +
+      jobStatusFilterHtml(selected) +
+      "</div>"
+    );
+  }
+
+  function filterJobsByStatus(jobs, filter) {
+    jobs = jobs || [];
+    var value = filter == null || filter === "" ? "active" : String(filter);
+    if (value === "all") return jobs.slice();
+    if (value === "active") {
+      return jobs.filter(function (job) {
+        return String((job && job.status) || "") !== "cancelled";
+      });
+    }
+    return jobs.filter(function (job) {
+      return String((job && job.status) || "") === value;
+    });
+  }
+
+  function bindJobStatusFilter(root, onChange) {
+    if (!root || typeof onChange !== "function") return;
+    var sel = root.querySelector(".wh-job-status-filter");
+    if (!sel) return;
+    sel.addEventListener("change", function () {
+      onChange(sel.value);
+    });
+  }
+
+  function honestSignCheckbox(url, checked, id) {
+    function attr(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;");
+    }
+    return (
+      '<label class="wh-chz" title="Отражено в 1С" onclick="event.stopPropagation()">' +
+      '<input type="checkbox" class="wh-chz-input" data-url="' +
+      attr(url) +
+      '" data-id="' +
+      attr(id) +
+      '"' +
+      (checked ? " checked" : "") +
+      " /> ЧЗ</label>"
+    );
+  }
+
+  function bindHonestSign(root, jobs) {
+    if (!root) return;
+    root._chzJobs = jobs;
+    if (root.getAttribute("data-chz-bound") === "1") return;
+    root.setAttribute("data-chz-bound", "1");
+    root.addEventListener("click", function (e) {
+      var t = e.target;
+      if (t && t.classList && t.classList.contains("wh-chz-input")) e.stopPropagation();
+      if (t && t.closest && t.closest(".wh-chz")) e.stopPropagation();
+    });
+    root.addEventListener("change", function (e) {
+      var box = e.target;
+      if (!box || !box.classList || !box.classList.contains("wh-chz-input")) return;
+      var url = box.getAttribute("data-url");
+      var id = Number(box.getAttribute("data-id") || 0);
+      var checked = box.checked;
+      fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ honest_sign_1c: checked }),
+      })
+        .then(function () {
+          var list = root._chzJobs;
+          if (!list) return;
+          list.forEach(function (job) {
+            if (Number(job.id) === id) job.honest_sign_1c = checked;
+          });
+        })
+        .catch(function (err) {
+          box.checked = !checked;
+          window.alert(err.message || "Не удалось сохранить ЧЗ");
+        });
+    });
+  }
+
   boot();
 
   window.WH_SHELL = {
     fetchJson: fetchJson,
+    isNetworkFetchError: isNetworkFetchError,
     remapJcukenToQwerty: remapJcukenToQwerty,
+    jobStatusFilterHtml: jobStatusFilterHtml,
+    jobsSectionHtml: jobsSectionHtml,
+    filterJobsByStatus: filterJobsByStatus,
+    bindJobStatusFilter: bindJobStatusFilter,
+    honestSignCheckbox: honestSignCheckbox,
+    bindHonestSign: bindHonestSign,
     contentPanelEl: contentPanelEl,
     contentTitleEl: contentTitleEl,
     contentBreadcrumbEl: contentBreadcrumbEl,

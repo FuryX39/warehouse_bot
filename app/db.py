@@ -26,6 +26,22 @@ def add_boolean_column_sql(dialect: str, table: str, column: str) -> str | None:
     return None
 
 
+def ensure_boolean_column(engine, table: str, column: str) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    if column in {c["name"] for c in inspector.get_columns(table)}:
+        return
+    sql = add_boolean_column_sql(engine.dialect.name, table, column)
+    if sql is None:
+        return
+    with Session(engine) as session:
+        session.execute(text(sql))
+        session.commit()
+
+
 def create_db_engine(db_url: str):
     search_path: str | None = None
     if "#schema=" in db_url:
