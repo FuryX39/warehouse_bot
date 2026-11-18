@@ -284,9 +284,19 @@ def test_min_promo_uses_separate_price_type() -> None:
     )
     output = load_workbook(io.BytesIO(result.workbook_bytes), data_only=True).active
     seller_price = output.cell(row=2, column=3).value
+    min_promo = output.cell(row=2, column=5).value
+    expected_min = seller_from_target_card(
+        321.0,
+        current_seller=1000,
+        current_showcase=900,
+        raise_price=False,
+        showcase_ratio=0.9,
+    )
     assert seller_price != 321
+    assert min_promo == expected_min
+    assert min_promo != 321
+    assert min_promo != seller_price
     assert output.cell(row=2, column=4).value == seller_price * 2
-    assert output.cell(row=2, column=5).value == 321
 
 
 def test_keeps_column_descriptions_and_writes_products_from_row_10() -> None:
@@ -331,4 +341,5 @@ def test_keeps_column_descriptions_and_writes_products_from_row_10() -> None:
     assert output.cell(row=8, column=1).value == "Ваш SKU *"
     assert output.cell(row=9, column=1).value == description[0]
     assert output.cell(row=10, column=1).value == "SKU-1"
-    assert output.cell(row=10, column=5).value == 500
+    assert output.cell(row=10, column=5).value == output.cell(row=10, column=3).value
+    assert output.cell(row=10, column=5).value != 500

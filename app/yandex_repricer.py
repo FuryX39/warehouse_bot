@@ -312,6 +312,36 @@ def _normalize_reprice_direction(value: object) -> str:
     return direction
 
 
+def _seller_context(
+    seller: Optional[float],
+    showcase: float,
+) -> tuple[Optional[int], Optional[float]]:
+    current_seller = int(round(seller)) if seller and seller > 0 else None
+    showcase_ratio = (
+        showcase / seller
+        if seller is not None and seller > 0 and 0.2 <= showcase / seller <= 1.2
+        else None
+    )
+    return current_seller, showcase_ratio
+
+
+def _recommended_seller_for_catalog(
+    catalog_price: float,
+    *,
+    estimated_card: float,
+    seller: Optional[float],
+    showcase: float,
+) -> int:
+    current_seller, showcase_ratio = _seller_context(seller, showcase)
+    return seller_from_target_card(
+        catalog_price,
+        current_seller=current_seller,
+        current_showcase=showcase,
+        raise_price=float(estimated_card) < catalog_price,
+        showcase_ratio=showcase_ratio,
+    )
+
+
 def _needs_reprice(
     card_price: float,
     catalog_price: float,
@@ -490,11 +520,9 @@ def process_yandex_prices_workbook(
         showcase = _parse_number(row[cols["showcase"]] if cols["showcase"] < len(row) else None)
         catalog_price = prices_by_sku.get(sku.casefold())
         min_promo_catalog = min_promo_by_sku.get(sku.casefold()) if min_promo_by_sku else None
-        recommended_min_promo: Optional[int] = (
-            int(round(min_promo_catalog)) if min_promo_catalog is not None and min_promo_catalog > 0 else None
-        )
 
         estimated_card: Optional[int] = None
+        recommended_min_promo: Optional[int] = None
         recommended: Optional[int] = None
         recommended_old: Optional[int] = None
         updated = False
@@ -507,6 +535,13 @@ def process_yandex_prices_workbook(
         else:
             stats["with_showcase"] += 1
             estimated_card = card_from_showcase(showcase)
+            if min_promo_catalog is not None and min_promo_catalog > 0:
+                recommended_min_promo = _recommended_seller_for_catalog(
+                    min_promo_catalog,
+                    estimated_card=float(estimated_card),
+                    seller=seller,
+                    showcase=showcase,
+                )
             if catalog_price is None:
                 stats["skipped_no_catalog_price"] += 1
                 missing_catalog_price = True
@@ -520,21 +555,12 @@ def process_yandex_prices_workbook(
                     float(estimated_card), catalog_price
                 )
                 if needs_reprice:
-                    raise_price = float(estimated_card) < catalog_price
-                    current_seller = int(round(seller)) if seller and seller > 0 else None
-                    showcase_ratio = (
-                        showcase / seller
-                        if seller is not None
-                        and seller > 0
-                        and 0.2 <= showcase / seller <= 1.2
-                        else None
-                    )
-                    recommended = seller_from_target_card(
+                    current_seller, _ = _seller_context(seller, showcase)
+                    recommended = _recommended_seller_for_catalog(
                         catalog_price,
-                        current_seller=current_seller,
-                        current_showcase=showcase,
-                        raise_price=raise_price,
-                        showcase_ratio=showcase_ratio,
+                        estimated_card=float(estimated_card),
+                        seller=seller,
+                        showcase=showcase,
                     )
                     if current_seller is not None and recommended == current_seller:
                         stats["skipped_same_price"] += 1
