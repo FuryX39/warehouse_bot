@@ -124,11 +124,17 @@
       preview.innerHTML = "";
 
       var priceTypeId = root.querySelector("#whRepricerPriceType").value;
+      var minPromoPriceTypeId = root.querySelector("#whRepricerMinPromoPriceType").value;
       var repriceDirection = root.querySelector("#whRepricerDirection").value;
       var fileInput = root.querySelector("#whRepricerFile");
       if (!priceTypeId) {
         msg.className = "wh-msg wh-msg-error";
-        msg.textContent = "Выберите вид цен.";
+        msg.textContent = "Выберите вид цен для установки цен.";
+        return;
+      }
+      if (!minPromoPriceTypeId) {
+        msg.className = "wh-msg wh-msg-error";
+        msg.textContent = "Выберите вид цен для минимума акции.";
         return;
       }
       if (!fileInput.files || !fileInput.files.length) {
@@ -139,6 +145,7 @@
 
       var formData = new FormData();
       formData.append("price_type_id", priceTypeId);
+      formData.append("min_promo_price_type_id", minPromoPriceTypeId);
       formData.append("reprice_direction", repriceDirection);
       formData.append("file", fileInput.files[0]);
 
@@ -217,10 +224,14 @@
         meta = data || meta;
         root.innerHTML =
           '<div class="wh-route-card">' +
-          '<p class="wh-muted">Загрузите файл базовых цен Яндекс Маркета. Для строк с ценой «На витрине» рассчитается примерная цена по карте. ' +
-          "Можно менять цены только ниже выбранного вида цен, только выше него либо в обе стороны. Пороги: ниже на 1% и более, выше на 10% и более.</p>" +
+          '<p class="wh-muted">Загрузите файл базовых цен Яндекс Маркета. «Цена *» ставится по первому виду цен (через расчёт цены по карте). ' +
+          "«Минимум для акции» берётся из второго вида цен. Можно менять цены только ниже выбранного вида цен, только выше него либо в обе стороны. Пороги: ниже на 1% и более, выше на 10% и более.</p>" +
           '<form id="whRepricerForm" class="wh-repricer-form">' +
-          '<label><span>Вид цен для сравнения</span><select id="whRepricerPriceType" required>' +
+          '<label><span>Установка цен по виду цен</span><select id="whRepricerPriceType" required>' +
+          '<option value="">— выберите —</option>' +
+          buildPriceTypeOptions("") +
+          "</select></label>" +
+          '<label><span>Установка минимума для акции</span><select id="whRepricerMinPromoPriceType" required>' +
           '<option value="">— выберите —</option>' +
           buildPriceTypeOptions("") +
           "</select></label>" +

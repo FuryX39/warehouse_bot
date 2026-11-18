@@ -252,6 +252,29 @@ def _find_header_row(rows: list[tuple]) -> int:
     raise ValueError("Не найдена строка заголовков (колонка «Ваш SKU»)")
 
 
+def _sku_cell_looks_like_product(value: object) -> bool:
+    """Отсекает строку описаний столбцов: там длинный текст, а не артикул."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if any(ch.isspace() for ch in text):
+        return False
+    return True
+
+
+def _first_product_row_index(rows: list[tuple], header_idx: int, cols: dict[str, int]) -> int:
+    """Строка после заголовков — описания столбцов, товары начинаются со следующей."""
+    idx = header_idx + 1
+    if idx >= len(rows):
+        return idx
+    sku_idx = cols["sku"]
+    row = rows[idx]
+    sku_cell = row[sku_idx] if sku_idx < len(row) else None
+    if _sku_cell_looks_like_product(sku_cell):
+        return idx
+    return idx + 1
+
+
 def _column_map(header: tuple) -> dict[str, int]:
     mapping: dict[str, int] = {}
     for idx, cell in enumerate(header):
@@ -394,6 +417,8 @@ def process_yandex_prices_workbook(
     catalog_repo: Any,
     price_type_id: int,
     price_type_name: str = "",
+    min_promo_price_type_id: int | None = None,
+    min_promo_price_type_name: str = "",
     reprice_direction: str = "all",
 ) -> RepricerResult:
     try:
@@ -413,11 +438,20 @@ def process_yandex_prices_workbook(
     rows = [tuple(row) for row in ws.iter_rows(values_only=True)]
     header_idx = _find_header_row(rows)
     cols = _column_map(rows[header_idx])
+    data_idx = _first_product_row_index(rows, header_idx, cols)
     prices_by_sku = _catalog_price_map(catalog_repo, price_type_id)
+    min_promo_by_sku: dict[str, float] = {}
+    if min_promo_price_type_id is not None:
+        min_promo_by_sku = _catalog_price_map(catalog_repo, int(min_promo_price_type_id))
     missing_price_label = (
         f"У товара нет вида цен «{price_type_name.strip()}»"
         if price_type_name and price_type_name.strip()
         else "У товара нет выбранного вида цен"
+    )
+    missing_min_promo_label = (
+        f"У товара нет вида цен «{min_promo_price_type_name.strip()}» для минимума акции"
+        if min_promo_price_type_name and min_promo_price_type_name.strip()
+        else "У товара нет вида цен для минимума акции"
     )
 
     results: list[RepricerRowResult] = []
@@ -433,10 +467,11 @@ def process_yandex_prices_workbook(
         "skipped_ok": 0,
         "skipped_same_price": 0,
         "skipped_direction": 0,
+        "skipped_no_min_promo_price": 0,
     }
 
     max_col_idx = max(cols.values())
-    for row_offset, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
+    for row_offset, row in enumerate(rows[data_idx:], start=data_idx + 1):
         sku_raw = row[cols["sku"]] if cols["sku"] < len(row) else None
         sku = str(sku_raw or "").strip()
         if not sku:
@@ -454,6 +489,10 @@ def process_yandex_prices_workbook(
         )
         showcase = _parse_number(row[cols["showcase"]] if cols["showcase"] < len(row) else None)
         catalog_price = prices_by_sku.get(sku.casefold())
+        min_promo_catalog = min_promo_by_sku.get(sku.casefold()) if min_promo_by_sku else None
+        recommended_min_promo: Optional[int] = (
+            int(round(min_promo_catalog)) if min_promo_catalog is not None and min_promo_catalog > 0 else None
+        )
 
         estimated_card: Optional[int] = None
         recommended: Optional[int] = None
@@ -503,13 +542,6 @@ def process_yandex_prices_workbook(
                         note = "рекомендуемая цена совпадает с текущей"
                     else:
                         recommended_old = int(recommended) * 2
-                        row_values = list(row)
-                        if len(row_values) <= max_col_idx:
-                            row_values.extend([None] * (max_col_idx + 1 - len(row_values)))
-                        row_values[cols["seller"]] = int(recommended)
-                        row_values[cols["old_price"]] = recommended_old
-                        row_values[cols["min_promo"]] = int(recommended)
-                        updated_rows_data.append(tuple(row_values))
                         updated = True
                         stats["updated"] += 1
                         note = _reprice_note(float(estimated_card), catalog_price, updated=True)
@@ -523,6 +555,42 @@ def process_yandex_prices_workbook(
                 else:
                     stats["skipped_ok"] += 1
                     note = _reprice_note(float(estimated_card), catalog_price, updated=False)
+
+        new_min_promo = min_promo
+        if min_promo_price_type_id is not None:
+            if recommended_min_promo is None:
+                stats["skipped_no_min_promo_price"] += 1
+                if note:
+                    note = f"{note}; {missing_min_promo_label}"
+                else:
+                    note = missing_min_promo_label
+            else:
+                current_min = int(round(min_promo)) if min_promo is not None else None
+                if current_min != recommended_min_promo:
+                    new_min_promo = recommended_min_promo
+                    if not updated:
+                        updated = True
+                        stats["updated"] += 1
+                        if not note or note.startswith("цена по карте") or note.startswith("пропущено"):
+                            note = (
+                                f"{note}; минимум для акции по виду цен"
+                                if note
+                                else "минимум для акции по виду цен"
+                            )
+        elif updated and recommended is not None:
+            new_min_promo = int(recommended)
+
+        if updated:
+            row_values = list(row)
+            if len(row_values) <= max_col_idx:
+                row_values.extend([None] * (max_col_idx + 1 - len(row_values)))
+            if recommended is not None and recommended_old is not None:
+                row_values[cols["seller"]] = int(recommended)
+                row_values[cols["old_price"]] = recommended_old
+            row_values[cols["min_promo"]] = (
+                int(new_min_promo) if new_min_promo is not None else recommended_min_promo
+            )
+            updated_rows_data.append(tuple(row_values))
 
         results.append(
             RepricerRowResult(
@@ -545,11 +613,11 @@ def process_yandex_prices_workbook(
                 sku,
                 name,
                 seller,
-                int(recommended) if updated and recommended is not None else seller,
+                int(recommended) if recommended is not None and recommended_old is not None else seller,
                 old_price,
-                recommended_old if updated else old_price,
+                recommended_old if recommended_old is not None else old_price,
                 min_promo,
-                int(recommended) if updated and recommended is not None else min_promo,
+                new_min_promo if updated else min_promo,
                 showcase,
                 estimated_card,
                 catalog_price,
@@ -558,7 +626,7 @@ def process_yandex_prices_workbook(
             )
         )
 
-    first_data_row = header_idx + 2
+    first_data_row = data_idx + 1
     existing_data_rows = max(0, ws.max_row - first_data_row + 1)
     if existing_data_rows:
         ws.delete_rows(first_data_row, existing_data_rows)

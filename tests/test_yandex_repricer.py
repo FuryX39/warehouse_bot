@@ -251,3 +251,84 @@ def test_workbook_updates_only_selected_price_direction() -> None:
     assert above_book.active.max_row == 2
     assert above_book.active.cell(row=2, column=1).value == "SKU-ABOVE"
     assert above.stats["skipped_direction"] == 1
+
+
+def test_min_promo_uses_separate_price_type() -> None:
+    class Repo:
+        def list_products_for_price_type(self, price_type_id, filters):
+            if int(price_type_id) == 2:
+                return [{"sku": "SKU-1", "price": 321}]
+            return [{"sku": "SKU-1", "price": 500}]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "Ваш SKU *",
+            "Название товара",
+            "Цена *",
+            "Зачёркнутая цена",
+            "Минимум для акции",
+            "На витрине",
+        ]
+    )
+    sheet.append(["SKU-1", "Товар", 1000, 2000, 1000, 900])
+    source = io.BytesIO()
+    workbook.save(source)
+
+    result = process_yandex_prices_workbook(
+        source.getvalue(),
+        catalog_repo=Repo(),
+        price_type_id=1,
+        min_promo_price_type_id=2,
+    )
+    output = load_workbook(io.BytesIO(result.workbook_bytes), data_only=True).active
+    seller_price = output.cell(row=2, column=3).value
+    assert seller_price != 321
+    assert output.cell(row=2, column=4).value == seller_price * 2
+    assert output.cell(row=2, column=5).value == 321
+
+
+def test_keeps_column_descriptions_and_writes_products_from_row_10() -> None:
+    class Repo:
+        def list_products_for_price_type(self, price_type_id, filters):
+            return [{"sku": "SKU-1", "price": 500}]
+
+    workbook = Workbook()
+    sheet = workbook.active
+    for _ in range(7):
+        sheet.append([None] * 6)
+    sheet.append(
+        [
+            "Ваш SKU *",
+            "Название товара",
+            "Цена *",
+            "Зачёркнутая цена",
+            "Минимум для акции",
+            "На витрине",
+        ]
+    )
+    description = [
+        "Укажите идентификатор товара в вашей системе",
+        "Название товара",
+        "Цена товара",
+        "Зачёркнутая цена",
+        "Минимум для акции",
+        "Цена на витрине",
+    ]
+    sheet.append(description)
+    sheet.append(["SKU-1", "Товар", 1000, 2000, 1000, 900])
+    source = io.BytesIO()
+    workbook.save(source)
+
+    result = process_yandex_prices_workbook(
+        source.getvalue(),
+        catalog_repo=Repo(),
+        price_type_id=1,
+        min_promo_price_type_id=1,
+    )
+    output = load_workbook(io.BytesIO(result.workbook_bytes), data_only=True).active
+    assert output.cell(row=8, column=1).value == "Ваш SKU *"
+    assert output.cell(row=9, column=1).value == description[0]
+    assert output.cell(row=10, column=1).value == "SKU-1"
+    assert output.cell(row=10, column=5).value == 500

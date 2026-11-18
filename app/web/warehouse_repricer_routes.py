@@ -43,16 +43,20 @@ def register_warehouse_repricer_routes(
     @app.post("/api/warehouse/marketplaces/repricer/calculate")
     async def api_repricer_calculate(
         price_type_id: int = Form(...),
+        min_promo_price_type_id: int = Form(...),
         reprice_direction: str = Form("all"),
         file: UploadFile = File(...),
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> Response:
         try:
             pt_id = int(price_type_id)
+            min_pt_id = int(min_promo_price_type_id)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Некорректный вид цен") from exc
         if pt_id < 1:
             raise HTTPException(status_code=400, detail="Некорректный вид цен")
+        if min_pt_id < 1:
+            raise HTTPException(status_code=400, detail="Некорректный вид цен для минимума акции")
 
         data = await file.read()
         if len(data) > _IMPORT_MAX_BYTES:
@@ -70,12 +74,22 @@ def register_warehouse_repricer_routes(
                 (str(pt.get("name") or "").strip() for pt in price_types if int(pt.get("id") or 0) == pt_id),
                 "",
             )
+            min_promo_price_type_name = next(
+                (
+                    str(pt.get("name") or "").strip()
+                    for pt in price_types
+                    if int(pt.get("id") or 0) == min_pt_id
+                ),
+                "",
+            )
             result = await asyncio.to_thread(
                 process_yandex_prices_workbook,
                 data,
                 catalog_repo=catalog_repo,
                 price_type_id=pt_id,
                 price_type_name=price_type_name,
+                min_promo_price_type_id=min_pt_id,
+                min_promo_price_type_name=min_promo_price_type_name,
                 reprice_direction=reprice_direction,
             )
         except ValueError as exc:
