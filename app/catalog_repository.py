@@ -1527,6 +1527,33 @@ class CatalogRepository:
                 return None
             return self._product_row(session, product, load_details=True)
 
+    def find_product_by_sku_or_code(self, raw: str) -> CatalogProductRow | None:
+        """Артикул или код 1С без загрузки всего каталога. None если пусто или не найден."""
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        key = text.casefold()
+        with Session(self.engine) as session:
+            row = session.scalar(
+                select(CatalogProduct)
+                .where(or_(CatalogProduct.sku == text, CatalogProduct.code == text))
+                .order_by(CatalogProduct.id.desc())
+            )
+            if row is None:
+                row = session.scalar(
+                    select(CatalogProduct)
+                    .where(
+                        or_(
+                            func.lower(CatalogProduct.sku) == key,
+                            func.lower(CatalogProduct.code) == key,
+                        )
+                    )
+                    .order_by(CatalogProduct.id.desc())
+                )
+            if row is None:
+                return None
+            return self._product_row(session, row, load_details=False)
+
     def create_product(self, data: dict[str, Any]) -> CatalogProductRow:
         return self._save_product(None, data)
 
@@ -2045,6 +2072,38 @@ class CatalogRepository:
                 for row in session.scalars(select(CatalogProductBarcode)).all()
             ]
         return {"products": products, "gtins": gtins, "barcodes": barcodes}
+
+    def gtin_match_candidates(self, gtin14: str) -> dict[str, Any]:
+        """Точечные источники для одного GTIN-14: явный GTIN и EAN-13/14."""
+        gtin = str(gtin14 or "").strip()
+        if not gtin:
+            return {"products": [], "gtins": [], "barcodes": []}
+        barcode_keys = [gtin]
+        if len(gtin) == 14 and gtin.startswith("0"):
+            barcode_keys.append(gtin[1:])
+        with Session(self.engine) as session:
+            gtin_rows = session.scalars(
+                select(CatalogProductGtin).where(CatalogProductGtin.gtin == gtin)
+            ).all()
+            barcode_rows = session.scalars(
+                select(CatalogProductBarcode).where(CatalogProductBarcode.barcode.in_(barcode_keys))
+            ).all()
+            product_ids = {int(row.product_id) for row in gtin_rows} | {
+                int(row.product_id) for row in barcode_rows
+            }
+            products: list[dict[str, Any]] = []
+            if product_ids:
+                products = [
+                    {"id": int(row.id), "sku": row.sku, "name": row.name}
+                    for row in session.scalars(
+                        select(CatalogProduct).where(CatalogProduct.id.in_(list(product_ids)))
+                    ).all()
+                ]
+            return {
+                "products": products,
+                "gtins": [(int(row.product_id), str(row.gtin)) for row in gtin_rows],
+                "barcodes": [(int(row.product_id), str(row.barcode)) for row in barcode_rows],
+            }
 
     def list_product_gtin_rows(self, q: str = "") -> list[dict[str, Any]]:
         with Session(self.engine) as session:

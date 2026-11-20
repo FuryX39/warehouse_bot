@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.catalog_repository import CatalogRepository
 from app.marking.cis import CisRecord, parse_cis_list, split_cis_input
@@ -58,22 +59,16 @@ def _product_key(product: ProductRef, gtin: str) -> tuple[int, str]:
     return (product.product_id, gtin)
 
 
-def build_gtin_index(
-    catalog: CatalogRepository,
+def _index_from_sources(
+    sources: dict[str, Any],
 ) -> tuple[dict[str, ProductRef], dict[str, tuple[str, ...]]]:
-    """
-    GTIN-14 → товар.
-    Явный GTIN в карточке важнее совпадения со штрихкодом EAN.
-    Если два товара претендуют на один GTIN — конфликт, код не привязываем.
-    """
-    sources = catalog.load_gtin_match_sources()
     products = {
         int(item["id"]): ProductRef(
             product_id=int(item["id"]),
             sku=str(item["sku"] or ""),
             name=str(item["name"] or ""),
         )
-        for item in sources["products"]
+        for item in sources.get("products") or []
     }
     index: dict[str, ProductRef] = {}
     source_kind: dict[str, str] = {}
@@ -109,15 +104,39 @@ def build_gtin_index(
         bucket.add(product.sku)
         index.pop(gtin, None)
 
-    for product_id, gtin in sources["gtins"]:
+    for product_id, gtin in sources.get("gtins") or []:
         bind(str(gtin), int(product_id), "gtin")
-    for product_id, barcode in sources["barcodes"]:
-        gtin = barcode_as_gtin14(str(barcode or ""))
-        if gtin:
-            bind(gtin, int(product_id), "barcode")
+    for product_id, barcode in sources.get("barcodes") or []:
+        mapped = barcode_as_gtin14(str(barcode or ""))
+        if mapped:
+            bind(mapped, int(product_id), "barcode")
 
     conflict_skus = {gtin: tuple(sorted(skus)) for gtin, skus in conflicts.items()}
     return index, conflict_skus
+
+
+def build_gtin_index(
+    catalog: CatalogRepository,
+) -> tuple[dict[str, ProductRef], dict[str, tuple[str, ...]]]:
+    """
+    GTIN-14 → товар.
+    Явный GTIN в карточке важнее совпадения со штрихкодом EAN.
+    Если два товара претендуют на один GTIN — конфликт, код не привязываем.
+    """
+    return _index_from_sources(catalog.load_gtin_match_sources())
+
+
+def lookup_gtin14(
+    catalog: CatalogRepository, gtin: str
+) -> tuple[ProductRef | None, tuple[str, ...]]:
+    """Точечный GTIN-14 без загрузки всего каталога."""
+    value = str(gtin or "").strip()
+    if not value:
+        return None, ()
+    index, conflicts = _index_from_sources(catalog.gtin_match_candidates(value))
+    if value in conflicts:
+        return None, conflicts[value]
+    return index.get(value), ()
 
 
 def match_datamatrix_codes(text: str, catalog: CatalogRepository) -> MatchResult:

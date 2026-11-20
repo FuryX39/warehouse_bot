@@ -17,7 +17,7 @@ from app.fbs_packing_repository import (
 )
 from app.google_sheet_write import fbs_list_sheet_title
 from app.marking.cis import parse_cis, remap_jcuken_to_qwerty
-from app.marking.match import build_gtin_index
+from app.marking.match import lookup_gtin14
 from app.yandex_fbs_labels import (
     YandexFbsListRow,
     _export_list_to_google_sheet,
@@ -102,12 +102,12 @@ def lookup_scan_product(
     text = remap_jcuken_to_qwerty(str(raw or "").strip())
     if not text:
         raise ValueError("Пустой штрихкод")
-    by_sku, by_code, by_barcode = catalog.build_product_import_index()
-    key = text.casefold()
-    product = by_barcode.get(key) or by_sku.get(key) or by_code.get(key)
-    if product is None:
+    found = catalog.find_product_by_barcode(text)
+    if found is None:
+        found = catalog.find_product_by_sku_or_code(text)
+    if found is None:
         raise ValueError("Штрихкод не найден в каталоге")
-    return str(product.get("sku") or ""), int(product["id"]) if product.get("id") else None
+    return found.sku, found.id
 
 
 @dataclass(frozen=True)
@@ -133,12 +133,11 @@ def resolve_packing_scan(catalog: CatalogRepository, raw: str) -> PackingScanRes
         raise ValueError("Пустой штрихкод")
     record = parse_cis(text)
     if record.ok:
-        index, conflicts = build_gtin_index(catalog)
         gtin = record.gtin
-        if gtin in conflicts:
-            skus = ", ".join(conflicts[gtin])
+        product, conflict_skus = lookup_gtin14(catalog, gtin)
+        if conflict_skus:
+            skus = ", ".join(conflict_skus)
             raise ValueError(f"GTIN {gtin} конфликт в каталоге ({skus})")
-        product = index.get(gtin)
         if product is None:
             raise ValueError(f"GTIN {gtin} не найден в каталоге")
         return PackingScanResolve(

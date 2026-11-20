@@ -11,7 +11,7 @@ from app.crm_repository import CrmRepository
 from app.marking.cis import GS, parse_cis, remap_jcuken_to_qwerty, split_cis_input
 from app.marking.export import build_marking_codes_export
 from app.marking.gtin import pad_gtin14
-from app.marking.match import match_datamatrix_codes
+from app.marking.match import lookup_gtin14, match_datamatrix_codes
 
 
 GTIN13 = "4600605012345"
@@ -146,6 +146,26 @@ def test_match_by_ean13_barcode(db_url: str) -> None:
     assert len(result.groups) == 1
     assert result.groups[0].product.sku == "NUT-1"
     assert result.unmatched == []
+
+
+def test_lookup_gtin14_without_full_catalog(db_url: str) -> None:
+    repo = _repo(db_url)
+    repo.create_product(
+        {
+            "name": "Болт",
+            "sku": "BOLT-1",
+            "code": "00001",
+            "is_kit": False,
+            "gtins": [GTIN13],
+            "barcodes": [],
+            "components": [],
+        }
+    )
+    product, conflicts = lookup_gtin14(repo, GTIN14)
+    assert conflicts == ()
+    assert product is not None
+    assert product.sku == "BOLT-1"
+    assert product.product_id > 0
 
 
 def test_unmatched_gtin_and_invalid(db_url: str) -> None:

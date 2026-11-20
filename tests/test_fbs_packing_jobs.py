@@ -25,7 +25,11 @@ from app.fbs_packing_repository import (
     LINE_PENDING,
     LINE_PRINTED,
 )
-from app.fbs_packing_service import CIS_REQUIRED_ERROR, create_yandex_packing_job
+from app.fbs_packing_service import (
+    CIS_REQUIRED_ERROR,
+    create_yandex_packing_job,
+    lookup_scan_product,
+)
 from app.warehouse_users_repository import WarehouseUserRow
 from app.web.warehouse_fbs_packing_routes import register_warehouse_fbs_packing_routes
 from app.web.warehouse_tasks_api_auth import TasksApiActor
@@ -1066,3 +1070,55 @@ def test_manager_order_details_cancel_marks_lines_ready(db_url: str, tmp_path) -
     leftover = client.get(f"/api/warehouse/fbs-packing/jobs/{job_id}/pack")
     assert leftover.json()["job"]["remaining_groups"] == []
     assert leftover.json()["job"]["line_pending"] == 0
+
+
+def test_lookup_scan_product_does_not_load_full_index(db_url: str) -> None:
+    catalog, _ = _catalog(db_url)
+    product = catalog.create_product(
+        {
+            "name": "Пик",
+            "sku": "SKU-FAST",
+            "code": "CODE-FAST",
+            "is_kit": False,
+            "barcodes": [{"barcode": "2000000000092", "label": "", "group": ""}],
+            "components": [],
+        }
+    )
+
+    def _fail(*_a, **_k):
+        raise AssertionError("полный индекс каталога не должен вызываться на пике")
+
+    with patch.object(CatalogRepository, "build_product_import_index", side_effect=_fail):
+        sku, pid = lookup_scan_product(catalog, "2000000000092")
+        assert sku == "SKU-FAST"
+        assert pid == product.id
+        sku, pid = lookup_scan_product(catalog, "SKU-FAST")
+        assert sku == "SKU-FAST"
+        assert pid == product.id
+        sku, pid = lookup_scan_product(catalog, "CODE-FAST")
+        assert sku == "SKU-FAST"
+        assert pid == product.id
+
+
+def test_fbs_scan_does_not_load_full_catalog(db_url: str, tmp_path) -> None:
+    client, packing, job, _product, _plain = _cis_client(db_url, tmp_path, require_marking=False)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    def _fail(*_a, **_k):
+        raise AssertionError("полный индекс каталога не должен вызываться на пике")
+
+    with (
+        patch.object(CatalogRepository, "build_product_import_index", side_effect=_fail),
+        patch.object(CatalogRepository, "load_gtin_match_sources", side_effect=_fail),
+    ):
+        by_barcode = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000092"})
+        assert by_barcode.status_code == 200, by_barcode.text
+        line_id = by_barcode.json()["line"]["id"]
+        cancelled = client.post(f"{prefix}/lines/{line_id}/cancel-print")
+        assert cancelled.status_code == 200, cancelled.text
+        by_cis = client.post(
+            f"{prefix}/scan-product",
+            json={"barcode": _cis(GTIN14, serial="NoFullIdx")},
+        )
+        assert by_cis.status_code == 200, by_cis.text
+        assert by_cis.json()["line"]["has_cis"] is True
