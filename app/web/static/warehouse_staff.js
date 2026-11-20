@@ -1243,6 +1243,7 @@
       ".wh-prod-pay-cell{width:130px;text-align:right!important;white-space:nowrap}" +
       ".wh-prod-pay{color:#1d4d3b;font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}" +
       ".wh-prod-pay--empty{color:#94a3b8;font-size:13px;font-weight:500}.wh-prod-pay--off{color:#6b7280;font-size:12px;font-weight:600}" +
+      ".wh-prod-pay-hint{margin-top:2px;color:#64748b;font-size:11px;font-weight:600}" +
       ".wh-prod-task{min-width:320px}.wh-prod-task-badge{display:inline-block;margin-bottom:5px;padding:3px 8px;border-radius:999px;background:#e8f0ff;color:#285ea8;font-size:11px;font-weight:700}" +
       ".wh-prod-task-badge--wb_fbo,.wh-prod-task-badge--wb_fbo_new,.wh-prod-task-badge--ym_fbo{background:#eee9ff;color:#6045a8}.wh-prod-task-badge--vseinstrumenti{background:#e4f6eb;color:#287544}.wh-prod-task-badge--rework{background:#fff3e0;color:#9a5b12}" +
       ".wh-prod-task-data{color:#526071;font-size:13px;line-height:1.4}.wh-prod-empty{padding:40px 20px;text-align:center;color:#64748b}" +
@@ -1614,6 +1615,75 @@
     });
   }
 
+  function openPayEditor(row, root) {
+    var backdrop = document.createElement("div");
+    backdrop.className = "wh-modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="wh-modal" role="dialog" aria-modal="true">' +
+      '<div class="wh-modal-header"><h3>Сумма задания</h3><button type="button" class="wh-modal-close" aria-label="Закрыть">&times;</button></div>' +
+      '<div class="wh-modal-body">' +
+      '<p class="wh-prod-reassign-info"><strong>' +
+      esc(row.task_type_name) +
+      "</strong><br>" +
+      esc(row.task_data) +
+      "<br>" +
+      esc(row.quantity) +
+      " шт. · " +
+      esc(row.employee) +
+      "</p>" +
+      '<p class="wh-prod-rate-hint">Итог по этой строке в рублях. Пустое поле — снова считать по ставке за штуку.</p>' +
+      '<div class="wh-prod-reassign-field"><label for="whProdPayAmount">Сумма, ₽</label>' +
+      '<input type="number" min="0" step="0.01" id="whProdPayAmount" value="' +
+      esc(row.pay_manual ? row.pay || "" : "") +
+      '" placeholder="например 1500" /></div>' +
+      '<p class="wh-msg" id="whProdPayMsg"></p>' +
+      "</div>" +
+      '<div class="wh-modal-footer"><button type="button" class="wh-btn wh-btn-primary wh-modal-save">Сохранить</button>' +
+      '<button type="button" class="wh-btn wh-modal-cancel">Отмена</button></div></div>';
+    document.body.appendChild(backdrop);
+
+    function close() {
+      backdrop.remove();
+    }
+    backdrop.querySelector(".wh-modal-close").addEventListener("click", close);
+    backdrop.querySelector(".wh-modal-cancel").addEventListener("click", close);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) close();
+    });
+    var input = backdrop.querySelector("#whProdPayAmount");
+    input.focus();
+    input.select();
+    backdrop.querySelector(".wh-modal-save").addEventListener("click", function () {
+      var amount = String(input.value || "").trim();
+      var msg = backdrop.querySelector("#whProdPayMsg");
+      var save = backdrop.querySelector(".wh-modal-save");
+      save.disabled = true;
+      msg.className = "wh-msg";
+      msg.textContent = "Сохранение…";
+      shell()
+        .fetchJson("/api/warehouse/employees/productivity/pay", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: row.date,
+            task_type: row.task_type,
+            task_id: row.task_id,
+            user_id: row.user_id,
+            amount: amount,
+          }),
+        })
+        .then(function () {
+          close();
+          return refresh(root);
+        })
+        .catch(function (error) {
+          save.disabled = false;
+          msg.className = "wh-msg wh-msg-error";
+          msg.textContent = error.message || "Не удалось сохранить сумму";
+        });
+    });
+  }
+
   function todayIso() {
     var now = new Date();
     var month = String(now.getMonth() + 1);
@@ -1707,13 +1777,18 @@
   }
 
   function payHtml(row) {
+    var body;
     if (row.counted === false) {
-      return '<div class="wh-prod-pay wh-prod-pay--off">не учитывается</div>';
+      body = '<div class="wh-prod-pay wh-prod-pay--off">не учитывается</div>';
+    } else if (row.pay == null || row.pay === "") {
+      body = '<div class="wh-prod-pay wh-prod-pay--empty"></div>';
+    } else {
+      body = '<div class="wh-prod-pay">' + esc(row.pay) + " ₽</div>";
     }
-    if (row.pay == null || row.pay === "") {
-      return '<div class="wh-prod-pay wh-prod-pay--empty"></div>';
+    if (row.pay_manual && row.counted !== false) {
+      body += '<div class="wh-prod-pay-hint">вручную</div>';
     }
-    return '<div class="wh-prod-pay">' + esc(row.pay) + " ₽</div>";
+    return body;
   }
 
   function openSettings(root) {
@@ -1945,6 +2020,9 @@
           '</span><span class="wh-prod-qty-unit">шт.</span>' +
           '</td><td class="wh-prod-pay-cell">' +
           payHtml(row) +
+          '<button type="button" class="wh-prod-edit" data-edit="pay" data-row-index="' +
+          esc(index) +
+          '">Сумма</button>' +
           '</td><td class="wh-prod-task"><span class="wh-prod-task-badge wh-prod-task-badge--' +
           esc(row.task_type) +
           '">' +
@@ -1994,6 +2072,7 @@
         if (button.getAttribute("data-edit") === "date") openDateEditor(row, root);
         else if (button.getAttribute("data-edit") === "employee") openEmployeeEditor(row, root);
         else if (button.getAttribute("data-edit") === "packers") openPackersEditor(row, root);
+        else if (button.getAttribute("data-edit") === "pay") openPayEditor(row, root);
         else if (button.getAttribute("data-edit") === "counted") {
           button.disabled = true;
           setRowCounted(row, root, row.counted === false).catch(function (error) {

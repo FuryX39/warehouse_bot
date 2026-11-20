@@ -355,6 +355,24 @@ def register_warehouse_staff_routes(
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.put("/api/warehouse/employees/productivity/pay")
+    async def api_warehouse_employee_productivity_pay(
+        body: dict,
+        _: WarehouseUserRow = Depends(require_warehouse_admin),
+    ) -> dict:
+        try:
+            return productivity_repo.set_row_pay(
+                event_date=str(body.get("date") or "").strip(),
+                task_type=str(body.get("task_type") or "").strip(),
+                task_id=int(body.get("task_id")),
+                user_id=int(body.get("user_id")),
+                amount=body.get("amount"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.put("/api/warehouse/employees/groups")
     async def api_warehouse_employee_groups_save(
         body: dict,

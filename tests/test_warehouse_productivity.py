@@ -776,6 +776,82 @@ def test_productivity_rates_pay_and_exclusion(db_url, tmp_path):
         raise AssertionError("expected ValueError")
 
 
+def test_productivity_manual_pay_override(db_url, tmp_path):
+    users, _ = _init(db_url, tmp_path)
+    worker = users.create_user(login="packer", password="secret", display_name="Анна")
+    other = users.create_user(login="other", password="secret", display_name="Мария")
+    repo = WarehouseProductivityRepository(db_url)
+    created = repo.add_manual_row(
+        event_date="2026-10-06",
+        user_id=worker.id,
+        quantity=7,
+        comment="Переклейка",
+    )
+    repo.save_rates([{"id": "rework", "rate": "5"}])
+    auto = repo.list_rows({"task_type": "rework"})
+    assert auto["rows"][0]["pay"] == "35"
+    assert auto["rows"][0]["pay_manual"] is False
+    assert auto["total_pay"] == "35"
+
+    saved = repo.set_row_pay(
+        event_date="2026-10-06",
+        task_type="rework",
+        task_id=created["task_id"],
+        user_id=worker.id,
+        amount="1500,5",
+    )
+    assert saved["pay"] == "1500.50"
+    assert saved["pay_manual"] is True
+    paid = repo.list_rows({"task_type": "rework"})
+    assert paid["rows"][0]["pay"] == "1500.50"
+    assert paid["rows"][0]["pay_manual"] is True
+    assert paid["total_pay"] == "1500.50"
+    month = repo.list_user_month(user_id=worker.id, year=2026, month=10)
+    assert month["total_pay"] == "1500.50"
+
+    repo.set_row_counted(
+        event_date="2026-10-06",
+        task_type="rework",
+        task_id=created["task_id"],
+        user_id=worker.id,
+        counted=False,
+    )
+    hidden = repo.list_rows({"task_type": "rework"})
+    assert hidden["rows"][0]["pay"] == ""
+    assert hidden["total_pay"] == ""
+
+    repo.set_row_counted(
+        event_date="2026-10-06",
+        task_type="rework",
+        task_id=created["task_id"],
+        user_id=worker.id,
+        counted=True,
+    )
+    repo.reassign_row(
+        event_date="2026-10-06",
+        task_type="rework",
+        task_id=created["task_id"],
+        from_user_id=worker.id,
+        to_user_id=other.id,
+    )
+    moved = repo.list_rows({"user_id": str(other.id)})
+    assert moved["rows"][0]["pay"] == "1500.50"
+    assert moved["rows"][0]["pay_manual"] is True
+    assert repo.list_rows({"user_id": str(worker.id)})["rows"] == []
+
+    cleared = repo.set_row_pay(
+        event_date="2026-10-06",
+        task_type="rework",
+        task_id=created["task_id"],
+        user_id=other.id,
+        amount="",
+    )
+    assert cleared["pay_manual"] is False
+    restored = repo.list_rows({"user_id": str(other.id)})
+    assert restored["rows"][0]["pay"] == "35"
+    assert restored["rows"][0]["pay_manual"] is False
+
+
 def test_productivity_manual_rework_rows(db_url, tmp_path):
     users, _ = _init(db_url, tmp_path)
     worker = users.create_user(login="packer", password="secret", display_name="Анна")

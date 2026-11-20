@@ -78,6 +78,26 @@ class WarehouseProductivityExclusion(_Base):
     event_date: Mapped[str] = mapped_column(String(10), nullable=False)
 
 
+class WarehouseProductivityPayOverride(_Base):
+    __tablename__ = "warehouse_productivity_pay_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_type",
+            "task_id",
+            "user_id",
+            "event_date",
+            name="uq_productivity_pay_override_row",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    task_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    amount_text: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+
+
 class WarehouseProductivityManualRow(_Base):
     __tablename__ = "warehouse_productivity_manual_rows"
 
@@ -130,22 +150,26 @@ def _date_start_ts(raw: str, *, end: bool = False) -> int | None:
     return int(point.timestamp())
 
 
-def _normalize_rate_text(raw: Any) -> str:
+def _normalize_money_text(raw: Any, *, label: str = "Цена") -> str:
     value = str(raw or "").strip().replace(" ", "").replace(",", ".")
     if not value:
         return ""
     try:
         parsed = Decimal(value)
     except InvalidOperation as exc:
-        raise ValueError("Цена должна быть числом") from exc
+        raise ValueError(f"{label} должна быть числом") from exc
     if parsed < 0:
-        raise ValueError("Цена не может быть отрицательной")
-    if parsed > Decimal("1000000"):
-        raise ValueError("Цена слишком большая")
+        raise ValueError(f"{label} не может быть отрицательной")
+    if parsed > Decimal("10000000"):
+        raise ValueError(f"{label} слишком большая")
     quantized = parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if quantized == quantized.to_integral_value():
         return str(int(quantized))
     return f"{quantized:.2f}"
+
+
+def _normalize_rate_text(raw: Any) -> str:
+    return _normalize_money_text(raw, label="Цена")
 
 
 def _parse_rate(raw: str) -> Decimal | None:
@@ -356,6 +380,62 @@ class WarehouseProductivityRepository:
             session.commit()
         return {"ok": True, "counted": bool(counted)}
 
+    def set_row_pay(
+        self,
+        *,
+        event_date: str,
+        task_type: str,
+        task_id: int,
+        user_id: int,
+        amount: Any,
+    ) -> dict[str, Any]:
+        task_type = str(task_type or "").strip()
+        if task_type not in _TYPE_NAMES:
+            raise ValueError("Неизвестный тип задачи")
+        try:
+            task_id = int(task_id)
+            user_id = int(user_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Некорректные данные строки выработки") from exc
+        if task_id <= 0 or user_id <= 0:
+            raise ValueError("Задание и сотрудник должны быть указаны")
+        day = date.fromisoformat(str(event_date).strip()).isoformat()
+        amount_text = _normalize_money_text(amount, label="Сумма")
+        details = self.list_details(
+            event_date=day,
+            task_type=task_type,
+            task_id=task_id,
+            user_id=user_id,
+        )
+        if details["row_count"] <= 0:
+            raise LookupError("Строка выработки не найдена или уже была изменена")
+        with Session(self.engine) as session:
+            existing = session.scalar(
+                select(WarehouseProductivityPayOverride).where(
+                    WarehouseProductivityPayOverride.task_type == task_type,
+                    WarehouseProductivityPayOverride.task_id == task_id,
+                    WarehouseProductivityPayOverride.user_id == user_id,
+                    WarehouseProductivityPayOverride.event_date == day,
+                )
+            )
+            if not amount_text:
+                if existing is not None:
+                    session.delete(existing)
+            elif existing is None:
+                session.add(
+                    WarehouseProductivityPayOverride(
+                        task_type=task_type,
+                        task_id=task_id,
+                        user_id=user_id,
+                        event_date=day,
+                        amount_text=amount_text,
+                    )
+                )
+            else:
+                existing.amount_text = amount_text
+            session.commit()
+        return {"ok": True, "pay_manual": bool(amount_text), "pay": amount_text}
+
     def _load_rates_and_exclusions(
         self, conn
     ) -> tuple[dict[str, Decimal | None], set[tuple[str, int, int, str]]]:
@@ -382,6 +462,29 @@ class WarehouseProductivityRepository:
                 )
             )
         return rates, exclusions
+
+    def _load_pay_overrides(
+        self, conn
+    ) -> dict[tuple[str, int, int, str], Decimal]:
+        overrides: dict[tuple[str, int, int, str], Decimal] = {}
+        for row in conn.execute(
+            text(
+                "SELECT task_type, task_id, user_id, event_date, amount_text "
+                "FROM warehouse_productivity_pay_overrides"
+            )
+        ).mappings():
+            parsed = _parse_rate(str(row["amount_text"] or ""))
+            if parsed is None:
+                continue
+            overrides[
+                (
+                    str(row["task_type"]),
+                    int(row["task_id"]),
+                    int(row["user_id"]),
+                    str(row["event_date"]),
+                )
+            ] = parsed
+        return overrides
 
     def _load_shares(
         self,
@@ -682,6 +785,54 @@ class WarehouseProductivityRepository:
             params,
         )
 
+    def _move_pay_override(
+        self,
+        conn,
+        *,
+        event_date: str,
+        task_type: str,
+        task_id: int,
+        from_user_id: int,
+        to_user_id: int | None = None,
+        to_date: str | None = None,
+    ) -> None:
+        new_user_id = from_user_id if to_user_id is None else to_user_id
+        new_date = event_date if to_date is None else to_date
+        if new_user_id == from_user_id and new_date == event_date:
+            return
+        params = {
+            "task_type": task_type,
+            "task_id": task_id,
+            "from_user_id": from_user_id,
+            "event_date": event_date,
+            "to_user_id": new_user_id,
+            "to_date": new_date,
+        }
+        conn.execute(
+            text(
+                """
+                DELETE FROM warehouse_productivity_pay_overrides
+                WHERE task_type = :task_type AND task_id = :task_id
+                  AND user_id = :to_user_id AND event_date = :to_date
+                  AND NOT (
+                      user_id = :from_user_id AND event_date = :event_date
+                  )
+                """
+            ),
+            params,
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE warehouse_productivity_pay_overrides
+                SET user_id = :to_user_id, event_date = :to_date
+                WHERE task_type = :task_type AND task_id = :task_id
+                  AND user_id = :from_user_id AND event_date = :event_date
+                """
+            ),
+            params,
+        )
+
     def list_rows(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         f = dict(filters or {})
         try:
@@ -837,6 +988,7 @@ class WarehouseProductivityRepository:
                 ).mappings()
             }
             rates, exclusions = self._load_rates_and_exclusions(conn)
+            pay_overrides = self._load_pay_overrides(conn)
             for task_type, query in queries:
                 for row in conn.execute(query, params).mappings():
                     item = dict(row)
@@ -898,8 +1050,15 @@ class WarehouseProductivityRepository:
         for key, row in grouped.items():
             day, uid, task_type, task_id = key
             counted = (task_type, task_id, uid, day) not in exclusions
-            amount = _pay_amount(int(row["quantity"]), task_type, counted, rates)
+            override = pay_overrides.get((task_type, task_id, uid, day))
+            if override is not None:
+                amount = override if counted else None
+                pay_manual = True
+            else:
+                amount = _pay_amount(int(row["quantity"]), task_type, counted, rates)
+                pay_manual = False
             row["counted"] = counted
+            row["pay_manual"] = pay_manual
             row["pay"] = _format_amount(amount) if amount is not None else ""
 
         task_type_filter = str(f.get("task_type") or "").strip()
@@ -1375,6 +1534,14 @@ class WarehouseProductivityRepository:
                 from_user_id=from_user_id,
                 to_user_id=to_user_id,
             )
+            self._move_pay_override(
+                conn,
+                event_date=str(event_date).strip(),
+                task_type=task_type,
+                task_id=task_id,
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+            )
             conn.execute(
                 text(
                     """
@@ -1554,6 +1721,14 @@ class WarehouseProductivityRepository:
                     params,
                 )
             self._move_exclusion(
+                conn,
+                event_date=str(event_date).strip(),
+                task_type=task_type,
+                task_id=task_id,
+                from_user_id=user_id,
+                to_date=str(to_date).strip(),
+            )
+            self._move_pay_override(
                 conn,
                 event_date=str(event_date).strip(),
                 task_type=task_type,
