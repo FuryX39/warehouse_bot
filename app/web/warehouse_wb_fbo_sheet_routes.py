@@ -579,9 +579,17 @@ def _register_sheet_packer_prefix(
             job = packing_repo.get_job(job_id, include_lines=True)
             if job is None:
                 raise ValueError("Задание не найдено")
-            found = find_box_by_scan(job, barcode)
+            found = None
+            try:
+                box_pk = int(payload.get("box_id") or payload.get("id") or 0)
+            except (TypeError, ValueError):
+                box_pk = 0
+            if box_pk > 0:
+                found = next((item for item in job.boxes if int(item.id) == box_pk), None)
             if found is None:
-                raise ValueError("Сначала выберите товар, затем пикните грузоместо")
+                found = find_box_by_scan(job, barcode)
+            if found is None:
+                raise ValueError("Грузоместо не найдено")
             box_id = int(found.id)
             product = next(
                 (

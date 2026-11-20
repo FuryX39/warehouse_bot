@@ -131,7 +131,7 @@ def _scan_keys_for_box(box: WbFboSheetBoxRow) -> list[str]:
 
 
 def find_box_by_scan(job: WbFboSheetJobRow, barcode: str) -> WbFboSheetBoxRow | None:
-    key = str(barcode or "").strip()
+    key = remap_jcuken_to_qwerty(str(barcode or "").strip())
     if not key:
         return None
     fold = key.casefold()

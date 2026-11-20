@@ -15,6 +15,7 @@ from reportlab.pdfgen import canvas
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
 from app.fbs_packing_service import CIS_REQUIRED_ERROR
+from app.marking.cis import remap_jcuken_to_qwerty
 from app.warehouse_users_repository import WarehouseUserRow
 from app.wb_fbo_sheet_repository import (
     BOX_ASSIGNED,
@@ -870,6 +871,59 @@ def test_assign_binds_cargo_without_pallet(db_url: str, tmp_path) -> None:
     job = packing.get_job(job_id, include_lines=True)
     assert job is not None
     assert job.open_pallet is None
+    assert job.pcs_assigned == 10
+
+
+def _qwerty_to_jcuken(text: str) -> str:
+    qwerty = "`qwertyuiop[]asdfghjkl;'zxcvbnm,.~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>"
+    jcuken = "ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ"
+    return text.translate(str.maketrans(qwerty + "@#$^&/?", jcuken + '"№;:?.,'))
+
+
+def test_assign_accepts_jcuken_package_code(db_url: str, tmp_path) -> None:
+    catalog = _catalog(db_url)
+    client, packing = _client(db_url, tmp_path, catalog)
+    xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    created = client.post(
+        "/api/warehouse/marketplaces/wb-fbo-new/jobs",
+        data={"packer_user_ids": "[7]"},
+        files={
+            "goods": ("goods.xlsx", _goods_xlsx(), xlsx_type),
+            "qr": ("qr.pdf", _qr_pdf(), "application/pdf"),
+            "boxes": ("boxes.xlsx", _boxes_xlsx(count=1), xlsx_type),
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job"]["id"]
+    printed = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/print-boxes",
+        json={"count": 1},
+    )
+    assert printed.status_code == 200, printed.text
+    package_code = printed.json()["boxes"][0]["package_code"]
+    jcuken = _qwerty_to_jcuken(package_code)
+    assert jcuken != package_code
+    assert remap_jcuken_to_qwerty(jcuken) == package_code
+
+    resolved = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/resolve",
+        json={"barcode": jcuken},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["kind"] == "wb_box"
+
+    assigned = client.post(
+        f"/api/v1/fbo-sheet-packing/jobs/{job_id}/assign",
+        json={
+            "barcode": jcuken,
+            "product_barcode": "4673746970607",
+            "quantity": 10,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["box"]["status"] == BOX_ASSIGNED
+    job = packing.get_job(job_id, include_lines=True)
+    assert job is not None
     assert job.pcs_assigned == 10
 
 
