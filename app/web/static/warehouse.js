@@ -320,7 +320,7 @@
       window.WhRepricer.render(tab, item);
       return;
     }
-    if (tab.id === "marketplaces" && item.id === "bidder" && window.WhBidder) {
+    if (tab.id === "promotion" && item.id === "bidder" && window.WhBidder) {
       window.WhBidder.render(tab, item);
       return;
     }

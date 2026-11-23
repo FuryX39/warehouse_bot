@@ -205,8 +205,13 @@ def test_http_rejects_bad_period() -> None:
     assert resp.status_code == 400
 
 
-def test_bidder_permission_granted_with_marketplaces() -> None:
+def test_bidder_lives_in_promotion_section() -> None:
     perms = normalize_permissions({"marketplaces": ["repricer"]})
-    assert "bidder" in perms["marketplaces"]
+    assert "bidder" not in (perms.get("marketplaces") or [])
+    assert perms.get("promotion") == ["bidder"]
+    migrated = normalize_permissions({"marketplaces": ["repricer", "bidder"]})
+    assert "bidder" not in migrated["marketplaces"]
+    assert migrated["promotion"] == ["bidder"]
     full = full_access_permissions()
-    assert "bidder" in full["marketplaces"]
+    assert "bidder" in full["promotion"]
+    assert "bidder" not in full.get("marketplaces", [])
