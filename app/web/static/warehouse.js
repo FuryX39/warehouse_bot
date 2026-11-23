@@ -320,6 +320,10 @@
       window.WhRepricer.render(tab, item);
       return;
     }
+    if (tab.id === "marketplaces" && item.id === "bidder" && window.WhBidder) {
+      window.WhBidder.render(tab, item);
+      return;
+    }
     if (tab.id === "reports" && window.WhReports) {
       window.WhReports.render(tab, item);
       return;
