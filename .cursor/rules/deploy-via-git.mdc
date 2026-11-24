@@ -5,14 +5,17 @@ alwaysApply: true
 
 # Деплой: только git pull с origin/main
 
-Код на VPS (`/opt/warehouse_bot`) должен совпадать с **GitHub `origin/main`**. Деплой — это `git pull`, не SFTP/`scp`/ручная заливка отдельных файлов.
+Боевой VPS — **`82.148.245.99`** (`splendid-azure.ptr.network`), каталог `/opt/warehouse_bot`.
+Старый VPS **`79.137.184.38` выведен из эксплуатации**: не деплоить, не `unmask`/`enable`/`start` `warehouse-*`, nginx и Postgres, не восстанавливать unit-файлы.
+
+Код на боевом сервере должен совпадать с **GitHub `origin/main`**. Деплой — это `git pull` на **`82.148.245.99`**, не SFTP/`scp`/ручная заливка отдельных файлов.
 
 ## Когда пользователь просит деплой
 
 1. Сначала коммит и `git push origin main` (если есть незапушенные коммиты).
-2. На сервере: `cd /opt/warehouse_bot && git fetch origin main && git pull origin main`.
+2. На **новом** сервере `82.148.245.99`: `cd /opt/warehouse_bot && git fetch origin main && git pull origin main`.
 3. Перезапустить нужные сервисы (`warehouse-web`, при необходимости `warehouse-api` / `warehouse-sync`).
-4. Проверить `git log -1` на VPS — тот же коммит, что на GitHub.
+4. Проверить `git log -1` на этом VPS — тот же коммит, что на GitHub. Не смотреть `79.137.184.38`.
 
 Не делать `git reset --hard`, не затирать `.env`, `data/`, базы. Если `pull` не проходит из‑за грязного дерева — **сказать пользователю**, не обходить git копированием файлов.
 

@@ -534,6 +534,53 @@ def test_packer_auto_close_marks_line_done_and_frees_next_sku(db_url: str, tmp_p
     assert second.json()["line"]["status"] == LINE_DONE
 
 
+def test_packer_auto_close_clears_leftover_printed_other_sku(db_url: str, tmp_path) -> None:
+    client, packing, job, *_rest = _packing_client(db_url, tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+
+    stuck = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000016", "include_pdf": False},
+    )
+    assert stuck.status_code == 200, stuck.text
+    assert packing.get_line(job_id, job.lines[0].id).status == LINE_PRINTED
+
+    blocked = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000023", "include_pdf": False},
+    )
+    assert blocked.status_code == 400
+
+    nxt = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000023", "include_pdf": False, "auto_close": True},
+    )
+    assert nxt.status_code == 200, nxt.text
+    assert packing.get_line(job_id, job.lines[0].id).status == LINE_DONE
+    assert nxt.json()["line"]["id"] == job.lines[2].id
+    assert nxt.json()["line"]["status"] == LINE_DONE
+
+
+def test_cancel_print_resets_printed_even_if_line_id_stale(db_url: str, tmp_path) -> None:
+    client, packing, job, *_rest = _packing_client(db_url, tmp_path)
+    job_id = job.id
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job_id}"
+
+    stuck = client.post(
+        f"{prefix}/scan-product",
+        json={"barcode": "2000000000016", "include_pdf": False},
+    )
+    assert stuck.status_code == 200, stuck.text
+    printed_id = stuck.json()["line"]["id"]
+    stale_id = job.lines[2].id
+    assert stale_id != printed_id
+
+    cancelled = client.post(f"{prefix}/lines/{stale_id}/cancel-print")
+    assert cancelled.status_code == 200, cancelled.text
+    assert packing.get_line(job_id, printed_id).status == LINE_PENDING
+
+
 def test_packer_batch_allocate_prints_all_sku_then_scan_labels(db_url: str, tmp_path) -> None:
     client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
