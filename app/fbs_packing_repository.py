@@ -268,11 +268,16 @@ class FbsPackingRepository:
         )
 
     def _counts(self, session: Session, job_id: int) -> tuple[int, int, int, int]:
-        rows = session.scalars(select(FbsPackingLine).where(FbsPackingLine.job_id == int(job_id))).all()
-        total = len(rows)
-        done = sum(1 for r in rows if r.status in LINE_COMPLETE_STATUSES)
-        printed = sum(1 for r in rows if r.status == LINE_PRINTED)
-        pending = sum(1 for r in rows if r.status == LINE_PENDING)
+        rows = session.execute(
+            select(FbsPackingLine.status, func.count())
+            .where(FbsPackingLine.job_id == int(job_id))
+            .group_by(FbsPackingLine.status)
+        ).all()
+        by_status = {str(status or ""): int(count) for status, count in rows}
+        total = sum(by_status.values())
+        done = sum(by_status.get(status, 0) for status in LINE_COMPLETE_STATUSES)
+        printed = by_status.get(LINE_PRINTED, 0)
+        pending = by_status.get(LINE_PENDING, 0)
         return total, done, pending, printed
 
     def _job_row(
@@ -708,7 +713,7 @@ class FbsPackingRepository:
         cis_gtin: str = "",
         auto_close: bool = False,
     ) -> FbsPackingLineRow:
-        lines = self.allocate_lines(
+        lines, _changed = self.allocate_lines(
             job_id,
             user_id,
             sku=sku,
@@ -755,7 +760,7 @@ class FbsPackingRepository:
         cis_key: str = "",
         cis_gtin: str = "",
         auto_close: bool = False,
-    ) -> list[FbsPackingLineRow]:
+    ) -> tuple[list[FbsPackingLineRow], list[FbsPackingLineRow]]:
         if not str(sku or "").strip() and not product_id:
             raise ValueError("Нет артикула для выделения")
         cis_key_n = str(cis_key or "").strip()
@@ -764,6 +769,13 @@ class FbsPackingRepository:
         if cis_key_n:
             batch = False
         now = int(time.time())
+
+        def _unique_rows(rows: list[FbsPackingLine]) -> list[FbsPackingLineRow]:
+            seen: dict[int, FbsPackingLineRow] = {}
+            for row in rows:
+                seen[int(row.id)] = self._line_row(row)
+            return list(seen.values())
+
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
             printed_rows = self._printed_lines(session, job_id)
@@ -787,6 +799,7 @@ class FbsPackingRepository:
                 for row in printed_rows
                 if not self._sku_matches(row, sku=sku, product_id=product_id)
             ]
+            touched: list[FbsPackingLine] = []
             if foreign:
                 # «Без подтверждения ШК МП»: зависшая печать не должна стопорить
                 # следующий валидный пик — предыдущие printed закрываем как done.
@@ -802,6 +815,7 @@ class FbsPackingRepository:
                     auto_close=True,
                     session=session,
                 )
+                touched.extend(printed_rows)
                 printed_rows = []
 
             if cis_key_n:
@@ -825,7 +839,8 @@ class FbsPackingRepository:
             if not batch:
                 if printed_rows:
                     if not auto_close:
-                        return [self._line_row(printed_rows[0])]
+                        line = self._line_row(printed_rows[0])
+                        return [line], [line]
                     self._apply_allocate_status(
                         job=job,
                         rows=printed_rows,
@@ -834,6 +849,7 @@ class FbsPackingRepository:
                         auto_close=True,
                         session=session,
                     )
+                    touched.extend(printed_rows)
                     printed_rows = []
                 match = match_pending[0] if match_pending else None
                 if match is None:
@@ -852,7 +868,10 @@ class FbsPackingRepository:
                 )
                 session.commit()
                 session.refresh(match)
-                return [self._line_row(match)]
+                for row in touched:
+                    session.refresh(row)
+                print_lines = [self._line_row(match)]
+                return print_lines, _unique_rows([*touched, match])
 
             to_print = match_pending
             if not printed_rows and not to_print:
@@ -867,12 +886,15 @@ class FbsPackingRepository:
                     session=session,
                 )
                 session.commit()
+                touched.extend(to_print)
             if auto_close:
-                return [self._line_row(row) for row in to_print] or [
+                print_lines = [self._line_row(row) for row in to_print] or [
                     self._line_row(row) for row in printed_rows
                 ]
+                return print_lines, _unique_rows([*touched, *to_print, *printed_rows])
             active = self._printed_lines(session, job_id)
-            return [self._line_row(row) for row in active]
+            print_lines = [self._line_row(row) for row in active]
+            return print_lines, _unique_rows([*touched, *active])
 
     def _finish_if_complete(self, session: Session, job: FbsPackingJob) -> None:
         remaining = session.scalar(
@@ -983,7 +1005,7 @@ class FbsPackingRepository:
             session.refresh(row)
             return self._line_row(row)
 
-    def cancel_print(self, job_id: int, line_id: int) -> FbsPackingLineRow:
+    def cancel_print(self, job_id: int, line_id: int) -> list[FbsPackingLineRow]:
         with Session(self.engine) as session:
             job = self._require_active_job(session, job_id)
             printed_rows = self._printed_lines(session, job_id)
@@ -991,10 +1013,6 @@ class FbsPackingRepository:
                 raise ValueError("Отменить можно только активную напечатанную строку")
             # id с клиента может быть устаревшим (другая строка / уже done) —
             # снимаем всю пачку printed, иначе задание зависает навсегда.
-            target = next(
-                (row for row in printed_rows if int(row.id) == int(line_id)),
-                printed_rows[0],
-            )
             # Отмена снимает всю пачку printed (один SKU), не только одну строку.
             for row in printed_rows:
                 row.status = LINE_PENDING
@@ -1004,8 +1022,9 @@ class FbsPackingRepository:
                 row.cis_gtin = ""
             job.updated_at_ts = int(time.time())
             session.commit()
-            session.refresh(target)
-            return self._line_row(target)
+            for row in printed_rows:
+                session.refresh(row)
+            return [self._line_row(row) for row in printed_rows]
 
     def get_line(self, job_id: int, line_id: int) -> FbsPackingLineRow | None:
         with Session(self.engine) as session:

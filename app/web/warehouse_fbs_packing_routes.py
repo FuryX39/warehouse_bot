@@ -710,6 +710,19 @@ def register_warehouse_fbs_packing_routes(
         mark_packed_if_done(orders_repo, payload)
         return payload
 
+    def _packer_job_delta(job_id: int, changed: list[Any]) -> dict[str, Any]:
+        job = packing_repo.get_job(job_id, include_lines=False)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Задание не найдено")
+        payload = packing_repo.job_to_dict(job, include_lines=False)
+        payload["delta"] = True
+        payload["lines"] = [
+            packing_repo.line_to_dict(line) if not isinstance(line, dict) else line
+            for line in changed
+        ]
+        mark_packed_if_done(orders_repo, payload)
+        return payload
+
     if packer_prefixes is None:
         packer_prefixes = ("/api/warehouse/fbs-packing", "/api/v1/fbs-packing")
     for prefix in packer_prefixes:
@@ -722,6 +735,7 @@ def register_warehouse_fbs_packing_routes(
             v1=prefix.startswith("/api/v1/"),
             require_packer=_require_packer,
             packer_job_payload=_packer_job_payload,
+            packer_job_delta=_packer_job_delta,
         )
 
 
@@ -735,6 +749,7 @@ def _register_packer_prefix(
     v1: bool,
     require_packer,
     packer_job_payload,
+    packer_job_delta,
 ) -> None:
     tag = "v1" if v1 else "wh"
     if v1:
@@ -782,7 +797,7 @@ def _register_packer_prefix(
         include_pdf: bool = True,
         auto_close: bool = False,
     ) -> dict:
-        lines = packing_repo.allocate_lines(
+        lines, changed = packing_repo.allocate_lines(
             job_id,
             user_id,
             sku=sku,
@@ -798,11 +813,10 @@ def _register_packer_prefix(
             for line in lines:
                 pdf = packing_repo.read_line_pdf(job_id, line.id)
                 pdfs_b64.append(base64.b64encode(pdf).decode("ascii"))
-        job = packer_job_payload(job_id)
         return {
             "line": packing_repo.line_to_dict(lines[0]),
             "lines": [packing_repo.line_to_dict(line) for line in lines],
-            "job": job,
+            "job": packer_job_delta(job_id, changed),
             "pdf_base64": pdfs_b64[0] if pdfs_b64 else "",
             "pdfs_base64": pdfs_b64,
         }
@@ -981,7 +995,7 @@ def _register_packer_prefix(
 
         def _run():
             line = packing_repo.scan_label(job_id, user_id, code)
-            return packing_repo.line_to_dict(line), packer_job_payload(job_id)
+            return packing_repo.line_to_dict(line), packer_job_delta(job_id, [line])
 
         try:
             line, job = await asyncio.to_thread(_run)
@@ -999,7 +1013,7 @@ def _register_packer_prefix(
 
         def _run():
             line = packing_repo.close_line(job_id, line_id, user_id)
-            return packing_repo.line_to_dict(line), packer_job_payload(job_id)
+            return packing_repo.line_to_dict(line), packer_job_delta(job_id, [line])
 
         try:
             line, job = await asyncio.to_thread(_run)
@@ -1019,8 +1033,9 @@ def _register_packer_prefix(
         require_packer(actor, job_id)
 
         def _run():
-            line = packing_repo.cancel_print(job_id, line_id)
-            return packing_repo.line_to_dict(line), packer_job_payload(job_id)
+            changed = packing_repo.cancel_print(job_id, line_id)
+            target = next((row for row in changed if int(row.id) == int(line_id)), changed[0])
+            return packing_repo.line_to_dict(target), packer_job_delta(job_id, changed)
 
         try:
             line, job = await asyncio.to_thread(_run)
@@ -1043,7 +1058,7 @@ def _register_packer_prefix(
 
         def _run():
             line = packing_repo.set_line_status(job_id, line_id, user_id, status)
-            return packing_repo.line_to_dict(line), packer_job_payload(job_id)
+            return packing_repo.line_to_dict(line), packer_job_delta(job_id, [line])
 
         try:
             line, job = await asyncio.to_thread(_run)

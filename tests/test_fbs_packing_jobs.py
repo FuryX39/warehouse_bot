@@ -425,11 +425,12 @@ def test_packer_scan_pick_remaining_close_cancel(db_url: str, tmp_path) -> None:
     assert payload["line"]["status"] == LINE_PRINTED
     assert payload["line"]["id"] == job.lines[0].id
     assert base64.b64decode(payload["pdf_base64"]).startswith(b"%PDF")
-    remaining_after = payload["job"]["remaining_groups"]
-    assert [(item["sku"], item["quantity"]) for item in remaining_after] == [
-        ("SKU-A", 1),
-        ("SKU-B", 1),
-    ]
+    job_delta = payload["job"]
+    assert job_delta["delta"] is True
+    assert "remaining_groups" not in job_delta
+    assert [item["id"] for item in job_delta["lines"]] == [job.lines[0].id]
+    assert job_delta["line_pending"] == 2
+    assert job_delta["line_printed"] == 1
 
     blocked = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000023"})
     assert blocked.status_code == 400
@@ -593,10 +594,11 @@ def test_packer_batch_allocate_prints_all_sku_then_scan_labels(db_url: str, tmp_
     assert [line["id"] for line in payload["lines"]] == [job.lines[0].id, job.lines[1].id]
     assert len(payload["pdfs_base64"]) == 2
     assert all(base64.b64decode(item).startswith(b"%PDF") for item in payload["pdfs_base64"])
-    assert [(item["sku"], item["quantity"]) for item in payload["job"]["remaining_groups"]] == [
-        ("SKU-B", 1),
-    ]
-    assert len(payload["job"]["active_lines"]) == 2
+    assert payload["job"]["delta"] is True
+    assert "remaining_groups" not in payload["job"]
+    assert payload["job"]["line_pending"] == 1
+    assert payload["job"]["line_printed"] == 2
+    assert {item["id"] for item in payload["job"]["lines"]} == {job.lines[0].id, job.lines[1].id}
 
     blocked = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000023", "batch": True})
     assert blocked.status_code == 400
@@ -605,12 +607,15 @@ def test_packer_batch_allocate_prints_all_sku_then_scan_labels(db_url: str, tmp_
     assert first_label.status_code == 200, first_label.text
     assert first_label.json()["line"]["id"] == job.lines[1].id
     assert first_label.json()["line"]["status"] == LINE_DONE
-    assert len(first_label.json()["job"]["active_lines"]) == 1
+    assert first_label.json()["job"]["delta"] is True
+    assert first_label.json()["job"]["line_printed"] == 1
+    assert first_label.json()["job"]["line_done"] == 1
 
     second_label = client.post(f"{prefix}/scan-label", json={"barcode": "100001 1/2"})
     assert second_label.status_code == 200, second_label.text
     assert second_label.json()["line"]["id"] == job.lines[0].id
-    assert second_label.json()["job"]["active_lines"] == []
+    assert second_label.json()["job"]["line_printed"] == 0
+    assert second_label.json()["job"]["line_done"] == 2
 
     again = client.post(
         f"{prefix}/pick-sku",
@@ -932,6 +937,27 @@ def test_marking_type_blocks_pick_sku(db_url: str, tmp_path) -> None:
     )
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["line"]["sku"] == "SKU-PLAIN"
+
+
+def test_scan_product_returns_delta_not_full_job(db_url: str, tmp_path) -> None:
+    client, packing, job, *_rest = _packing_client(db_url, tmp_path)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+    opened = client.get(f"{prefix}/pack")
+    assert opened.status_code == 200, opened.text
+    full = opened.json()["job"]
+    assert full.get("delta") is not True
+    assert len(full["lines"]) == 3
+    assert "remaining_groups" in full
+
+    picked = client.post(f"{prefix}/scan-product", json={"barcode": "2000000000016", "include_pdf": False})
+    assert picked.status_code == 200, picked.text
+    delta = picked.json()["job"]
+    assert delta["delta"] is True
+    assert "remaining_groups" not in delta
+    assert len(delta["lines"]) == 1
+    assert delta["lines"][0]["id"] == job.lines[0].id
+    assert delta["line_printed"] == 1
+    assert delta["line_pending"] == 2
 
 
 def test_packer_job_payload_includes_image_url(db_url: str, tmp_path) -> None:
