@@ -25,6 +25,19 @@ HIDDEN_SUPPLY_STATUSES = frozenset(
         "CANCELLED_BY_PARTNER",
     }
 )
+# Поставки, которые уже приняты на складах Маркета (остаток попадает в AVAILABLE).
+FINISHED_SUPPLY_STATUSES = frozenset(
+    {
+        "FINISHED",
+        "COMPLETED",
+        "CLOSED",
+        "DONE",
+        "RECEIVED",
+        "PROCESSED",
+        "ACCEPTED_BY_MARKETPLACE",
+        "INVALID",
+    }
+)
 CARGO_CODE_RE = re.compile(r"B[0-9A-F]{10,}", re.IGNORECASE)
 _CANCELLED_DOC = re.compile(r"cancel|reject|delet", re.I)
 
@@ -174,6 +187,18 @@ def _plan_count(raw: dict[str, Any]) -> int:
         or data.get("quantity")
     )
     return int(qty or 0)
+
+
+def supply_request_is_in_transit(status: str) -> bool:
+    """True, если товары заявки ещё не на остатках FBY (в пути / на приёмке)."""
+    text = _text(status).upper()
+    if not text:
+        return True
+    if text in HIDDEN_SUPPLY_STATUSES or bool(_CANCELLED_DOC.search(text)):
+        return False
+    if text in FINISHED_SUPPLY_STATUSES:
+        return False
+    return True
 
 
 def _next_page_token(payload: dict[str, Any]) -> str:
@@ -481,6 +506,58 @@ class YandexFboApi:
                 }
             )
         return out
+
+    def list_offer_stocks(self) -> list[dict[str, Any]]:
+        """Остатки FBY по всем складам Маркета: warehouses[].offers[].stocks."""
+        campaign_id = self.find_fby_campaign_id()
+        token = ""
+        warehouses: list[dict[str, Any]] = []
+        for _ in range(500):
+            params: dict[str, Any] = {"limit": 100}
+            if token:
+                params["pageToken"] = token
+            payload = self._post(
+                f"/v2/campaigns/{campaign_id}/offers/stocks",
+                {"archived": False, "withTurnover": False},
+                params=params,
+            )
+            result = _as_dict(payload.get("result") or payload)
+            warehouses.extend(
+                _as_dict(item)
+                for item in _as_list(
+                    result.get("warehouses") or payload.get("warehouses")
+                )
+                if isinstance(item, dict)
+            )
+            token = _next_page_token(payload)
+            if not token:
+                break
+        return warehouses
+
+    def list_order_stats(self, date_from: str, date_to: str) -> list[dict[str, Any]]:
+        """Заказы FBY за период (stats/orders), страницами по 200."""
+        campaign_id = self.find_fby_campaign_id()
+        token = ""
+        orders: list[dict[str, Any]] = []
+        for _ in range(500):
+            params: dict[str, Any] = {"limit": 200}
+            if token:
+                params["pageToken"] = token
+            payload = self._post(
+                f"/v2/campaigns/{campaign_id}/stats/orders",
+                {"dateFrom": str(date_from), "dateTo": str(date_to)},
+                params=params,
+            )
+            result = _as_dict(payload.get("result") or payload)
+            orders.extend(
+                _as_dict(item)
+                for item in _as_list(result.get("orders") or payload.get("orders"))
+                if isinstance(item, dict)
+            )
+            token = _next_page_token(payload)
+            if not token:
+                break
+        return orders
 
     def download_cargo_units_pdf(self, request_id: int) -> bytes:
         docs = self.list_documents(request_id)

@@ -56,6 +56,7 @@ WAREHOUSE_NAV: list[dict[str, Any]] = [
             {"id": "stock-by-warehouse", "title": "Остатки товаров на складах"},
             {"id": "stock-movement", "title": "Движение товаров"},
             {"id": "demand", "title": "Потребность товаров"},
+            {"id": "demand-yandex", "title": "Потребность Яндекса"},
             {"id": "sales-funnel", "title": "Воронка продаж"},
             {"id": "product-turnover", "title": "Оборачиваемость товаров"},
             {"id": "sales-report", "title": "Отчет по продажам"},
@@ -195,6 +196,9 @@ def normalize_permissions(raw: dict[str, Any] | None) -> dict[str, list[str]]:
             promo.append("bidder")
         if promo:
             out["promotion"] = promo
+    reports = out.get("reports")
+    if reports and "demand" in reports and "demand-yandex" not in reports:
+        out["reports"] = [*reports, "demand-yandex"]
     return out
 
 

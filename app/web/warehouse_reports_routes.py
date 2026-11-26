@@ -8,16 +8,19 @@ import json
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import Response
 
+from app.adapters.base import is_value_configured
 from app.catalog_repository import CatalogRepository
 from app.crm_repository import CrmRepository
+from app.product_demand_report import build_product_demand_report
 from app.repositories import InventoryRepository
 from app.sales_analysis import MARKETPLACES, MARKETPLACE_IDS, build_sales_analysis
 from app.sales_report import build_sales_report
-from app.product_demand_report import build_product_demand_report
 from app.stock_by_warehouse_report import (
     build_stock_by_warehouse_report,
     source_meta,
 )
+from app.yandex_demand_report import build_yandex_product_demand_report
+from app.yandex_fbo_api import YandexFboApi
 from app.warehouse_orders_repository import WarehouseOrdersRepository
 from app.warehouse_users_repository import WarehouseUserRow
 from app.wb_acquiring_report import AcquiringExportJobs, parse_year_month
@@ -35,6 +38,7 @@ def register_warehouse_reports_routes(
     crm_repo: CrmRepository,
     require_warehouse_user,
     wb_api_token: str = "",
+    yandex_api_key: str = "",
     orders_repo: WarehouseOrdersRepository | None = None,
 ) -> None:
     acquiring_jobs = AcquiringExportJobs(wb_api_token)
@@ -322,6 +326,63 @@ def register_warehouse_reports_routes(
             raise HTTPException(
                 status_code=502,
                 detail=str(exc) or "Не удалось сформировать отчёт потребности",
+            ) from exc
+
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": _attachment_disposition(filename),
+                "X-Product-Demand-Stats": _header_json(stats),
+            },
+        )
+
+    @app.get("/api/warehouse/reports/demand-yandex/meta")
+    async def api_yandex_product_demand_meta(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> dict:
+        return {"yandex_configured": is_value_configured(yandex_api_key)}
+
+    @app.get("/api/warehouse/reports/demand-yandex/export")
+    async def api_yandex_product_demand_export(
+        _: WarehouseUserRow = Depends(require_warehouse_user),
+    ) -> Response:
+        def _run() -> tuple[bytes, dict, str]:
+            result = build_yandex_product_demand_report(
+                catalog_repo,
+                api=YandexFboApi(yandex_api_key),
+            )
+            stats = {
+                "source": result.source_id,
+                "source_title": result.source_title,
+                "warehouse": result.warehouse_title,
+                "date_from": result.date_from,
+                "date_to": result.date_to,
+                "rows": len(result.rows),
+                "quantity": result.total_quantity,
+                "in_transit": result.total_in_transit,
+                "total": result.total_all,
+                "sales_30": result.total_sales_30,
+                "remain_30": result.total_remain_30,
+                "missing_name_count": result.missing_name_count,
+            }
+            return result.workbook_bytes, stats, result.filename
+
+        try:
+            content, stats, filename = await asyncio.to_thread(_run)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except ModuleNotFoundError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Не установлен openpyxl: pip install openpyxl",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=str(exc) or "Не удалось сформировать отчёт потребности Яндекса",
             ) from exc
 
         return Response(
