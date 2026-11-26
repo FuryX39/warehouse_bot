@@ -279,9 +279,14 @@ def register_warehouse_reports_routes(
     async def api_product_demand_meta(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> dict:
+        sources = source_meta()
+        for item in sources:
+            if item.get("id") == "yandex":
+                item["implemented"] = True
         return {
-            "sources": source_meta(),
-            "wb_configured": bool((wb_api_token or "").strip()),
+            "sources": sources,
+            "wb_configured": is_value_configured(wb_api_token),
+            "yandex_configured": is_value_configured(yandex_api_key),
         }
 
     @app.get("/api/warehouse/reports/demand/export")
@@ -290,11 +295,18 @@ def register_warehouse_reports_routes(
         _: WarehouseUserRow = Depends(require_warehouse_user),
     ) -> Response:
         def _run() -> tuple[bytes, dict, str]:
-            result = build_product_demand_report(
-                catalog_repo,
-                source=source,
-                wb_api_token=wb_api_token,
-            )
+            source_id = str(source or "").strip().lower()
+            if source_id == "yandex":
+                result = build_yandex_product_demand_report(
+                    catalog_repo,
+                    api=YandexFboApi(yandex_api_key),
+                )
+            else:
+                result = build_product_demand_report(
+                    catalog_repo,
+                    source=source_id,
+                    wb_api_token=wb_api_token,
+                )
             stats = {
                 "source": result.source_id,
                 "source_title": result.source_title,
@@ -308,6 +320,7 @@ def register_warehouse_reports_routes(
                 "sales_30": result.total_sales_30,
                 "remain_30": result.total_remain_30,
                 "missing_name_count": result.missing_name_count,
+                "filename": result.filename,
             }
             return result.workbook_bytes, stats, result.filename
 
@@ -326,63 +339,6 @@ def register_warehouse_reports_routes(
             raise HTTPException(
                 status_code=502,
                 detail=str(exc) or "Не удалось сформировать отчёт потребности",
-            ) from exc
-
-        return Response(
-            content=content,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": _attachment_disposition(filename),
-                "X-Product-Demand-Stats": _header_json(stats),
-            },
-        )
-
-    @app.get("/api/warehouse/reports/demand-yandex/meta")
-    async def api_yandex_product_demand_meta(
-        _: WarehouseUserRow = Depends(require_warehouse_user),
-    ) -> dict:
-        return {"yandex_configured": is_value_configured(yandex_api_key)}
-
-    @app.get("/api/warehouse/reports/demand-yandex/export")
-    async def api_yandex_product_demand_export(
-        _: WarehouseUserRow = Depends(require_warehouse_user),
-    ) -> Response:
-        def _run() -> tuple[bytes, dict, str]:
-            result = build_yandex_product_demand_report(
-                catalog_repo,
-                api=YandexFboApi(yandex_api_key),
-            )
-            stats = {
-                "source": result.source_id,
-                "source_title": result.source_title,
-                "warehouse": result.warehouse_title,
-                "date_from": result.date_from,
-                "date_to": result.date_to,
-                "rows": len(result.rows),
-                "quantity": result.total_quantity,
-                "in_transit": result.total_in_transit,
-                "total": result.total_all,
-                "sales_30": result.total_sales_30,
-                "remain_30": result.total_remain_30,
-                "missing_name_count": result.missing_name_count,
-            }
-            return result.workbook_bytes, stats, result.filename
-
-        try:
-            content, stats, filename = await asyncio.to_thread(_run)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail=str(exc)) from exc
-        except ModuleNotFoundError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="Не установлен openpyxl: pip install openpyxl",
-            ) from exc
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=str(exc) or "Не удалось сформировать отчёт потребности Яндекса",
             ) from exc
 
         return Response(

@@ -18,7 +18,6 @@ from app.yandex_demand_report import (
     build_yandex_product_demand_report,
     merge_sku_quantities,
 )
-from app.warehouse_permissions import normalize_permissions
 from app.yandex_fbo_api import supply_request_is_in_transit
 
 
@@ -63,11 +62,6 @@ def _warehouses() -> list[dict]:
             ],
         },
     ]
-
-
-def test_demand_permission_grants_yandex_demand() -> None:
-    perms = normalize_permissions({"reports": ["demand", "sales-report"]})
-    assert perms["reports"] == ["demand", "sales-report", "demand-yandex"]
 
 
 def test_supply_in_transit_skips_finished_and_cancelled() -> None:

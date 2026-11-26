@@ -481,7 +481,9 @@
       var submitBtn = root.querySelector("#whDemandSubmit");
       submitBtn.disabled = true;
       msg.textContent =
-        "Запрашиваем остатки, поставки и заказы WB за 30 дней. Обычно это занимает до нескольких минут.";
+        source === "yandex"
+          ? "Запрашиваем остатки FBY по всем кластерам, поставки и заказы Яндекса за 30 дней. Обычно это занимает до нескольких минут."
+          : "Запрашиваем остатки, поставки и заказы WB за 30 дней. Обычно это занимает до нескольких минут.";
       var url = "/api/warehouse/reports/demand/export?source=" + encodeURIComponent(source);
       fetch(url, { credentials: "include" })
         .then(function (r) {
@@ -502,7 +504,12 @@
         })
         .then(function (result) {
           var stats = result.stats || {};
-          downloadBlob(result.blob, "potrebnost_tovarov_wb.xlsx");
+          var filename =
+            stats.filename ||
+            (source === "yandex"
+              ? "potrebnost_tovarov_yandex.xlsx"
+              : "potrebnost_tovarov_wb.xlsx");
+          downloadBlob(result.blob, filename);
           var extra = "";
           if (stats.missing_name_count) {
             extra = " Без названия в каталоге: " + stats.missing_name_count + " арт.";
@@ -529,101 +536,6 @@
           submitBtn.disabled = false;
         });
     });
-  }
-
-  function bindYandexProductDemand(root) {
-    var form = root.querySelector("#whDemandYandexForm");
-    var msg = root.querySelector("#whDemandYandexMsg");
-    if (!form) return;
-    form.addEventListener("submit", function (e) {
-      e.preventDefault();
-      msg.className = "wh-msg";
-      msg.textContent = "";
-      var submitBtn = root.querySelector("#whDemandYandexSubmit");
-      submitBtn.disabled = true;
-      msg.textContent =
-        "Запрашиваем остатки FBY по всем кластерам, поставки и заказы Яндекса за 30 дней. Обычно это занимает до нескольких минут.";
-      fetch("/api/warehouse/reports/demand-yandex/export", { credentials: "include" })
-        .then(function (r) {
-          var stats = parseHeaderJson("X-Product-Demand-Stats", r.headers);
-          if (!r.ok) {
-            return r.text().then(function (text) {
-              var detail = text || "HTTP " + r.status;
-              try {
-                var json = JSON.parse(text);
-                if (json && json.detail) detail = json.detail;
-              } catch (e2) {}
-              throw new Error(typeof detail === "string" ? detail : "Не удалось сформировать отчёт");
-            });
-          }
-          return r.blob().then(function (blob) {
-            return { blob: blob, stats: stats };
-          });
-        })
-        .then(function (result) {
-          var stats = result.stats || {};
-          downloadBlob(result.blob, "potrebnost_tovarov_yandex.xlsx");
-          var extra = "";
-          if (stats.missing_name_count) {
-            extra = " Без названия в каталоге: " + stats.missing_name_count + " арт.";
-          }
-          msg.className = "wh-msg wh-msg-ok";
-          msg.textContent =
-            "Готово. Позиций: " +
-            (stats.rows || 0) +
-            ", всего: " +
-            (stats.total || 0) +
-            ", продажи за 30 дней: " +
-            (stats.sales_30 || 0) +
-            ", потребность за 30 дней: " +
-            (stats.remain_30 || 0) +
-            "." +
-            extra +
-            " Файл скачан.";
-        })
-        .catch(function (err) {
-          msg.className = "wh-msg wh-msg-error";
-          msg.textContent = err.message || String(err);
-        })
-        .finally(function () {
-          submitBtn.disabled = false;
-        });
-    });
-  }
-
-  function renderYandexProductDemand(tab, item) {
-    preparePanel(tab, item);
-    var root = panelEl();
-    root.innerHTML = '<p class="wh-placeholder">Загрузка...</p>';
-    shell()
-      .fetchJson("/api/warehouse/reports/demand-yandex/meta")
-      .then(function (data) {
-        if (data && data.yandex_configured === false) {
-          root.innerHTML =
-            '<div class="wh-route-card">' +
-            '<p class="wh-msg wh-msg-error">Не задан YANDEX_API_KEY. Нужен ключ Partner API с доступом к остаткам и заказам FBY.</p>' +
-            "</div>";
-          return;
-        }
-        root.innerHTML =
-          '<div class="wh-route-card">' +
-          '<p class="wh-muted">Строки — вся номенклатура каталога и артикулы с продажами FBY, даже если на складах Яндекса остаток ноль. ' +
-          "Количество — сумма остатка «доступно к заказу» (AVAILABLE) по всем кластерам FBY. " +
-          "В пути — карантин между складами плюс незавершённые поставки FBY. " +
-          "Продажи за 30 дней — заказы FBY. За 60 и 90 дней — продажи за 30 дней, умноженные на 2 и на 3. " +
-          "Потребность — продажи минус «Всего». Значения могут быть отрицательными.</p>" +
-          '<form id="whDemandYandexForm" class="wh-reports-form">' +
-          '<div class="wh-tools-actions">' +
-          '<button type="submit" class="wh-btn wh-btn-primary" id="whDemandYandexSubmit">Сформировать Excel</button>' +
-          "</div>" +
-          "</form>" +
-          '<p class="wh-msg" id="whDemandYandexMsg"></p>' +
-          "</div>";
-        bindYandexProductDemand(root);
-      })
-      .catch(function (err) {
-        root.innerHTML = '<p class="wh-msg wh-msg-error">' + esc(err.message) + "</p>";
-      });
   }
 
   function renderProductDemand(tab, item) {
@@ -634,19 +546,21 @@
       .fetchJson("/api/warehouse/reports/demand/meta")
       .then(function (data) {
         var sources = (data && data.sources) || [];
-        if (data && data.wb_configured === false) {
+        var wbOk = data && data.wb_configured !== false;
+        var yandexOk = data && data.yandex_configured !== false;
+        if (!wbOk && !yandexOk) {
           root.innerHTML =
             '<div class="wh-route-card">' +
-            '<p class="wh-msg wh-msg-error">Не задан WB_API_TOKEN. Нужен токен с категориями «Аналитика» и «Поставки».</p>' +
+            '<p class="wh-msg wh-msg-error">Не заданы WB_API_TOKEN и YANDEX_API_KEY. Для WB нужен токен с категориями «Аналитика» и «Поставки», для Яндекса — ключ Partner API.</p>' +
             "</div>";
           return;
         }
         root.innerHTML =
           '<div class="wh-route-card">' +
-          '<p class="wh-muted">Строки — вся номенклатура каталога и артикулы с продажами WB, даже если на складах WB остаток ноль. ' +
-          "Количество, в пути и всего — как в отчёте «Остатки товаров на складах» (колонка «Склад WB РФ»). " +
-          "Продажи за 30 дней — заказы WB. За 60 и 90 дней — продажи за 30 дней, умноженные на 2 и на 3. " +
-          "Потребность — продажи минус «Всего». Значения могут быть отрицательными. Сейчас работает только «Склады WB».</p>" +
+          '<p class="wh-muted">Строки — вся номенклатура каталога и артикулы с продажами выбранного маркетплейса, даже если остаток ноль. ' +
+          "Для WB количество берётся из колонки «Склад WB РФ». Для Яндекса — сумма «доступно к заказу» по всем кластерам FBY. " +
+          "Продажи за 30 дней — заказы площадки. За 60 и 90 дней — продажи за 30 дней, умноженные на 2 и на 3. " +
+          "Потребность — продажи минус «Всего». Значения могут быть отрицательными. Сейчас работают «Склады WB» и «Склады Яндекса».</p>" +
           '<form id="whDemandForm" class="wh-reports-form">' +
           '<label><span>Источник остатков</span><select id="whDemandSource" required>' +
           sourceOptionsHtml(sources, "wb") +
@@ -819,10 +733,6 @@
     }
     if (item.id === "demand") {
       renderProductDemand(tab, item);
-      return;
-    }
-    if (item.id === "demand-yandex") {
-      renderYandexProductDemand(tab, item);
       return;
     }
     shell().contentTitleEl.textContent = item.title;
