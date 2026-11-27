@@ -19,9 +19,16 @@ Tkinter (`warehouse_packing_app/`) **оставить как есть**: неп�
 - Новые фичи и правки упаковщиков — только в `warehouse_packing_app_cs/` и в серверном API
 - Если просят «программу упаковщиков» без уточнения — имеется в виду C#
 
+## Пересборка
+
+В **первую очередь** Debug (`dotnet build -c Debug`): в git идут `bin/Debug/net8.0-windows/WarehousePacking.exe` (и `.dll` / `.pdb`).  
+Release/`publish` — после Debug, если нужен exe из `warehouse_packing_app_cs/publish/`.
+
 Исключение — пользователь **явно** написал править Tkinter.
 
 ```text
 ❌ BAD: правки warehouse_packing_app/run.py, fbs_packing_ui.py «чтобы обе версии умели FBO»
+❌ BAD: сразу `dotnet publish -c Release`, Debug не собрал
 ✅ GOOD: API в warehouse_bot + UI в warehouse_packing_app_cs/; Tkinter не трогать
+✅ GOOD: `dotnet build -c Debug`, затем при необходимости publish
 ```
