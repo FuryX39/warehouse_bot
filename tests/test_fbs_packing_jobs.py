@@ -973,6 +973,112 @@ def test_packer_job_payload_includes_image_url(db_url: str, tmp_path) -> None:
     assert by_sku["SKU-B"] == "https://example.test/b.jpg"
 
 
+def test_remaining_groups_count_all_pending_of_sku(db_url: str, tmp_path) -> None:
+    catalog, db_url = _catalog(db_url)
+    packing = _packing_repo(tmp_path, db_url)
+    packer = _user(7, "packer")
+    product = catalog.create_product(
+        {
+            "name": "FastQuartz",
+            "sku": "SS694",
+            "code": "694",
+            "is_kit": False,
+            "barcodes": [
+                {"barcode": "4673746975053", "label": "", "group": "Озон"},
+                {"barcode": "2047901703294", "label": "", "group": "ВБ"},
+            ],
+            "components": [],
+        }
+    )
+    lines = [
+        {
+            "seq": index + 1,
+            "sku": "SS694",
+            "product_id": product.id,
+            "product_name": "FastQuartz",
+            "order_id": f"65127{index}",
+            "box_id": 8400 + index,
+            "place_index": 1,
+            "place_total": 1,
+            "scan_keys": [f"65127{index}"],
+            "pdf": _pdf(f"SS694-{index}"),
+        }
+        for index in range(7)
+    ]
+    job = packing.create_job(
+        marketplace="yandex",
+        order_substatus="STARTED",
+        build_list=False,
+        created_by_user_id=1,
+        packer_user_ids=[packer.id],
+        lines=lines,
+    )
+    app = FastAPI()
+    state = {"user": packer, "actor": TasksApiActor(user=packer, via_api_token=False)}
+
+    def require_fbs_access():
+        return packer
+
+    def require_warehouse_user():
+        return state["user"]
+
+    def require_tasks_access():
+        return state["actor"]
+
+    register_warehouse_fbs_packing_routes(
+        app,
+        packing,
+        catalog,
+        SimpleNamespace(list_assignee_picker=lambda: []),
+        _settings(db_url),
+        SimpleNamespace(adapters=[]),
+        require_fbs_access,
+        require_warehouse_user,
+        require_tasks_access,
+    )
+    client = TestClient(app)
+    prefix = f"/api/warehouse/fbs-packing/jobs/{job.id}"
+
+    packed = client.get(f"{prefix}/pack")
+    assert packed.status_code == 200, packed.text
+    remaining = packed.json()["job"]["remaining_groups"]
+    assert [(item["sku"], item["quantity"]) for item in remaining] == [("SS694", 7)]
+    assert remaining[0]["barcode"] == "4673746975053"
+
+    picked = client.post(
+        f"{prefix}/pick-sku",
+        json={"sku": "SS694", "product_id": product.id, "batch": True, "include_pdf": False},
+    )
+    assert picked.status_code == 200, picked.text
+    assert len(picked.json()["lines"]) == 7
+    assert {item["status"] for item in picked.json()["lines"]} == {LINE_PRINTED}
+
+    for line in packing.get_job(job.id, include_lines=True).lines:
+        reverted = client.post(
+            f"{prefix}/lines/{line.id}/set-status", json={"status": "pending"}
+        )
+        assert reverted.status_code == 200, reverted.text
+
+    packed_again = client.get(f"{prefix}/pack")
+    assert packed_again.status_code == 200, packed_again.text
+    remaining_again = packed_again.json()["job"]["remaining_groups"]
+    assert [(item["sku"], item["quantity"]) for item in remaining_again] == [("SS694", 7)]
+
+    closed = client.post(
+        f"{prefix}/pick-sku",
+        json={
+            "sku": "SS694",
+            "product_id": product.id,
+            "batch": True,
+            "include_pdf": False,
+            "auto_close": True,
+        },
+    )
+    assert closed.status_code == 200, closed.text
+    assert len(closed.json()["lines"]) == 7
+    assert {item["status"] for item in closed.json()["lines"]} == {LINE_DONE}
+
+
 def test_set_line_status_pending_to_done_and_back(db_url: str, tmp_path) -> None:
     client, packing, job, state, packer, other, product_a, product_b = _packing_client(db_url, tmp_path)
     job_id = job.id
